@@ -1,0 +1,14 @@
+# defaults.yaml – Default configuration values for core-tools
+
+# Settings shared by all tools
+global:
+  log_level: info       # debug | info | warning | error
+  output_dir: /tmp/core-tools-output
+
+# tool-a specific defaults
+tool_a:
+  setting: default_value
+
+# tool-b specific defaults
+tool_b:
+  setting: default_value

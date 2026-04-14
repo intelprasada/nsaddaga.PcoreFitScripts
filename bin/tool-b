@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# bin/tool-b – thin entry-point wrapper for tool-b
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+exec perl "${REPO_ROOT}/tools/tool-b/tool_b.pl" "$@"
