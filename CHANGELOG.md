@@ -36,5 +36,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repo-wide integration test: `tests/test_integration.sh`
 - `Makefile` with build, test, and release targets
 
-[Unreleased]: https://github.com/intelprasada/PcoreFitScriptsSandbox/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/intelprasada/PcoreFitScriptsSandbox/releases/tag/v1.0.0
+[Unreleased]: https://github.com/intelprasada/nsaddaga.PcoreFitScripts/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/intelprasada/nsaddaga.PcoreFitScripts/releases/tag/v1.0.0

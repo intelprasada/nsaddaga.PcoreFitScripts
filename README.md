@@ -51,20 +51,40 @@ core-tools/
 ├── Makefile           # Build / test / release targets
 ├── .gitignore
 │
-├── bin/               # Thin entry-point wrappers (add to PATH)
-│   ├── tool-a
-│   └── tool-b
+├── bin/               # Thin entry-point wrappers (add to PATH via aliases)
+│   ├── interfacespec  # alias: is
+│   ├── supercsv       # alias: sc
+│   ├── supertracker   # alias: st
+│   └── email-sender   # alias: email
 │
 ├── tools/             # Each tool in its own subdirectory
-│   ├── tool-a/
+│   ├── interfacespec/ # RTL connectivity pipeline + GUI
 │   │   ├── README.md
-│   │   ├── tool_a.py
 │   │   ├── requirements.txt
-│   │   └── tests/test_tool_a.py
-│   └── tool-b/
+│   │   └── tests/
+│   ├── supercsv/      # CSV viewer/editor GUI
+│   │   ├── README.md
+│   │   ├── requirements.txt
+│   │   └── tests/
+│   ├── supertracker/  # Issue tracker GUI
+│   │   ├── README.md
+│   │   ├── requirements.txt
+│   │   └── tests/
+│   └── email-sender/  # Email automation tool
 │       ├── README.md
-│       ├── tool_b.pl
-│       └── tests/test_tool_b.t
+│       ├── requirements.txt
+│       └── tests/
+│
+├── utils/             # GitHub API utilities + user setup scripts
+│   ├── README.md              # Usage documentation
+│   ├── setup.sh               # User setup: clone repo + register aliases
+│   ├── aliases.sh             # Bash/zsh alias definitions (sourced by setup.sh)
+│   ├── aliases.csh            # csh/tcsh alias definitions (sourced by setup.sh)
+│   ├── utils.py               # Shared helpers
+│   ├── create_remote_branch.py # Step 1: create branch via REST API
+│   ├── push_commits.py        # Step 2: push commits via GraphQL
+│   ├── create_pr.py           # Step 3: open pull request
+│   └── workflow.py            # All-in-one: steps 1–3
 │
 ├── lib/               # Shared libraries
 │   ├── python/common_utils.py
