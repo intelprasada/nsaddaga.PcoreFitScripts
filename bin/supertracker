@@ -9,4 +9,4 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 export PYTHONPATH="${REPO_ROOT}/tools/supercsv${PYTHONPATH:+:${PYTHONPATH}}"
 
-exec python "${REPO_ROOT}/tools/supertracker/supertracker.py" "$@"
+exec python3 "${REPO_ROOT}/tools/supertracker/supertracker.py" "$@"
