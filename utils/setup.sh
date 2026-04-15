@@ -6,10 +6,10 @@
 #
 # For csh/tcsh, adds to your aliases file:
 #   setenv CORE_TOOLS_DIR /path/to/core-tools
-#   source $CORE_TOOLS_DIR/aliases.csh
+#   source $CORE_TOOLS_DIR/utils/aliases.csh
 #
 # For bash/zsh, adds:
-#   source "/path/to/core-tools/aliases.sh"
+#   source "/path/to/core-tools/utils/aliases.sh"
 #
 # Aliases defined:
 #   is             →  bin/interfacespec
@@ -150,13 +150,13 @@ else
     if is_csh "${ALIASES_FILE}"; then
         # csh/tcsh format
         info "Detected csh/tcsh aliases file — writing csh source block."
-        printf '\n# core-tools (is / sc / st / email)\nsetenv CORE_TOOLS_DIR "%s"\nsource $CORE_TOOLS_DIR/aliases.csh\n' \
+        printf '\n# core-tools (is / sc / st / email)\nsetenv CORE_TOOLS_DIR "%s"\nsource $CORE_TOOLS_DIR/utils/aliases.csh\n' \
             "${CLONE_DIR}" >> "${ALIASES_FILE}"
         RELOAD_CMD="source ${ALIASES_FILE}"
     else
         # bash/zsh format
         info "Detected bash/zsh aliases file — writing bash source block."
-        printf '\n# core-tools (is / sc / st / email)\nexport CORE_TOOLS_DIR="%s"\nsource "$CORE_TOOLS_DIR/aliases.sh"\n' \
+        printf '\n# core-tools (is / sc / st / email)\nexport CORE_TOOLS_DIR="%s"\nsource "$CORE_TOOLS_DIR/utils/aliases.sh"\n' \
             "${CLONE_DIR}" >> "${ALIASES_FILE}"
         RELOAD_CMD="source ${ALIASES_FILE}"
     fi
