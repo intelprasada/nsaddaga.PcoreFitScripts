@@ -1,35 +1,33 @@
 #!/usr/bin/env bash
-# setup.sh — Clone core-tools and wire its aliases into the user's shell.
+# setup.sh — Register core-tools aliases and add bin/ to PATH.
 #
-# Supports both csh/tcsh (.aliases, .cshrc) and bash/zsh (.bash_aliases, .bashrc, .zshrc).
-# Auto-detects the shell flavour from the target aliases file.
+# Run this once from inside your cloned repo:
+#   bash utils/setup.sh
+#   bash utils/setup.sh --aliases ~/.aliases
 #
-# For csh/tcsh, adds to your aliases file:
+# Writes into your aliases file (csh/tcsh):
 #   setenv CORE_TOOLS_DIR /path/to/core-tools
 #   source $CORE_TOOLS_DIR/utils/aliases.csh
+#   setenv PATH ${CORE_TOOLS_DIR}/bin:${PATH}
 #
-# For bash/zsh, adds:
-#   source "/path/to/core-tools/utils/aliases.sh"
+# Or for bash/zsh:
+#   export CORE_TOOLS_DIR="/path/to/core-tools"
+#   source "$CORE_TOOLS_DIR/utils/aliases.sh"
+#   export PATH="$CORE_TOOLS_DIR/bin:$PATH"
 #
 # Aliases defined:
-#   is             →  bin/interfacespec
-#   sc             →  bin/supercsv
-#   st             →  bin/supertracker
-#   email          →  bin/email-sender
-#
-# Usage:
-#   bash setup.sh                         # clone to ~/core-tools, auto-detect alias file
-#   bash setup.sh --dir /my/path          # clone to a custom directory
-#   bash setup.sh --aliases ~/.aliases    # target a specific aliases file
-#   bash setup.sh --dir /my/path --aliases ~/.aliases
+#   is     ->  bin/interfacespec
+#   sc     ->  bin/supercsv
+#   st     ->  bin/supertracker
+#   email  ->  bin/email-sender
 #
 # Idempotent: safe to run multiple times — already-present steps are skipped.
 
 set -euo pipefail
 
-# ─── Configuration ────────────────────────────────────────────────────────────
-REPO_URL="https://github.com/intelprasada/nsaddaga.PcoreFitScripts.git"
-DEFAULT_CLONE_DIR="${HOME}/core-tools"
+# Resolve repo root from this script's own location (utils/../)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TOOL_ALIASES=(is sc st email)
 
 # ─── Colours ──────────────────────────────────────────────────────────────────
@@ -40,21 +38,17 @@ skip()  { echo -e "${YELLOW}[SKIP]${RESET}  $*"; }
 warn()  { echo -e "${RED}[WARN]${RESET}  $*"; }
 
 # ─── Argument parsing ─────────────────────────────────────────────────────────
-CLONE_DIR=""
 ALIASES_FILE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --dir)      CLONE_DIR="${2:-}";    shift 2 ;;
         --aliases)  ALIASES_FILE="${2:-}"; shift 2 ;;
         -h|--help)
-            sed -n '2,22p' "$0" | sed 's/^# *//'
+            sed -n '2,20p' "$0" | sed 's/^# *//'
             exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
-
-[[ -z "$CLONE_DIR" ]] && CLONE_DIR="$DEFAULT_CLONE_DIR"
 
 # ─── Detect aliases file ──────────────────────────────────────────────────────
 detect_aliases_file() {
@@ -80,31 +74,9 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "  core-tools setup"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo
-info "Repository : ${REPO_URL}"
-info "Clone dir  : ${CLONE_DIR}"
+info "Repo root  : ${REPO_ROOT}"
 info "Alias file : ${ALIASES_FILE}"
 echo
-
-# ─── Step 1: Clone the repository ────────────────────────────────────────────
-if [[ -d "${CLONE_DIR}/.git" ]]; then
-    EXISTING_REMOTE=$(git -C "${CLONE_DIR}" remote get-url origin 2>/dev/null || true)
-    if [[ "$EXISTING_REMOTE" == "$REPO_URL" ]]; then
-        skip "Repo already cloned at ${CLONE_DIR} — skipping clone."
-    else
-        echo "ERROR: ${CLONE_DIR} exists but points to a different remote:" >&2
-        echo "       ${EXISTING_REMOTE}" >&2
-        echo "       Use --dir to specify a different location." >&2
-        exit 1
-    fi
-elif [[ -e "${CLONE_DIR}" ]]; then
-    echo "ERROR: ${CLONE_DIR} exists but is not a git repository." >&2
-    echo "       Use --dir to specify a different location." >&2
-    exit 1
-else
-    info "Cloning ${REPO_URL} → ${CLONE_DIR} ..."
-    git clone "${REPO_URL}" "${CLONE_DIR}"
-    ok "Cloned successfully."
-fi
 
 # ─── Step 2: Ensure aliases file exists ──────────────────────────────────────
 if [[ ! -f "${ALIASES_FILE}" ]]; then
@@ -150,14 +122,14 @@ else
     if is_csh "${ALIASES_FILE}"; then
         # csh/tcsh format
         info "Detected csh/tcsh aliases file — writing csh source block."
-        printf '\n# core-tools (is / sc / st / email)\nsetenv CORE_TOOLS_DIR "%s"\nsource $CORE_TOOLS_DIR/utils/aliases.csh\n' \
-            "${CLONE_DIR}" >> "${ALIASES_FILE}"
+        printf '\n# core-tools (is / sc / st / email)\nsetenv CORE_TOOLS_DIR "%s"\nsource $CORE_TOOLS_DIR/utils/aliases.csh\nsetenv PATH ${CORE_TOOLS_DIR}/bin:${PATH}\n' \
+            "${REPO_ROOT}" >> "${ALIASES_FILE}"
         RELOAD_CMD="source ${ALIASES_FILE}"
     else
         # bash/zsh format
         info "Detected bash/zsh aliases file — writing bash source block."
-        printf '\n# core-tools (is / sc / st / email)\nexport CORE_TOOLS_DIR="%s"\nsource "$CORE_TOOLS_DIR/utils/aliases.sh"\n' \
-            "${CLONE_DIR}" >> "${ALIASES_FILE}"
+        printf '\n# core-tools (is / sc / st / email)\nexport CORE_TOOLS_DIR="%s"\nsource "$CORE_TOOLS_DIR/utils/aliases.sh"\nexport PATH="$CORE_TOOLS_DIR/bin:$PATH"\n' \
+            "${REPO_ROOT}" >> "${ALIASES_FILE}"
         RELOAD_CMD="source ${ALIASES_FILE}"
     fi
     ok "Added to ${ALIASES_FILE}."
