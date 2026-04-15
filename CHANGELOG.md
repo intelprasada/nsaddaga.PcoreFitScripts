@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **email-sender** — Tkinter GUI for composing and sending emails with optional
+  file attachments; uses Python stdlib only (smtplib, tkinter).
+- **supercsv** — Tkinter CSV viewer with column filtering, row sorting, font/theme
+  management, and integrated email-export dialog.  Requires `pandas>=1.3`.
+- **interfacespec** — Seven-stage RTL connectivity pipeline
+  (`run_cluster_pipeline.py`) plus a multi-tab Tkinter GUI
+  (`interfacespec-gui`) that drives the pipeline and renders Interface Spec
+  markdown.  Requires `pandas>=1.3`.
+- **supertracker** — Tkinter viewer for CTE tracker `.elog` / `.elog.gz` files;
+  strips repeating header blocks before rendering in a FilteredTable.  Depends
+  on the `supercsv` shared widget layer (resolved via `PYTHONPATH` in the bin
+  wrapper).  Requires `pandas>=1.3`.
+  lines containing both a TODO/FIXME marker and an SMT/JNC/Thread-1 keyword;
+  emits a TSV report and per-file summary.  Stdlib only.
+
 ## [1.0.0] - 2026-04-14
 
 ### Added

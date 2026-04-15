@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# bin/gen-smt-todos – thin entry-point wrapper for gen-smt-todos
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+exec python "${REPO_ROOT}/tools/gen-smt-todos/gen_smt_todos.py" "$@"

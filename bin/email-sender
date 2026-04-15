@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# bin/email-sender – thin entry-point wrapper for email-sender
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+exec python "${REPO_ROOT}/tools/email-sender/email_sender.py" "$@"

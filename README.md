@@ -33,6 +33,11 @@ make test
 |------|----------|-------------|
 | [tool-a](tools/tool-a/README.md) | Python | Example Python tool demonstrating the scaffold |
 | [tool-b](tools/tool-b/README.md) | Perl | Example Perl tool demonstrating the scaffold |
+| [email-sender](tools/email-sender/README.md) | Python | Tkinter GUI for composing and sending emails with optional file attachments |
+| [supercsv](tools/supercsv/README.md) | Python | Tkinter-based CSV viewer with filtering, sorting, theming, and email export |
+| [supertracker](tools/supertracker/README.md) | Python | Tkinter viewer for CTE tracker `.elog` files with repeated header stripping |
+| [interfacespec](tools/interfacespec/README.md) | Python | RTL connectivity pipeline + GUI for generating Interface Spec documents from ICF/hier/gen files |
+| [gen-smt-todos](tools/gen-smt-todos/README.md) | Python | Scans fe/msid RTL for SMT/JNC TODO comments and emits a TSV summary |
 
 ---
 
