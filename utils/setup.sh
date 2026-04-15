@@ -78,7 +78,7 @@ info "Repo root  : ${REPO_ROOT}"
 info "Alias file : ${ALIASES_FILE}"
 echo
 
-# ─── Step 2: Ensure aliases file exists ──────────────────────────────────────
+# ─── Step 1: Ensure aliases file exists ──────────────────────────────────────
 if [[ ! -f "${ALIASES_FILE}" ]]; then
     touch "${ALIASES_FILE}"
     info "Created ${ALIASES_FILE}"
@@ -93,7 +93,7 @@ if [[ "${ALIASES_FILE}" == "${HOME}/.bash_aliases" && -f "${HOME}/.bashrc" ]]; t
     fi
 fi
 
-# ─── Step 3: Warn about conflicting existing aliases ─────────────────────────
+# ─── Step 2: Warn about conflicting existing aliases ─────────────────────────
 echo
 CONFLICTS=()
 for name in "${TOOL_ALIASES[@]}"; do
@@ -113,7 +113,7 @@ if [[ ${#CONFLICTS[@]} -gt 0 ]]; then
     echo
 fi
 
-# ─── Step 3: Check and fix exec permissions on bin/ tools ────────────────────
+# ─── Step 3: Fix exec permissions on bin/ tools ──────────────────────────────
 echo
 info "Checking exec permissions on bin/ tools ..."
 FIXED=0
@@ -133,7 +133,32 @@ if [[ $FIXED -eq 0 ]]; then
 fi
 echo
 
+# ─── Step 4: Install Python dependencies ─────────────────────────────────────
+echo
+info "Installing Python dependencies for all tools ..."
+PY3="$(command -v python3 2>/dev/null || true)"
+if [[ -z "$PY3" ]]; then
+    warn "python3 not found — skipping dependency install."
+else
+    for req in "${REPO_ROOT}/tools"/*/requirements.txt; do
+        tool_name="$(basename "$(dirname "$req")")"
+        # Only lines that are not blank and not pure comments
+        pkgs="$(grep -vE '^\s*#|^\s*$' "$req" 2>/dev/null || true)"
+        if [[ -z "$pkgs" ]]; then
+            skip "${tool_name}: no external Python dependencies."
+            continue
+        fi
+        info "${tool_name}: installing from $(basename "$(dirname "$req")")/requirements.txt ..."
+        if "$PY3" -m pip install --user -q --disable-pip-version-check -r "$req"; then
+            ok "${tool_name}: dependencies satisfied."
+        else
+            warn "${tool_name}: pip install failed — run manually: pip install -r ${req}"
+        fi
+    done
+fi
+echo
 
+# ─── Step 5: Configure shell aliases ─────────────────────────────────────────
 MARKER="CORE_TOOLS_DIR"   # present in both csh and bash blocks
 
 if grep -q "${MARKER}" "${ALIASES_FILE}" 2>/dev/null; then
@@ -154,6 +179,30 @@ else
     fi
     ok "Added to ${ALIASES_FILE}."
 fi
+
+# ─── Step 6: Smoke-test tools ─────────────────────────────────────────────────
+echo
+info "Smoke-testing tools via bin/ wrappers (--help) ..."
+SMOKE_TOOLS=(interfacespec supercsv supertracker email-sender)
+SMOKE_FAILED=0
+for tool in "${SMOKE_TOOLS[@]}"; do
+    wrapper="${REPO_ROOT}/bin/${tool}"
+    if [[ ! -f "$wrapper" ]]; then
+        warn "${tool}: bin wrapper not found — skipping."
+        (( SMOKE_FAILED++ )) || true
+        continue
+    fi
+    if bash "$wrapper" --help >/dev/null 2>&1; then
+        ok "${tool}: imports and --help passed."
+    else
+        warn "${tool}: smoke test FAILED — run 'bash ${wrapper} --help' to debug."
+        (( SMOKE_FAILED++ )) || true
+    fi
+done
+if [[ $SMOKE_FAILED -eq 0 ]]; then
+    ok "All tools passed smoke test."
+fi
+echo
 
 # ─── Done ─────────────────────────────────────────────────────────────────────
 echo
