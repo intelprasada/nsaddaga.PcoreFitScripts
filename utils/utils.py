@@ -1,8 +1,14 @@
 """Shared helpers for utils scripts."""
 
 import json
+import os
 import subprocess
 import sys
+
+# Force HTTP/1.1 for GraphQL calls — the Intel Fortinet proxy sends HTTP/2
+# WINDOW_UPDATE frames before SETTINGS, which violates the spec and causes
+# Go's HTTP/2 client (used by gh CLI) to abort with PROTOCOL_ERROR.
+os.environ.setdefault("GODEBUG", "http2client=0")
 
 
 def run(cmd, cwd=None):
