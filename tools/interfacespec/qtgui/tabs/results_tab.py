@@ -65,7 +65,7 @@ class ResultsTab(ttk.Frame):
         self._notebook.pack(fill=tk.BOTH, expand=True)
         self._subtabs: Dict[str, ttk.Frame] = {}      # key → frame
         self._tables:  Dict[str, FilteredTable] = {}  # key → FilteredTable
-        TabTooltip(self._notebook)  # show _path on tab hover
+        TabTooltip(self._notebook, font=FontManager.get("small"))  # show _path on tab hover
 
         # Middle-click or right-click to close a tab
         self._notebook.bind("<Button-2>", self._on_tab_middle_click)

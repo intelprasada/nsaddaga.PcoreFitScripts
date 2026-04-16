@@ -42,8 +42,9 @@ try:
     from filtered_table import FilteredTable
     from font_manager import FontManager
     from theme_manager import ThemeManager
+    from tk_widgets import TabTooltip
 except ImportError as exc:
-    print(f"ERROR: cannot import FilteredTable/FontManager/ThemeManager: {exc}", file=sys.stderr)
+    print(f"ERROR: cannot import FilteredTable/FontManager/ThemeManager/tk_widgets: {exc}", file=sys.stderr)
     print(f"  Expected at: {_HERE}/", file=sys.stderr)
     sys.exit(1)
 
@@ -161,120 +162,6 @@ def _read_csv_padded(path: str, sep: str) -> "tuple[pd.DataFrame, int]":
     return df.fillna(""), n_adjusted
 
 
-class _TabTooltip:
-    """Tooltip that shows the full file path when hovering over a notebook tab.
-
-    Appears after a short delay, follows the cursor within the same tab, and
-    disappears as soon as the cursor leaves the tab strip.
-
-    Usage::
-
-        _TabTooltip(notebook)   # attach once; no reference needs to be kept
-    """
-
-    _DELAY_MS = 600   # ms before the tooltip becomes visible
-
-    def __init__(self, notebook: "ttk.Notebook"):
-        self._nb    = notebook
-        self._win: "tk.Toplevel | None"  = None
-        self._after_id: "str | None"     = None
-        self._last_tab: "int | None"     = None
-
-        notebook.bind("<Motion>", self._on_motion, add="+")
-        notebook.bind("<Leave>",  self._on_leave,  add="+")
-
-    # ------------------------------------------------------------------
-    # Event handlers
-    # ------------------------------------------------------------------
-
-    def _on_motion(self, event: "tk.Event"):
-        # Use the same low-level Tcl call used by _on_tab_middle_click.
-        try:
-            raw = self._nb.tk.call(self._nb._w, "identify", "tab",
-                                   event.x, event.y)
-        except tk.TclError:
-            self._hide()
-            return
-
-        if raw == "" or raw is None:
-            # Mouse is over the content area, not the tab strip.
-            self._hide()
-            self._last_tab = None
-            return
-
-        tab_id = int(raw)
-
-        if tab_id != self._last_tab:
-            # Entered a different tab — reset and schedule a fresh tooltip.
-            self._last_tab = tab_id
-            self._hide()
-            self._after_id = self._nb.after(
-                self._DELAY_MS,
-                lambda tid=tab_id, rx=event.x_root, ry=event.y_root:
-                    self._show(tid, rx, ry),
-            )
-        elif self._win:
-            # Same tab — keep the tooltip glued near the cursor.
-            self._win.geometry(f"+{event.x_root + 14}+{event.y_root + 20}")
-
-    def _on_leave(self, _event):
-        self._hide()
-        self._last_tab = None
-
-    # ------------------------------------------------------------------
-    # Show / hide
-    # ------------------------------------------------------------------
-
-    def _show(self, tab_id: int, root_x: int, root_y: int):
-        """Create the tooltip Toplevel for *tab_id*."""
-        self._after_id = None
-        try:
-            widget = self._nb.nametowidget(self._nb.tabs()[tab_id])
-        except (IndexError, tk.TclError):
-            return
-
-        path = getattr(widget, "_path", None)
-        if not path:
-            return
-
-        self._hide()   # destroy any stale window
-
-        win = tk.Toplevel(self._nb)
-        win.overrideredirect(True)
-        win.attributes("-topmost", True)
-
-        # Style: neutral tooltip colours that read well on any theme.
-        tk.Label(
-            win,
-            text=path,
-            background="#ffffe0",
-            foreground="#1a1a1a",
-            relief="solid",
-            borderwidth=1,
-            font=FontManager.get("small"),
-            padx=8,
-            pady=4,
-        ).pack()
-
-        win.geometry(f"+{root_x + 14}+{root_y + 20}")
-        self._win = win
-
-    def _hide(self):
-        """Cancel any pending show and destroy the tooltip window."""
-        if self._after_id is not None:
-            try:
-                self._nb.after_cancel(self._after_id)
-            except Exception:
-                pass
-            self._after_id = None
-        if self._win is not None:
-            try:
-                self._win.destroy()
-            except Exception:
-                pass
-            self._win = None
-
-
 class SuperCSV(tk.Tk):
     """Top-level window for the SuperCSV standalone browser."""
 
@@ -307,7 +194,7 @@ class SuperCSV(tk.Tk):
         self._notebook.bind("<ButtonRelease-2>", self._on_tab_middle_click)
         self._notebook.bind("<Button-3>",         self._on_tab_right_click)
         self._tab_ctx_menu = tk.Menu(self._notebook, tearoff=0)
-        _TabTooltip(self._notebook)   # show full path on tab hover
+        TabTooltip(self._notebook, font=FontManager.get("small"))   # show full path on tab hover
 
         self._status = ttk.Label(self, anchor="w", padding=(6, 2))
         self._status.pack(fill=tk.X, side=tk.BOTTOM)

@@ -177,16 +177,10 @@ else
             continue
         fi
         info "${tool_name}: checking dependencies ..."
-<<<<<<< feature/interfacespec-qtgui-entry
         if pip_out=$("$PY3" -m pip install --user -r "$req" 2>&1); then
             ok "${tool_name}: dependencies satisfied."
         else
             echo "$pip_out"
-=======
-        if "$PY3" -m pip install --user -q --disable-pip-version-check -r "$req" 2>/dev/null; then
-            ok "${tool_name}: dependencies satisfied."
-        else
->>>>>>> main
             # pip failed (network/proxy timeout) — check if packages are already importable
             if _reqs_importable "$req"; then
                 skip "${tool_name}: packages already importable — pip skipped (no network needed)."
