@@ -78,7 +78,7 @@ info "Repo root  : ${REPO_ROOT}"
 info "Alias file : ${ALIASES_FILE}"
 echo
 
-# ─── Step 2: Ensure aliases file exists ──────────────────────────────────────
+# ─── Step 1: Ensure aliases file exists ──────────────────────────────────────
 if [[ ! -f "${ALIASES_FILE}" ]]; then
     touch "${ALIASES_FILE}"
     info "Created ${ALIASES_FILE}"
@@ -113,7 +113,7 @@ if [[ ${#CONFLICTS[@]} -gt 0 ]]; then
     echo
 fi
 
-# ─── Step 3: Check and fix exec permissions on bin/ tools ────────────────────
+# ─── Step 3: Fix exec permissions on bin/ tools ──────────────────────────────
 echo
 info "Checking exec permissions on bin/ tools ..."
 FIXED=0
