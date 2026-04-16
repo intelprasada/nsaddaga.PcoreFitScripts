@@ -160,7 +160,12 @@ _reqs_importable() {
 
 echo
 info "Installing Python dependencies for all tools ..."
-PY3="$(command -v python3 2>/dev/null || true)"
+# Prefer Intel's Python (has access to internal PyPI mirrors); fall back to PATH python3
+if [[ -x "/usr/intel/bin/python3" ]]; then
+    PY3="/usr/intel/bin/python3"
+else
+    PY3="$(command -v python3 2>/dev/null || true)"
+fi
 if [[ -z "$PY3" ]]; then
     warn "python3 not found — skipping dependency install."
 else
@@ -172,9 +177,10 @@ else
             continue
         fi
         info "${tool_name}: checking dependencies ..."
-        if "$PY3" -m pip install --user -q --disable-pip-version-check -r "$req" 2>/dev/null; then
+        if pip_out=$("$PY3" -m pip install --user -r "$req" 2>&1); then
             ok "${tool_name}: dependencies satisfied."
         else
+            echo "$pip_out"
             # pip failed (network/proxy timeout) — check if packages are already importable
             if _reqs_importable "$req"; then
                 skip "${tool_name}: packages already importable — pip skipped (no network needed)."
