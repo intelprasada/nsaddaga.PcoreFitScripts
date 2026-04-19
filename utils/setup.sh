@@ -134,63 +134,25 @@ fi
 echo
 
 # ─── Step 4: Install Python dependencies ─────────────────────────────────────
-# Maps PyPI package names to their Python import module names (where they differ)
-_pkg_to_module() {
-    case "$(echo "$1" | tr '[:upper:]' '[:lower:]')" in
-        pyyaml)       echo yaml ;;
-        pillow)       echo PIL ;;
-        scikit-learn) echo sklearn ;;
-        opencv-python) echo cv2 ;;
-        beautifulsoup4) echo bs4 ;;
-        *)            echo "${1,,}" | tr '-' '_' ;;
-    esac
-}
-
-# Returns 0 if every real package in a requirements file is already importable
-_reqs_importable() {
-    local req="$1"
-    while IFS= read -r line; do
-        local pkg mod
-        pkg="$(echo "$line" | sed 's/[><=!;[:space:]\[].*//')"
-        mod="$(_pkg_to_module "$pkg")"
-        "$PY3" -c "import ${mod}" 2>/dev/null || return 1
-    done < <(grep -vE '^\s*#|^\s*$' "$req")
-    return 0
-}
-
 echo
 info "Installing Python dependencies for all tools ..."
-# Prefer Intel's Python (has access to internal PyPI mirrors); fall back to PATH python3
-if [[ -x "/usr/intel/bin/python3" ]]; then
-    PY3="/usr/intel/bin/python3"
-else
-    PY3="$(command -v python3 2>/dev/null || true)"
-fi
+PY3="$(command -v python3 2>/dev/null || true)"
 if [[ -z "$PY3" ]]; then
     warn "python3 not found — skipping dependency install."
 else
     for req in "${REPO_ROOT}/tools"/*/requirements.txt; do
         tool_name="$(basename "$(dirname "$req")")"
+        # Only lines that are not blank and not pure comments
         pkgs="$(grep -vE '^\s*#|^\s*$' "$req" 2>/dev/null || true)"
         if [[ -z "$pkgs" ]]; then
             skip "${tool_name}: no external Python dependencies."
             continue
         fi
-        info "${tool_name}: checking dependencies ..."
-        if pip_out=$("$PY3" -m pip install --user -r "$req" 2>&1); then
+        info "${tool_name}: installing from $(basename "$(dirname "$req")")/requirements.txt ..."
+        if "$PY3" -m pip install --user -q --disable-pip-version-check -r "$req"; then
             ok "${tool_name}: dependencies satisfied."
         else
-            echo "$pip_out"
-            # pip failed (network/proxy timeout) — check if packages are already importable
-            if _reqs_importable "$req"; then
-                skip "${tool_name}: packages already importable — pip skipped (no network needed)."
-            else
-                warn "${tool_name}: pip install failed AND packages are not importable."
-                warn "  If behind a proxy, retry with:"
-                warn "    pip install --user -r ${req} \\"
-                warn "      --proxy \"\${HTTPS_PROXY:-\${https_proxy}}\" \\"
-                warn "      --trusted-host pypi.org --trusted-host files.pythonhosted.org"
-            fi
+            warn "${tool_name}: pip install failed — run manually: pip install -r ${req}"
         fi
     done
 fi
