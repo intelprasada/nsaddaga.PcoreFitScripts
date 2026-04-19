@@ -1,0 +1,111 @@
+{
+  "tasks": [
+    {
+      "slug": "wire-up-sso",
+      "title": "Wire up SSO",
+      "line": 2,
+      "indent": 0,
+      "parent_slug": null,
+      "status": "todo",
+      "attrs": {
+        "project": [
+          "veganotes"
+        ],
+        "owner": [
+          "alice"
+        ],
+        "eta": "2026-04-22",
+        "priority": "P1"
+      },
+      "attrs_norm": {
+        "eta": "2026-04-22",
+        "priority": 1
+      },
+      "refs": []
+    },
+    {
+      "slug": "add-login-screen",
+      "title": "Add login screen",
+      "line": 3,
+      "indent": 1,
+      "parent_slug": "wire-up-sso",
+      "status": "todo",
+      "attrs": {
+        "owner": [
+          "bob",
+          "alice"
+        ],
+        "eta": "2026-04-23",
+        "project": [
+          "veganotes"
+        ]
+      },
+      "attrs_norm": {
+        "eta": "2026-04-23"
+      },
+      "refs": []
+    },
+    {
+      "slug": "add-oauth-callback",
+      "title": "Add OAuth callback",
+      "line": 4,
+      "indent": 1,
+      "parent_slug": "wire-up-sso",
+      "status": "in-progress",
+      "attrs": {
+        "owner": [
+          "alice"
+        ],
+        "eta": "2026-04-24",
+        "status": "in-progress",
+        "project": [
+          "veganotes"
+        ]
+      },
+      "attrs_norm": {
+        "eta": "2026-04-24"
+      },
+      "refs": []
+    },
+    {
+      "slug": "migrate-index",
+      "title": "Migrate index",
+      "line": 5,
+      "indent": 0,
+      "parent_slug": null,
+      "status": "done",
+      "attrs": {
+        "feature": [
+          "search-rewrite"
+        ],
+        "owner": [
+          "alice"
+        ],
+        "status": "done"
+      },
+      "attrs_norm": {},
+      "refs": [
+        {
+          "kind": "task",
+          "dst_slug": "wire-up-sso"
+        },
+        {
+          "kind": "link",
+          "dst_slug": "rfc-2026-04"
+        }
+      ]
+    }
+  ],
+  "refs": [
+    {
+      "src_slug": "migrate-index",
+      "dst_slug": "wire-up-sso",
+      "kind": "task"
+    },
+    {
+      "src_slug": "migrate-index",
+      "dst_slug": "rfc-2026-04",
+      "kind": "link"
+    }
+  ]
+}

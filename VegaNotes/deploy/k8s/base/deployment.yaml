@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: veganotes
+  labels: { app: veganotes }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }       # SQLite + RWO PVC: no rolling restart
+  selector: { matchLabels: { app: veganotes } }
+  template:
+    metadata:
+      labels: { app: veganotes }
+    spec:
+      containers:
+        - name: veganotes
+          image: veganotes:dev
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8000, name: http }]
+          envFrom:
+            - configMapRef: { name: veganotes-config }
+            - secretRef:    { name: veganotes-auth }
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits:   { cpu: "1",    memory: "1Gi"   }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: veganotes-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: veganotes
+spec:
+  selector: { app: veganotes }
+  ports:
+    - port: 80
+      targetPort: http
+      name: http

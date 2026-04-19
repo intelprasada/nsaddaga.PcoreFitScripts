@@ -1,0 +1,6 @@
+apiVersion: v2
+name: veganotes
+description: Markdown-first note-taking and lightweight project tracker
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

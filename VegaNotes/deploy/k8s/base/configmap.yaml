@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: veganotes-config
+data:
+  VEGANOTES_TIMEZONE: "UTC"
+  VEGANOTES_AGENDA_WINDOW_DAYS: "7"
+  # Override the priority vocabulary by mounting a JSON file or extending
+  # this ConfigMap; default is P0..P3, high/med/low.

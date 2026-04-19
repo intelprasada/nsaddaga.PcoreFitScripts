@@ -1,0 +1,22 @@
+services:
+  backend:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/backend.Dockerfile
+    image: veganotes:dev
+    ports: ["8080:8000"]
+    environment:
+      VEGANOTES_DATA_DIR: /data
+      # Default user/pass = admin/admin. Override:
+      #   VEGANOTES_BASIC_AUTH_USER, VEGANOTES_BASIC_AUTH_PASS_HASH
+      VEGANOTES_BASIC_AUTH_USER: ${VEGANOTES_BASIC_AUTH_USER:-admin}
+    volumes:
+      - veganotes-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz').status==200 else 1)"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  veganotes-data:

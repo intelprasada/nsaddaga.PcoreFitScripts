@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}
+  {{- with .Values.persistence.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-auth
+type: Opaque
+stringData:
+  VEGANOTES_BASIC_AUTH_USER: {{ .Values.auth.user | quote }}
+  VEGANOTES_BASIC_AUTH_PASS_HASH: {{ .Values.auth.passHash | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+data:
+  VEGANOTES_TIMEZONE: {{ .Values.config.timezone | quote }}
+  VEGANOTES_AGENDA_WINDOW_DAYS: {{ .Values.config.agendaWindowDays | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels: { app: {{ .Release.Name }} }
+spec:
+  replicas: {{ .Values.replicas }}
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: {{ .Release.Name }} } }
+  template:
+    metadata:
+      labels: { app: {{ .Release.Name }} }
+    spec:
+      containers:
+        - name: veganotes
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ containerPort: 8000, name: http }]
+          envFrom:
+            - configMapRef: { name: {{ .Release.Name }}-config }
+            - secretRef:    { name: {{ .Release.Name }}-auth }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          readinessProbe: { httpGet: { path: /readyz,  port: http }, periodSeconds: 5 }
+          livenessProbe:  { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: {{ .Release.Name }}-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  selector: { app: {{ .Release.Name }} }
+  ports: [{ port: 80, targetPort: http, name: http }]
+{{- if .Values.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}
+                port: { number: 80 }
+{{- end }}

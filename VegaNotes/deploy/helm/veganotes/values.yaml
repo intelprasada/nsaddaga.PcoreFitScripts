@@ -1,0 +1,28 @@
+image:
+  repository: veganotes
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+replicas: 1
+
+persistence:
+  size: 5Gi
+  storageClassName: ""
+
+auth:
+  user: admin
+  # bcrypt hash of "admin" — CHANGE THIS!
+  passHash: "$2b$12$0gTw4ro9xQdfb/D.Wcaay.vFD3lm6vgl5EvssXJ2p/UUt8XjPAtFy"
+
+config:
+  timezone: UTC
+  agendaWindowDays: 7
+
+ingress:
+  enabled: true
+  host: veganotes.local
+  className: ""
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits:   { cpu: "1",  memory: 1Gi   }

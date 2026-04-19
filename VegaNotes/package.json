@@ -1,0 +1,15 @@
+{
+  "name": "veganotes-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "frontend",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm --workspace @veganotes/frontend run dev",
+    "build": "npm --workspace @veganotes/frontend run build",
+    "lint": "npm --workspace @veganotes/frontend run lint",
+    "test:parser": "npm --workspace @veganotes/parser test"
+  }
+}
