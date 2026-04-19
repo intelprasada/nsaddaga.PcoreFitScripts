@@ -29,6 +29,33 @@ attribute (subtasks always inherit multi-valued attrs).
 `#eta` and `#priority` are **single-valued** and are not inherited — only
 the parent has them.
 
+`#eta` accepts several formats, all normalized to ISO `YYYY-MM-DD` for
+sorting and the agenda view:
+
+| Form                  | Example         | Resolves to                       |
+| --------------------- | --------------- | --------------------------------- |
+| ISO date              | `2026-05-01`    | `2026-05-01`                      |
+| Relative              | `+3d`, `+1w`    | today + offset                    |
+| Words                 | `today`, `tomorrow`, `next fri` | natural date  |
+| **Intel work week**   | `WW17`, `WW17.3`, `2026WW17.0` | the matching weekday (see below) |
+
+**Intel work-week notation** — Intel weeks run **Sunday → Saturday**, with
+Sunday being day `.0` and Saturday day `.6`. WW1 is the week containing the
+first Saturday of the calendar year (so e.g. WW1 of 2026 starts on
+2025-12-28). Examples for 2026:
+
+- `WW17` → `2026-04-24` (Friday — day defaults to `.5`)
+- `WW17.0` → `2026-04-19` (Sunday)
+- `WW17.1` → `2026-04-20` (Monday)
+- `WW17.5` → `2026-04-24` (Friday)
+- `WW16.6` → `2026-04-18` (the previous Saturday)
+- `2025WW53.0` → `2025-12-28` (explicit year prefix)
+
+```md
+- !task Tape-out review #eta WW18.3 #priority P0
+- !task Send agenda #eta WW17.4
+```
+
 ---
 
 ## 2. Projects = folders
@@ -95,6 +122,32 @@ You can stack multiple context attrs on a single line:
 - !task Spec the new ranker
 - !task Migrate old corpus
 ```
+
+---
+
+## Action Required (`!AR`) sub-items
+
+For checklist-style follow-ups under a top-level task, declare them with
+`!AR <title>` instead of `!task`. An `!AR` is itself a task (it gets a slug,
+status, owners, and `#eta`), but its `kind` is `"ar"` so the Kanban groups
+it under its parent rather than rendering a separate card.
+
+```md
+- !task Stabilize FIT validation #owner nancy #priority P1
+  - !AR Why is the suite failing now?
+  - !AR Bisect to find offending commit #owner alice
+  - !AR Add regression test once green
+```
+
+In the Kanban board the parent card "Stabilize FIT validation" shows a
+`▸ 3 ARs (0 done / 3 open)` strip. Click it to expand, then click the status
+pill on each AR to cycle `todo → in-progress → done → todo`. Status changes
+round-trip back into the markdown file as a `#status` attribute on the
+underlying `!AR` line — exactly like top-level tasks.
+
+ARs participate in agendas and filters too (e.g. `?owner=alice` returns
+Alice's ARs), so use `?kind=task` to restrict to top-level tasks only or
+`?kind=ar` to see only Action-Required items.
 
 ---
 

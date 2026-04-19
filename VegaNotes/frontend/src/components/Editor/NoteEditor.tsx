@@ -86,6 +86,7 @@ export function NoteEditor({ value, onChange }: Props) {
  */
 const HEADING_RE = /^(\s*)(#{1,6})(\s+)(.*)$/gm;
 const TASK_RE    = /!task\b/g;
+const AR_RE      = /!AR\b/g;
 const USER_RE    = /(^|[\s([])@([a-zA-Z][\w.-]*)/g;
 const ATTR_RE    = /#([a-zA-Z][\w-]*)/g;
 
@@ -103,6 +104,8 @@ function highlight(src: string): string {
     `${lead}${hashes}${sp}<span class="vega-heading">${rest}</span>`);
   // !task literal.
   s = s.replace(TASK_RE, '<span class="vega-task">!task</span>');
+  // !AR literal (Action Required sub-item under a parent task).
+  s = s.replace(AR_RE, '<span class="vega-ar">!AR</span>');
   // @user (preserves the leading char that gated the match).
   s = s.replace(USER_RE, (_m, lead, name) =>
     `${lead}<span class="vega-user">@${name}</span>`);

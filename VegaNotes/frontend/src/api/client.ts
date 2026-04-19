@@ -1,11 +1,22 @@
 // Tiny typed API client. Auth is HTTP Basic; in single-pod mode the browser
 // re-uses the credentials it already negotiated with the page itself.
 
+export interface ChildTask {
+  id: number;
+  slug: string;
+  title: string;
+  status: string;
+  kind: string;
+  line: number;
+  eta: string | null;
+}
+
 export interface Task {
   id: number;
   slug: string;
   title: string;
   status: string;
+  kind: string;
   owners: string[];
   projects: string[];
   features: string[];
@@ -14,6 +25,7 @@ export interface Task {
   priority_rank: number;
   parent_task_id: number | null;
   note_id: number;
+  children?: ChildTask[];
 }
 
 export interface TasksResponse {

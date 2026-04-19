@@ -49,8 +49,14 @@ export function KanbanBoard() {
   const qc = useQueryClient();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const { data } = useQuery({
-    queryKey: ["tasks", filters],
-    queryFn: () => api.tasks({ ...filters, hide_done: false }),
+    queryKey: ["tasks", filters, "kanban"],
+    queryFn: () =>
+      api.tasks({
+        ...filters,
+        hide_done: false,
+        top_level_only: true,
+        include_children: true,
+      }),
   });
   const tasks = data?.tasks ?? [];
   const grouped = useMemo(() => {

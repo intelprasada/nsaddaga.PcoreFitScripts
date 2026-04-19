@@ -23,7 +23,7 @@ interface TextChunk {
 
 type Item = Token | TextChunk;
 
-const TOKEN_RE = /(!task)|#([a-zA-Z][\w-]*)|(?:^|(?<=[\s([]))@([a-zA-Z][\w.-]*)/g;
+const TOKEN_RE = /(!task|!AR)|#([a-zA-Z][\w-]*)|(?:^|(?<=[\s([]))@([a-zA-Z][\w.-]*)/g;
 
 function readValue(s: string, i: number, untilHash = false): [string, number] {
   const n = s.length;
@@ -65,8 +65,10 @@ function lex(line: string): Item[] {
     const start = m.index;
     if (start > last) out.push({ kind: "text", text: line.slice(last, start) });
     if (m[1]) {
+      const bang = m[1];
+      const kindName = bang === "!AR" ? "ar" : "task";
       const [value, end] = readValue(line, TOKEN_RE.lastIndex, true);
-      out.push({ kind: "task_decl", name: "task", value, raw: line.slice(start, end), col: start });
+      out.push({ kind: "task_decl", name: kindName, value, raw: line.slice(start, end), col: start });
       TOKEN_RE.lastIndex = end;
       last = end;
     } else if (m[3] !== undefined) {
@@ -105,6 +107,7 @@ export interface ParsedTask {
   title: string;
   line: number;
   indent: number;
+  kind: string;
   parent_slug: string | null;
   status: string;
   attrs: Record<string, string | string[]>;
@@ -228,11 +231,13 @@ export function parse(md: string): ParseResult {
 
     if (decl) {
       const indent = indentLevel(raw);
+      const kind = decl.name === "ar" ? "ar" : "task";
       const task: ParsedTask = {
         slug: slugCollide(slugify(decl.value)),
         title: decl.value.trim(),
         line: lineNo,
         indent,
+        kind,
         parent_slug: null,
         status: "todo",
         attrs: {},

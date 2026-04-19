@@ -32,6 +32,8 @@ and follow-up work can cite it.
 | R-PARSE-010   | The parser is implemented identically in Python and TypeScript. Parity is enforced by a shared golden-fixture test suite (`backend/tests/fixtures/*.{md,json}` symlinked from `packages/parser-ts/tests/fixtures`). |
 | R-PARSE-011   | Slug generation: `lowercase, replace [^a-z0-9]+ -> -, strip leading/trailing -`. Empty result fall back to `task`. Collisions within a single file get `-2`, `-3` suffixes. |
 | R-PARSE-012   | **Folder-derived project**: every task in `notes/<project>/...` is automatically associated with `<project>` at index time, in addition to any explicit `#project` tokens. The implicit value MUST be queryable via `GET /api/tasks?project=<project>`. |
+| R-PARSE-013   | **`!AR` Action-Required sub-items**: `!AR <title>` declares a task whose `kind` is `"ar"` (instead of the default `"task"`). It follows the same indentation-based parent inheritance rules as `!task` — an `!AR` indented under a `!task` becomes that task's child and inherits its owners/projects/features. The DB `task` table MUST persist `kind` and expose it on every task payload. |
+| R-PARSE-014   | **Intel work-week notation in `#eta`**: `parse_eta` MUST accept `WW<n>` and `WW<n>.<d>` (case-insensitive) where `n` is the Intel work-week number (1–53) and `d` is the day-of-week index (`0`=Sun, `1`=Mon, …, `6`=Sat). When the day suffix is omitted the default is **`.5` (Friday)** — Friday is the most common scheduling target inside Intel work-week planning. An optional 4-digit year prefix (e.g. `2026WW17.3`) selects a non-current year; otherwise the current calendar year is used. Intel WW1 starts on the Sunday immediately preceding the first Saturday of the calendar year (e.g. WW1 of 2026 starts 2025-12-28). The TS parser MUST mirror this exactly. |
 
 ## R-AUTH — Authentication & RBAC
 
@@ -71,6 +73,8 @@ All endpoints are JSON, prefixed `/api`.
 | R-API-016a    | `DELETE /api/projects/{p}`                 | Manager only. Removes the on-disk folder, deletes every note's index row, and clears all member rows for that project. Returns `{status, project, notes_removed}`. |
 | R-API-017     | `GET    /api/users`                        | List of known users (anyone who has appeared as `#owner`). |
 | R-API-018     | `GET    /api/search?q`                     | FTS5 over title + body_md. |
+| R-API-019     | `GET    /api/tasks?top_level_only=1`       | Returns only tasks with no parent AND `kind='task'` (i.e. excludes Action-Required sub-items so the Kanban shows one card per top-level task). |
+| R-API-020     | `GET    /api/tasks?include_children=1`     | Each task in the response embeds its direct children as `children: [{id, slug, title, status, kind, line, eta}]`, ordered by source line. Used by the Kanban to render the AR strip without N extra round-trips. The `kind` query param (CSV) additionally filters by kind (e.g. `kind=ar`). |
 
 ## R-UI — Frontend
 
@@ -90,6 +94,8 @@ All endpoints are JSON, prefixed `/api`.
 | R-UI-012      | The context menu MUST be dismissed on outside click and on the `Escape` key. |
 | R-UI-013      | **Editor key handling**: pressing `Tab` inside the editor MUST insert a literal tab character at the caret rather than moving focus to the next form control. `Shift-Tab` MUST outdent the current line by one leading tab or up to four leading spaces. |
 | R-UI-014      | The editor surface MUST NOT apply Tailwind Typography (`prose`) styling to the underlying `<pre>/<code>` block — that styling forces a dark background and white text that hides token colors. The editor uses a transparent background with slate-900 default text so that the `vega-task` / `vega-attr` / `vega-user` / `vega-heading` decoration colors render correctly. Tab width MUST be 4. |
+| R-UI-015      | **Kanban AR strip**: each Kanban card represents one top-level `!task`. Cards with `!AR` children MUST display a collapsible "▸ N ARs (X done / Y open)" strip; expanding reveals one row per AR with its title, optional `#eta`, and a status pill. Clicking the pill cycles the AR through `todo → in-progress → done → todo` (and any other status maps to `todo`) by issuing `PATCH /api/tasks/{id}`. The card itself is the only DnD source — AR rows are not draggable. |
+| R-UI-016      | **Editor highlight for `!AR`**: the syntax highlighter MUST color the literal `!AR` token in amber (`vega-ar` class) to visually distinguish it from `!task` (emerald). |
 
 ## R-DEPLOY — Deployment
 
@@ -127,3 +133,5 @@ tables above.
 | 2026-04-19 | Right-click in the Sidebar to add a note in a project, delete a project, or delete a note. | R-API-016a (new), R-UI-009..R-UI-012 (new). |
 | 2026-04-19 | Pressing `Tab` in the editor must insert a tab instead of moving focus. | R-UI-013 (new). |
 | 2026-04-19 | Folder-name → implicit `#project` for tasks; remove Tailwind `prose` from editor so token colors are visible. | R-PARSE-012 (new), R-UI-014 (new). |
+| 2026-04-19 | Add `!AR` (Action Required) sub-item syntax: declares a child task of `kind="ar"` under the enclosing `!task`; Kanban renders ARs as a collapsible strip inside the parent card with click-to-cycle status pills; editor colors `!AR` in amber. | R-PARSE-013 (new), R-API-019 (new), R-API-020 (new), R-UI-015 (new), R-UI-016 (new). |
+| 2026-04-19 | Accept Intel work-week notation (`WW17`, `WW17.3`, `2026WW17.0`) in `#eta`; Sunday is `.0`, Saturday is `.6`; WW1 = week containing the year's first Saturday. Mirrored in the TS parser. | R-PARSE-014 (new). |

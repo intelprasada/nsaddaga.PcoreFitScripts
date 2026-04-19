@@ -17,6 +17,41 @@ ISO_DATETIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:
 REL = re.compile(r"^([+-])(\d+(?:\.\d+)?)([hdwm])$")
 DOW = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
+# Intel work-week notation. Weeks run Sunday (.0) → Saturday (.6).
+# WW1 is the week containing the first Saturday of the calendar year, which
+# means WW1 starts on the Sunday immediately preceding that first Saturday.
+# Accepts: "WW16", "ww16.3", "2026WW16", "2026ww16.0".
+INTEL_WW_RE = re.compile(r"^(?:(\d{4}))?ww(\d{1,2})(?:\.(\d))?$")
+
+
+def _intel_ww1_start(year: int) -> date:
+    jan1 = date(year, 1, 1)
+    # Python weekday(): Mon=0..Sun=6. Saturday is 5.
+    days_to_first_sat = (5 - jan1.weekday()) % 7
+    first_sat = jan1 + timedelta(days=days_to_first_sat)
+    return first_sat - timedelta(days=6)  # the Sunday before
+
+
+def parse_intel_ww(value: str, *, today: Optional[date] = None) -> Optional[str]:
+    """Parse Intel work-week notation into an ISO date.
+
+    >>> parse_intel_ww("WW17.0", today=date(2026, 4, 19))
+    '2026-04-19'
+    """
+    if not value:
+        return None
+    m = INTEL_WW_RE.match(value.strip().lower())
+    if not m:
+        return None
+    today = today or _today()
+    year = int(m.group(1)) if m.group(1) else today.year
+    week = int(m.group(2))
+    day = int(m.group(3)) if m.group(3) is not None else 5  # default → Friday
+    if not (1 <= week <= 53) or not (0 <= day <= 6):
+        return None
+    start = _intel_ww1_start(year)
+    return (start + timedelta(days=(week - 1) * 7 + day)).isoformat()
+
 
 def _today() -> date:
     return datetime.now(timezone.utc).date()
@@ -57,6 +92,10 @@ def parse_eta(value: str, *, today: Optional[date] = None) -> Optional[str]:
             target = DOW[dow]
             advance = (target - cur) % 7 or 7
             return (today + timedelta(days=advance)).isoformat()
+
+    ww = parse_intel_ww(v, today=today)
+    if ww:
+        return ww
 
     return None
 

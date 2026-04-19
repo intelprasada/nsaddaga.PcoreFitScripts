@@ -61,7 +61,7 @@ def _require_project_access(
 
 # ---------- helpers ---------------------------------------------------------
 
-def _task_to_dict(s: Session, t: Task) -> dict[str, Any]:
+def _task_to_dict(s: Session, t: Task, *, include_children: bool = False) -> dict[str, Any]:
     attrs = s.exec(select(TaskAttr).where(TaskAttr.task_id == t.id)).all()
     owners = s.exec(
         select(User.name).join(TaskOwner, TaskOwner.user_id == User.id)
@@ -82,11 +82,12 @@ def _task_to_dict(s: Session, t: Task) -> dict[str, Any]:
             attr_map[a.key] = (cur if isinstance(cur, list) else [cur]) + [a.value]
         else:
             attr_map[a.key] = a.value
-    return {
+    out: dict[str, Any] = {
         "id": t.id,
         "slug": t.slug,
         "title": t.title,
         "status": t.status,
+        "kind": t.kind,
         "note_id": t.note_id,
         "parent_task_id": t.parent_task_id,
         "owners": owners,
@@ -96,6 +97,28 @@ def _task_to_dict(s: Session, t: Task) -> dict[str, Any]:
         "eta": next((a.value_norm for a in attrs if a.key == "eta"), None),
         "priority_rank": next((int(a.value_norm) for a in attrs if a.key == "priority" and a.value_norm), 999),
     }
+    if include_children:
+        kids = s.exec(
+            select(Task).where(Task.parent_task_id == t.id).order_by(Task.line)
+        ).all()
+        out["children"] = [
+            {
+                "id": c.id,
+                "slug": c.slug,
+                "title": c.title,
+                "status": c.status,
+                "kind": c.kind,
+                "line": c.line,
+                "eta": next(
+                    (a.value_norm for a in s.exec(
+                        select(TaskAttr).where(TaskAttr.task_id == c.id, TaskAttr.key == "eta")
+                    ).all()),
+                    None,
+                ),
+            }
+            for c in kids
+        ]
+    return out
 
 
 def _split(csv: Optional[str]) -> list[str]:
@@ -184,6 +207,9 @@ def list_tasks(
     eta_after: Optional[date] = None,
     hide_done: bool = False,
     q: Optional[str] = None,
+    kind: Optional[str] = None,
+    top_level_only: bool = False,
+    include_children: bool = False,
 ) -> dict[str, Any]:
     sql = ["SELECT DISTINCT t.id FROM task t"]
     params: dict[str, Any] = {}
@@ -225,11 +251,17 @@ def list_tasks(
     if q:
         where.append("t.title LIKE :q")
         params["q"] = f"%{q}%"
+    if kind:
+        kinds = _split(kind)
+        where.append("t.kind IN :kinds")
+        params["kinds"] = tuple(kinds)
+    if top_level_only:
+        where.append("(t.parent_task_id IS NULL AND t.kind = 'task')")
 
     sql.append("WHERE " + " AND ".join(where))
     sql_text = " ".join(sql)
     stmt = text(sql_text)
-    expanding_keys = [k for k in ("u_names", "p_names", "f_names", "statuses", "prios") if k in params]
+    expanding_keys = [k for k in ("u_names", "p_names", "f_names", "statuses", "prios", "kinds") if k in params]
     if expanding_keys:
         stmt = stmt.bindparams(*[bindparam(k, expanding=True) for k in expanding_keys])
     rows = s.exec(stmt.bindparams(**params)).all()
@@ -237,7 +269,7 @@ def list_tasks(
     if not ids:
         return {"tasks": [], "aggregations": {"owners": [], "projects": [], "features": [], "status_breakdown": {}, "priority_breakdown": {}}}
 
-    tasks = [_task_to_dict(s, s.get(Task, i)) for i in ids]
+    tasks = [_task_to_dict(s, s.get(Task, i), include_children=include_children) for i in ids]
 
     agg_owners = sorted({o for t in tasks for o in t["owners"]})
     agg_projects = sorted({p for t in tasks for p in t["projects"]})

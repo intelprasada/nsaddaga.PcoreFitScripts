@@ -45,6 +45,19 @@ def test_eta_invalid():
     assert parse_eta("not a date") is None
 
 
+def test_eta_intel_workweek():
+    today = date(2026, 4, 19)  # Sunday → WW17.0 in Intel calendar
+    assert parse_eta("WW17.0", today=today) == "2026-04-19"
+    assert parse_eta("WW17.1", today=today) == "2026-04-20"
+    assert parse_eta("WW17", today=today) == "2026-04-24"  # day defaults to .5 (Friday)
+    assert parse_eta("ww16.6", today=today) == "2026-04-18"
+    assert parse_eta("2026WW17.3", today=today) == "2026-04-22"
+    assert parse_eta("WW1.0", today=today) == "2025-12-28"  # 2026 WW1 starts Sun Dec 28 2025
+    assert parse_eta("WW1", today=today) == "2026-01-02"  # WW1 default → Friday Jan 2 2026
+    assert parse_eta("WW99", today=today) is None  # out of range
+    assert parse_eta("WW17.7", today=today) is None  # day 7 invalid
+
+
 def test_duration():
     assert parse_duration("4h") == 4
     assert parse_duration("1d") == 8

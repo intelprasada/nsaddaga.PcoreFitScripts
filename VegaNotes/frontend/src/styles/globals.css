@@ -25,6 +25,7 @@
   }
   .vega-editor-pre { color: #0f172a; }
   .vega-task    { @apply text-emerald-700 font-bold; }
+  .vega-ar      { @apply text-amber-700 font-bold; }
   .vega-attr    { @apply text-sky-700 font-semibold; }
   .vega-user    { @apply text-violet-700 font-semibold; }
   .vega-heading { @apply text-slate-900 font-bold; }

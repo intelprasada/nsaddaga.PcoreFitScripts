@@ -4,6 +4,33 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const REL = /^([+-])(\d+(?:\.\d+)?)([hdwm])$/;
 const DOW: Record<string, number> = { mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6, sun: 0 };
 
+// Intel work-week notation: WW1 starts on the Sunday before the first
+// Saturday of the year; days 0..6 = Sun..Sat. Examples: "WW16", "ww16.3",
+// "2026WW16.0".
+const INTEL_WW_RE = /^(?:(\d{4}))?ww(\d{1,2})(?:\.(\d))?$/;
+
+function intelWw1Start(year: number): Date {
+  const jan1 = new Date(Date.UTC(year, 0, 1));
+  // getUTCDay(): Sun=0..Sat=6.
+  const daysToFirstSat = ((6 - jan1.getUTCDay()) % 7 + 7) % 7;
+  const firstSat = new Date(jan1); firstSat.setUTCDate(firstSat.getUTCDate() + daysToFirstSat);
+  const start = new Date(firstSat); start.setUTCDate(start.getUTCDate() - 6);
+  return start;
+}
+
+export function parseIntelWw(value: string, today: Date = todayUTC()): string | null {
+  if (!value) return null;
+  const m = INTEL_WW_RE.exec(value.trim().toLowerCase());
+  if (!m) return null;
+  const year = m[1] ? parseInt(m[1], 10) : today.getUTCFullYear();
+  const week = parseInt(m[2], 10);
+  const day = m[3] !== undefined ? parseInt(m[3], 10) : 5; // default → Friday
+  if (week < 1 || week > 53 || day < 0 || day > 6) return null;
+  const start = intelWw1Start(year);
+  start.setUTCDate(start.getUTCDate() + (week - 1) * 7 + day);
+  return isoDate(start);
+}
+
 function todayUTC(): Date {
   const n = new Date();
   return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate()));
@@ -38,6 +65,8 @@ export function parseEta(value: string, today: Date = todayUTC()): string | null
       const t = new Date(today); t.setUTCDate(t.getUTCDate() + advance); return isoDate(t);
     }
   }
+  const ww = parseIntelWw(v, today);
+  if (ww) return ww;
   return null;
 }
 

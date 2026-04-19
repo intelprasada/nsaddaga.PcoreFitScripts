@@ -31,6 +31,18 @@ test("eta words", () => {
   assert.equal(parseEta("next fri", today), "2026-04-24");
 });
 test("eta invalid", () => assert.equal(parseEta("not a date"), null));
+test("eta intel workweek", () => {
+  const today = new Date(Date.UTC(2026, 3, 19)); // Sunday → WW17.0
+  assert.equal(parseEta("WW17.0", today), "2026-04-19");
+  assert.equal(parseEta("WW17.1", today), "2026-04-20");
+  assert.equal(parseEta("WW17", today), "2026-04-24");      // default → Friday
+  assert.equal(parseEta("ww16.6", today), "2026-04-18");
+  assert.equal(parseEta("2026WW17.3", today), "2026-04-22");
+  assert.equal(parseEta("WW1.0", today), "2025-12-28");
+  assert.equal(parseEta("WW1", today), "2026-01-02");        // default → Friday Jan 2
+  assert.equal(parseEta("WW99", today), null);
+  assert.equal(parseEta("WW17.7", today), null);
+});
 test("duration", () => {
   assert.equal(parseDuration("4h"), 4);
   assert.equal(parseDuration("1d"), 8);

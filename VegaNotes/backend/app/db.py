@@ -27,6 +27,12 @@ def init_db() -> None:
     engine = get_engine()
     SQLModel.metadata.create_all(engine)
     with engine.begin() as conn:
+        # Lightweight schema migrations for columns added after the initial
+        # SQLModel.metadata.create_all() ran on a pre-existing dev DB.
+        existing = {row[1] for row in conn.execute(text("PRAGMA table_info(task)")).fetchall()}
+        if "kind" not in existing:
+            conn.execute(text("ALTER TABLE task ADD COLUMN kind TEXT NOT NULL DEFAULT 'task'"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_task_kind ON task(kind)"))
         # FTS5 virtual table for note search.
         conn.execute(text(
             "CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts "

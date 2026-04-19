@@ -47,6 +47,7 @@ class ParsedTask:
     title: str
     line: int
     indent: int
+    kind: str = "task"  # "task" | "ar"
     parent_slug: Optional[str] = None
     status: str = "todo"
     attrs: Dict[str, Any] = field(default_factory=dict)
@@ -59,6 +60,7 @@ class ParsedTask:
             "title": self.title,
             "line": self.line,
             "indent": self.indent,
+            "kind": self.kind,
             "parent_slug": self.parent_slug,
             "status": self.status,
             "attrs": self.attrs,
@@ -190,7 +192,8 @@ def parse(md: str) -> Dict[str, Any]:
 
         if decl is not None:
             slug = _slug_collisions(slugify(decl.value), taken_slugs)
-            task = ParsedTask(slug=slug, title=decl.value.strip(), line=line_no, indent=line_indent)
+            kind = decl.name if decl.name in {"task", "ar"} else "task"
+            task = ParsedTask(slug=slug, title=decl.value.strip(), line=line_no, indent=line_indent, kind=kind)
             while stack and stack[-1].indent >= line_indent:
                 stack.pop()
             if stack:

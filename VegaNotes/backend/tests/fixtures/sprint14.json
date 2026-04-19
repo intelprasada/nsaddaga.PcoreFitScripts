@@ -5,6 +5,7 @@
       "title": "Wire up SSO",
       "line": 2,
       "indent": 0,
+      "kind": "task",
       "parent_slug": null,
       "status": "todo",
       "attrs": {
@@ -28,6 +29,7 @@
       "title": "Add login screen",
       "line": 3,
       "indent": 1,
+      "kind": "task",
       "parent_slug": "wire-up-sso",
       "status": "todo",
       "attrs": {
@@ -50,6 +52,7 @@
       "title": "Add OAuth callback",
       "line": 4,
       "indent": 1,
+      "kind": "task",
       "parent_slug": "wire-up-sso",
       "status": "in-progress",
       "attrs": {
@@ -72,6 +75,7 @@
       "title": "Migrate index",
       "line": 5,
       "indent": 0,
+      "kind": "task",
       "parent_slug": null,
       "status": "done",
       "attrs": {

@@ -26,6 +26,7 @@ class Task(SQLModel, table=True):
     status: str = Field(default="todo", index=True)
     line: int = 0
     indent: int = 0
+    kind: str = Field(default="task", index=True)  # "task" | "ar"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 

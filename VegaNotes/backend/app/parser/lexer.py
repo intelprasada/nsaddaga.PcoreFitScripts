@@ -30,7 +30,7 @@ class Token:
 
 _TOKEN_RE = re.compile(
     r"""
-    (?P<bang>!task)                       # task declaration
+    (?P<bang>!task|!AR)                   # task / action-required declaration
     |
     \#(?P<name>[a-zA-Z][\w-]*)            # #attribute
     |
@@ -95,9 +95,11 @@ def lex(line: str) -> List[Union[TextChunk, Token]]:
             out.append(TextChunk(line[last:start]))
 
         if m.group("bang"):
+            bang = m.group("bang")  # "!task" or "!AR"
+            kind_name = "ar" if bang == "!AR" else "task"
             value, end = _read_value(line, m.end(), until_hash=True)
             raw = line[start:end]
-            out.append(Token(kind="task_decl", name="task", value=value, raw=raw, col=start))
+            out.append(Token(kind="task_decl", name=kind_name, value=value, raw=raw, col=start))
             i = end
             last = end
         elif m.group("at"):

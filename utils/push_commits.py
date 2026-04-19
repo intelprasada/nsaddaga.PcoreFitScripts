@@ -91,7 +91,7 @@ def get_changed_files(sha, parent_sha, repo_dir):
 
 def get_file_content_b64(sha, path, repo_dir):
     raw = subprocess.check_output(
-        f"git show {sha}:{path}", shell=True, cwd=repo_dir
+        ["git", "show", f"{sha}:{path}"], cwd=repo_dir
     )
     return base64.b64encode(raw).decode()
 

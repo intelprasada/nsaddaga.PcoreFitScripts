@@ -92,6 +92,7 @@ def reindex_file(path: Path, session: Session) -> Note:
             status=pt["status"],
             line=pt["line"],
             indent=pt["indent"],
+            kind=pt.get("kind", "task"),
         )
         session.add(t)
         session.flush()
