@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
 interface Props {
   value: string;
@@ -8,29 +8,77 @@ interface Props {
 /**
  * VegaNotes markdown editor.
  *
- * Implementation: a transparent <textarea> stacked exactly on top of a
- * syntax-highlighted <pre> mirror. The user types into the textarea (so
- * caret, IME, copy/paste, undo all behave natively) and we keep the
- * highlighted layer in lockstep on every change. This pattern (a la CodeJar
- * / Hyperterm-ish) sidesteps every ContentEditable / ProseMirror gotcha
- * around code blocks, decorations and Tailwind Typography.
- *
- * Token coloring matches the rest of the UI:
- *   - `!task`  emerald
- *   - `#attr`  sky
- *   - `@user`  violet
- *   - `# ...`  slate-bold heading
+ * Implementation: a transparent <textarea> stacked on top of a syntax-
+ * highlighted <pre> mirror. To keep typing smooth on large notes, the
+ * editor manages its own local string state and only pushes upward on a
+ * short debounce (or on blur / unmount). The highlight pass is fed via
+ * React's `useDeferredValue` so it can be skipped when input is bursty.
  */
 export function NoteEditor({ value, onChange }: Props) {
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const preRef = useRef<HTMLPreElement | null>(null);
 
-  // Keep the mirrored <pre> in sync with the textarea content.
-  useLayoutEffect(() => {
-    if (preRef.current) preRef.current.innerHTML = highlight(value);
-  }, [value]);
+  // Local string keeps keystrokes off the App-level state path.
+  const [local, setLocal] = useState(value);
+  // Track the last value we pushed up so an incoming prop change that just
+  // mirrors our own emission doesn't clobber the cursor.
+  const lastEmitted = useRef(value);
+  const flushTimer = useRef<number | null>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  // Mirror `local` into a ref so the unmount cleanup (which has a stale
+  // closure on `local` and runs AFTER React has nulled DOM refs) can still
+  // read the most recent typed text. Without this, switching tabs while a
+  // sub-200ms edit was pending lost the in-flight characters.
+  const localRef = useRef(local);
+  useEffect(() => { localRef.current = local; }, [local]);
 
-  // Tab inserts a literal tab; Shift-Tab outdents one tab/4-space.
+  // Sync local <- prop only on a real external swap (path switch, server
+  // reload, etc.), never on echoes of our own debounced upward push.
+  useEffect(() => {
+    if (value !== local && value !== lastEmitted.current) {
+      setLocal(value);
+      lastEmitted.current = value;
+    }
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Render the highlighted overlay from a deferred copy so React can
+  // interrupt and prioritize keystrokes.
+  const deferred = useDeferredValue(local);
+  const html = useMemo(() => highlight(deferred), [deferred]);
+  useEffect(() => { if (preRef.current) preRef.current.innerHTML = html; }, [html]);
+
+  const scheduleEmit = (next: string) => {
+    if (flushTimer.current != null) window.clearTimeout(flushTimer.current);
+    flushTimer.current = window.setTimeout(() => {
+      flushTimer.current = null;
+      lastEmitted.current = next;
+      onChangeRef.current(next);
+    }, 200);
+  };
+
+  const flushNow = (next: string) => {
+    if (flushTimer.current != null) {
+      window.clearTimeout(flushTimer.current);
+      flushTimer.current = null;
+    }
+    if (next !== lastEmitted.current) {
+      lastEmitted.current = next;
+      onChangeRef.current(next);
+    }
+  };
+
+  // Make sure unmount (tab switch / new note) doesn't drop the in-flight edit.
+  // Read from `localRef` (always current) — the DOM textarea ref has already
+  // been detached by React at this point, and a closure on `local` would be
+  // stuck at the initial-mount value.
+  useEffect(() => () => flushNow(localRef.current), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const update = (next: string) => {
+    setLocal(next);
+    scheduleEmit(next);
+  };
+
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key !== "Tab") return;
     e.preventDefault();
@@ -44,16 +92,15 @@ export function NoteEditor({ value, onChange }: Props) {
         : (/^ {1,4}/.exec(lineHead)?.[0].length ?? 0);
       if (drop === 0) return;
       const next = v.slice(0, lineStart) + v.slice(lineStart + drop);
-      onChange(next);
+      update(next);
       requestAnimationFrame(() => ta.setSelectionRange(s - drop, en - drop));
     } else {
       const next = v.slice(0, s) + "\t" + v.slice(en);
-      onChange(next);
+      update(next);
       requestAnimationFrame(() => ta.setSelectionRange(s + 1, s + 1));
     }
   }
 
-  // Mirror scroll position so the highlight overlay stays aligned.
   function onScroll(e: React.UIEvent<HTMLTextAreaElement>) {
     if (!preRef.current) return;
     preRef.current.scrollTop = e.currentTarget.scrollTop;
@@ -69,10 +116,11 @@ export function NoteEditor({ value, onChange }: Props) {
       />
       <textarea
         ref={taRef}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
+        value={local}
+        onChange={(e) => update(e.target.value)}
         onKeyDown={onKeyDown}
         onScroll={onScroll}
+        onBlur={(e) => flushNow(e.currentTarget.value)}
         spellCheck={false}
         className="vega-editor-ta absolute inset-0 w-full h-full m-0 p-3 bg-transparent text-transparent caret-slate-900 resize-none outline-none whitespace-pre-wrap break-words"
       />

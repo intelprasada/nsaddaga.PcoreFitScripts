@@ -166,17 +166,45 @@ def parse(md: str) -> Dict[str, Any]:
     stack: List[ParsedTask] = []
     current: Optional[ParsedTask] = None
     taken_slugs: Dict[str, int] = {}
-    ctx_stack: List[Dict[str, list]] = []  # cleared on blank line
+    # Each frame: (indent, {key: [values]}). Frames are scoped by indent so
+    # siblings replace and shallower lines cancel deeper ones.
+    ctx_stack: List[tuple[int, Dict[str, list]]] = []
 
     def gather_inherited() -> Dict[str, list]:
         merged: Dict[str, list] = {}
-        for attrs in ctx_stack:
+        for _, attrs in ctx_stack:
             for k, vs in attrs.items():
                 bucket = merged.setdefault(k, [])
                 for v in vs:
                     if v not in bucket:
                         bucket.append(v)
         return merged
+
+    def prune_for_task(line_indent: int) -> None:
+        """A task at indent L invalidates ctx frames at indent > L (deeper,
+        therefore out of scope). Same-indent and shallower frames still apply."""
+        while ctx_stack and ctx_stack[-1][0] > line_indent:
+            ctx_stack.pop()
+        # Also drop any non-tail deeper frames (shouldn't happen post-fix but
+        # guards against odd interleavings).
+        ctx_stack[:] = [f for f in ctx_stack if f[0] <= line_indent]
+
+    def prune_for_ctx(line_indent: int, new_keys: set) -> None:
+        """A ctx-only line at indent L:
+          * pops every frame deeper than L (out of scope), and
+          * pops same-indent frames whose key set overlaps the new line's
+            keys (sibling replaces sibling: e.g. `#project jnc` after
+            `#project gfc`, or `@namratha` after `@aboli`).
+        Same-indent frames with disjoint keys (e.g. an `@owner` line after
+        a `#project` line at the same indent) are kept additive."""
+        ctx_stack[:] = [
+            (k_indent, attrs)
+            for (k_indent, attrs) in ctx_stack
+            if not (
+                k_indent > line_indent
+                or (k_indent == line_indent and (set(attrs.keys()) & new_keys))
+            )
+        ]
 
     for line_no, raw_line in enumerate(md.splitlines()):
         if not raw_line.strip():
@@ -191,6 +219,7 @@ def parse(md: str) -> Dict[str, Any]:
         attr_toks = [x for x in items if isinstance(x, Token) and x.kind == "attr"]
 
         if decl is not None:
+            prune_for_task(line_indent)
             slug = _slug_collisions(slugify(decl.value), taken_slugs)
             kind = decl.name if decl.name in {"task", "ar"} else "task"
             task = ParsedTask(slug=slug, title=decl.value.strip(), line=line_no, indent=line_indent, kind=kind)
@@ -217,10 +246,12 @@ def parse(md: str) -> Dict[str, Any]:
                     for tok in attr_toks:
                         _attach_attr(current, tok)
                 else:
+                    new_keys = {tok.name for tok in attr_toks}
+                    prune_for_ctx(line_indent, new_keys)
                     ctx_attrs: Dict[str, list] = {}
                     for tok in attr_toks:
                         ctx_attrs.setdefault(tok.name, []).append(tok.value)
-                    ctx_stack.append(ctx_attrs)
+                    ctx_stack.append((line_indent, ctx_attrs))
             elif current is not None:
                 for tok in attr_toks:
                     _attach_attr(current, tok)

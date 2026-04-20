@@ -138,6 +138,34 @@ def list_notes(s: Session = Depends(get_session)) -> list[dict[str, Any]]:
     return [{"id": n.id, "path": n.path, "title": n.title, "updated_at": n.updated_at} for n in notes]
 
 
+@router.get("/notes/abs-path")
+def note_abs_path(
+    path: str = Query(..., description="Repo-relative note path"),
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, str]:
+    """Return the absolute filesystem path for a note.
+
+    Used by the frontend's *Edit in Vim* affordance so a user on the same
+    host can run `vim "<abs path>"` directly in their terminal. The file
+    watcher reindexes on save, so changes round-trip into the UI without
+    further action.
+    """
+    if ".." in path or path.startswith("/"):
+        raise HTTPException(400, "invalid path")
+    project = _project_for_path(path)
+    if _user_role_for_project(s, user, project) == "none":
+        raise HTTPException(403, "no access")
+    full = settings.notes_dir / path
+    if not full.exists():
+        raise HTTPException(404, "note not found")
+    return {
+        "path": path,
+        "abs_path": str(full.resolve()),
+        "vim_cmd": f'vim "{full.resolve()}"',
+    }
+
+
 @router.get("/notes/{note_id}")
 def get_note(note_id: int, s: Session = Depends(get_session)) -> dict[str, Any]:
     n = s.get(Note, note_id)
@@ -519,7 +547,8 @@ def list_project_notes(
     if not pdir.is_dir():
         raise HTTPException(404, "project not found")
     out: list[dict[str, Any]] = []
-    for p in sorted(pdir.rglob("*.md")):
+    files = sorted(pdir.rglob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for p in files:
         rel = str(p.relative_to(settings.notes_dir))
         note = s.exec(select(Note).where(Note.path == rel)).first()
         if note is None:
@@ -557,7 +586,7 @@ def tree(
         if role == "none":
             continue
         notes = []
-        for p in sorted(child.rglob("*.md")):
+        for p in sorted(child.rglob("*.md"), key=lambda x: x.stat().st_mtime, reverse=True):
             rel = str(p.relative_to(nd))
             note = s.exec(select(Note).where(Note.path == rel)).first()
             if note is None:
@@ -575,7 +604,7 @@ def tree(
         out.append({"project": child.name, "role": role, "notes": notes})
     # Root-level loose .md files (no project)
     loose = []
-    for p in sorted(nd.glob("*.md")):
+    for p in sorted(nd.glob("*.md"), key=lambda x: x.stat().st_mtime, reverse=True):
         rel = str(p.relative_to(nd))
         note = s.exec(select(Note).where(Note.path == rel)).first()
         if note is None:
@@ -701,6 +730,7 @@ def patch_task(
 
 
 # ---------- users / search -------------------------------------------------
+@router.get("/users")
 def list_users(s: Session = Depends(get_session)) -> list[str]:
     return [u.name for u in s.exec(select(User).order_by(User.name)).all()]
 
