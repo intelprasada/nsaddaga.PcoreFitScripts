@@ -132,3 +132,29 @@ def test_parent_done_stays_when_all_children_done():
     )
     tasks = {t["title"]: t for t in parse(md)["tasks"]}
     assert tasks["parent"]["status"] == "done"
+
+
+def test_sibling_context_lines_at_same_indent_replace_each_other():
+    """`#project gfc` then `#project jnc` at the same indent must NOT union;
+    each scopes to the subsequent indented block until the next sibling
+    overrides it. Tasks under @namratha (a new top-level @owner) must not
+    inherit either project."""
+    md = (
+        "@aboli\n"
+        "\t#project gfc\n"
+        "\t\t!task A\n"
+        "\t#project jnc\n"
+        "\t\t!task B\n"
+        "@namratha\n"
+        "\t!task C\n"
+    )
+    out = parse(md)
+    by_title = {t["title"]: t for t in out["tasks"]}
+    assert by_title["A"]["attrs"].get("project") == ["gfc"]
+    assert by_title["A"]["attrs"].get("owner") == ["aboli"]
+    assert by_title["B"]["attrs"].get("project") == ["jnc"]
+    assert by_title["B"]["attrs"].get("owner") == ["aboli"]
+    # @namratha at indent 0 must cancel both deeper #project frames
+    # AND replace the prior @aboli frame at the same indent.
+    assert "project" not in by_title["C"]["attrs"]
+    assert by_title["C"]["attrs"].get("owner") == ["namratha"]

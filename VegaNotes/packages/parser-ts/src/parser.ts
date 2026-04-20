@@ -203,7 +203,8 @@ export function parse(md: string): ParseResult {
   const stack: ParsedTask[] = [];
   let current: ParsedTask | null = null;
   const taken: Record<string, number> = {};
-  const ctxStack: Record<string, string[]>[] = [];
+  // Each frame is [indent, attrs] so we can scope contexts hierarchically.
+  const ctxStack: Array<[number, Record<string, string[]>]> = [];
 
   const slugCollide = (slug: string): string => {
     if (!(slug in taken)) { taken[slug] = 1; return slug; }
@@ -212,13 +213,33 @@ export function parse(md: string): ParseResult {
 
   const gatherInherited = (): Record<string, string[]> => {
     const merged: Record<string, string[]> = {};
-    for (const attrs of ctxStack) {
+    for (const [, attrs] of ctxStack) {
       for (const [k, vs] of Object.entries(attrs)) {
         const bucket = merged[k] || (merged[k] = []);
         for (const v of vs) if (!bucket.includes(v)) bucket.push(v);
       }
     }
     return merged;
+  };
+
+  const pruneForTask = (lineIndent: number) => {
+    // Drop any frame deeper than the task — those belong to a sibling.
+    for (let i = ctxStack.length - 1; i >= 0; i--) {
+      if (ctxStack[i][0] > lineIndent) ctxStack.splice(i, 1);
+    }
+  };
+
+  const pruneForCtx = (lineIndent: number, newKeys: Set<string>) => {
+    // Pop deeper frames; pop same-indent frames whose keys overlap.
+    for (let i = ctxStack.length - 1; i >= 0; i--) {
+      const [k, attrs] = ctxStack[i];
+      if (k > lineIndent) { ctxStack.splice(i, 1); continue; }
+      if (k === lineIndent) {
+        for (const key of Object.keys(attrs)) {
+          if (newKeys.has(key)) { ctxStack.splice(i, 1); break; }
+        }
+      }
+    }
   };
 
   const lines = md.split("\n");
@@ -231,6 +252,7 @@ export function parse(md: string): ParseResult {
 
     if (decl) {
       const indent = indentLevel(raw);
+      pruneForTask(indent);
       const kind = decl.name === "ar" ? "ar" : "task";
       const task: ParsedTask = {
         slug: slugCollide(slugify(decl.value)),
@@ -259,9 +281,11 @@ export function parse(md: string): ParseResult {
           // sibling tasks declared later at a shallower indent.
           for (const t of attrs) attachAttr(current, t);
         } else {
+          const newKeys = new Set(attrs.map((t) => t.name));
+          pruneForCtx(lineIndent, newKeys);
           const ctxAttrs: Record<string, string[]> = {};
           for (const t of attrs) (ctxAttrs[t.name] || (ctxAttrs[t.name] = [])).push(t.value);
-          ctxStack.push(ctxAttrs);
+          ctxStack.push([lineIndent, ctxAttrs]);
         }
       } else if (current) {
         for (const t of attrs) attachAttr(current, t);
