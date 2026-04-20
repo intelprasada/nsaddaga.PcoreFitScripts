@@ -149,6 +149,30 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
 
   const onSave = () => { if (selectedPath && entry) flushSave(selectedPath, entry.body); };
 
+  const onRefresh = async () => {
+    if (!selectedPath) return;
+    const meta = notes.find((n) => n.path === selectedPath);
+    if (!meta) return;
+    if (dirty && !window.confirm(
+      `${selectedPath} has unsaved changes. Reload from disk and discard them?`)) {
+      return;
+    }
+    setStatus("saving");
+    try {
+      const n = await api.note(meta.id);
+      setDraft((prev) => ({
+        ...prev,
+        [selectedPath]: { body: n.body_md, saved: n.body_md, savedAt: Date.now() },
+      }));
+      qc.invalidateQueries({ queryKey: ["notes"] });
+      qc.invalidateQueries({ queryKey: ["tree"] });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      setStatus("saved");
+    } catch {
+      setStatus("error");
+    }
+  };
+
   const statusText = !selectedPath
     ? ""
     : status === "saving" ? "saving…"
@@ -172,6 +196,11 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
       <div className="flex gap-2 flex-wrap">
         <button className="rounded bg-sky-600 text-white px-3 py-1 text-sm disabled:opacity-50"
           disabled={!selectedPath || !dirty} onClick={onSave}>Save</button>
+        <button className="rounded border px-3 py-1 text-sm disabled:opacity-50"
+          disabled={!selectedPath} onClick={onRefresh}
+          title="Reload this note from disk (e.g. after editing in Vim or rolling to next week)">
+          ↻ Refresh
+        </button>
         <NewNoteButton selectedPath={selectedPath} onCreated={setSelectedPath} />
         <NextWeekButton selectedPath={selectedPath} entry={entry}
           flushSave={flushSave} onCreated={setSelectedPath} />
