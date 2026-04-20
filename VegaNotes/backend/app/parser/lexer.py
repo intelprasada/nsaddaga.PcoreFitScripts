@@ -121,8 +121,10 @@ def lex(line: str) -> List[Union[TextChunk, Token]]:
                 i = end
                 last = end
                 continue
-            value, end = _read_value(line, m.end())
+            value, end = _read_value(line, m.end(), until_hash=(name == "status"))
             raw = line[start:end]
+            if name == "status":
+                value = value.strip()
             out.append(Token(kind="attr", name=name, value=value, raw=raw, col=start))
             i = end
             last = end

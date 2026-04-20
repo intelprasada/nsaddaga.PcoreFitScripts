@@ -71,3 +71,64 @@ def test_context_line_with_multiple_tokens():
     a = out["tasks"][0]
     assert a["attrs"]["owner"] == ["nancy"]
     assert a["attrs"]["project"] == ["foo"]
+
+
+def test_indented_attr_only_line_attaches_to_current_task_only():
+    """Regression: a #eta line indented under a task must NOT propagate to
+    sibling tasks declared later at a shallower indent."""
+    md = (
+        "@aboli\n"
+        "\t!task First\n"
+        "\t\t#eta 2026-04-17\n"
+        "\t!task Second\n"
+        "\t!task Third\n"
+    )
+    out = parse(md)
+    first, second, third = out["tasks"]
+    assert first["attrs"].get("eta") == "2026-04-17"
+    assert "eta" not in second["attrs"]
+    assert "eta" not in third["attrs"]
+    # Owner from top-level @aboli still inherits to all three.
+    for t in (first, second, third):
+        assert t["attrs"].get("owner") == ["aboli"]
+
+
+def test_parent_eta_rolls_up_to_max_child_eta():
+    from app.parser import parse
+    md = (
+        "!task parent #eta 2026-04-22\n"
+        "\t!AR a #eta 2026-04-25\n"
+        "\t!AR b #eta 2026-04-23\n"
+    )
+    tasks = {t["title"]: t for t in parse(md)["tasks"]}
+    assert tasks["parent"]["attrs_norm"]["eta"] == "2026-04-25"
+
+
+def test_parent_eta_stays_when_already_latest():
+    from app.parser import parse
+    md = (
+        "!task parent #eta 2026-05-01\n"
+        "\t!AR a #eta 2026-04-25\n"
+    )
+    tasks = {t["title"]: t for t in parse(md)["tasks"]}
+    assert tasks["parent"]["attrs_norm"]["eta"] == "2026-05-01"
+
+
+def test_parent_done_downgrades_when_child_open():
+    from app.parser import parse
+    md = (
+        "!task parent #status done\n"
+        "\t!AR a #status todo\n"
+    )
+    tasks = {t["title"]: t for t in parse(md)["tasks"]}
+    assert tasks["parent"]["status"] == "in-progress"
+
+
+def test_parent_done_stays_when_all_children_done():
+    from app.parser import parse
+    md = (
+        "!task parent #status done\n"
+        "\t!AR a #status done\n"
+    )
+    tasks = {t["title"]: t for t in parse(md)["tasks"]}
+    assert tasks["parent"]["status"] == "done"

@@ -15,6 +15,36 @@ from typing import Callable, Dict
 from .time_parse import parse_eta, parse_duration, parse_priority_rank
 
 
+# Canonical task statuses. Aliases (case-insensitive) are mapped to one of
+# these values by :func:`normalize_status`. Anything else is preserved.
+_STATUS_ALIASES: Dict[str, str] = {
+    "in progress": "in-progress",
+    "in_progress": "in-progress",
+    "inprogress": "in-progress",
+    "wip": "in-progress",
+    "doing": "in-progress",
+    "working": "in-progress",
+    "complete": "done",
+    "completed": "done",
+    "finished": "done",
+    "closed": "done",
+    "open": "todo",
+    "pending": "todo",
+    "to-do": "todo",
+    "todo": "todo",
+    "block": "blocked",
+    "blocked": "blocked",
+    "stuck": "blocked",
+}
+
+
+def normalize_status(value: str) -> str:
+    if not value:
+        return "todo"
+    v = value.strip().lower()
+    return _STATUS_ALIASES.get(v, v)
+
+
 @dataclass(frozen=True)
 class TokenSpec:
     name: str
@@ -29,7 +59,7 @@ REGISTRY: Dict[str, TokenSpec] = {
     "priority": TokenSpec("priority", normalize=parse_priority_rank),
     "project":  TokenSpec("project",  multi=True),
     "owner":    TokenSpec("owner",    multi=True),
-    "status":   TokenSpec("status"),
+    "status":   TokenSpec("status",   normalize=normalize_status),
     "estimate": TokenSpec("estimate", normalize=parse_duration),
     "feature":  TokenSpec("feature",  multi=True),
     "link":     TokenSpec("link",     multi=True),

@@ -15,7 +15,7 @@ from ..auth import require_user
 from ..config import settings
 from ..db import get_session
 from ..indexer import reindex_file, remove_path
-from ..markdown_ops import update_task_status
+from ..markdown_ops import roll_to_next_week, update_task_status
 from ..models import (
     Feature, Link, Note, Project, ProjectMember, Task, TaskAttr, TaskFeature,
     TaskOwner, TaskProject, User,
@@ -168,6 +168,49 @@ def upsert_note(
     return {"id": note.id, "path": note.path}
 
 
+class RollNextWeekIn(BaseModel):
+    path: str
+    overwrite: bool = False
+
+
+@router.post("/notes/next-week")
+def roll_note_next_week(
+    body: RollNextWeekIn,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    """Create a follow-up note for the next Intel work week.
+
+    Reads the source note, drops every `!task`/`!ar` line whose normalized
+    status is `done` (and any nested sub-items), bumps every `wwN[.x]` token
+    matching the source filename's WW number by +1, and writes the result to
+    a sibling file with the bumped basename. Returns the new path.
+    """
+    src_rel = body.path
+    if ".." in src_rel or src_rel.startswith("/"):
+        raise HTTPException(400, "invalid path")
+    project = _project_for_path(src_rel)
+    role = _user_role_for_project(s, user, project)
+    if role == "none" or (role == "member" and project is not None):
+        raise HTTPException(403, "manager role required to create notes")
+    src_full = settings.notes_dir / src_rel
+    if not src_full.exists():
+        raise HTTPException(404, "source note not found")
+    src_md = src_full.read_text(encoding="utf-8")
+    try:
+        new_md, new_base, cur, nxt = roll_to_next_week(src_md, src_full.name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    dst_full = src_full.parent / new_base
+    dst_rel = str(dst_full.relative_to(settings.notes_dir))
+    if dst_full.exists() and not body.overwrite:
+        raise HTTPException(409, f"target note already exists: {dst_rel}")
+    dst_full.parent.mkdir(parents=True, exist_ok=True)
+    dst_full.write_text(new_md, encoding="utf-8")
+    note = reindex_file(dst_full, s)
+    return {"id": note.id, "path": note.path, "from_ww": cur, "to_ww": nxt}
+
+
 @router.delete("/notes/{note_id}")
 def delete_note(
     note_id: int,
@@ -300,10 +343,24 @@ def agenda(
     s: Session = Depends(get_session),
     owner: Optional[str] = None,
     days: int = Query(default=None),
+    start: Optional[str] = Query(default=None),
+    end: Optional[str] = Query(default=None),
 ) -> dict[str, Any]:
     days = days or settings.agenda_window_days
-    today = date.today()
-    end = today + timedelta(days=days)
+    if start:
+        try:
+            today = date.fromisoformat(start)
+        except ValueError:
+            raise HTTPException(400, "invalid start date")
+    else:
+        today = date.today()
+    if end:
+        try:
+            end_d = date.fromisoformat(end)
+        except ValueError:
+            raise HTTPException(400, "invalid end date")
+    else:
+        end_d = today + timedelta(days=days)
 
     sql = """
     SELECT t.id, ea.value_norm AS eta,
@@ -312,7 +369,7 @@ def agenda(
     JOIN taskattr ea ON ea.task_id = t.id AND ea.key='eta'
     LEFT JOIN taskattr pa ON pa.task_id = t.id AND pa.key='priority'
     """
-    params: dict[str, Any] = {"start": today.isoformat(), "end": end.isoformat()}
+    params: dict[str, Any] = {"start": today.isoformat(), "end": end_d.isoformat()}
     if owner:
         sql += (
             " JOIN taskowner o ON o.task_id = t.id "
@@ -328,7 +385,7 @@ def agenda(
     grouped: dict[str, list[dict]] = {}
     for tid, eta, _pri in rows:
         grouped.setdefault(eta, []).append(_task_to_dict(s, s.get(Task, tid)))
-    return {"window": {"start": today.isoformat(), "end": end.isoformat(), "days": days}, "by_day": grouped}
+    return {"window": {"start": today.isoformat(), "end": end_d.isoformat(), "days": (end_d - today).days}, "by_day": grouped}
 
 
 # ---------- features (cross-user pull) -------------------------------------

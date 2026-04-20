@@ -173,6 +173,8 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
         <button className="rounded bg-sky-600 text-white px-3 py-1 text-sm disabled:opacity-50"
           disabled={!selectedPath || !dirty} onClick={onSave}>Save</button>
         <NewNoteButton selectedPath={selectedPath} onCreated={setSelectedPath} />
+        <NextWeekButton selectedPath={selectedPath} entry={entry}
+          flushSave={flushSave} onCreated={setSelectedPath} />
       </div>
     </div>
   );
@@ -206,6 +208,65 @@ function NewNoteButton({ selectedPath, onCreated }: {
         onChange={(e) => setName(e.target.value)} />
       <button className="rounded bg-sky-600 text-white px-2 text-sm">create</button>
     </form>
+  );
+}
+
+function NextWeekButton({ selectedPath, entry, flushSave, onCreated }: {
+  selectedPath: string;
+  entry: { body: string; saved: string; savedAt: number } | undefined;
+  flushSave: (path: string, text: string) => Promise<void>;
+  onCreated: (p: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const enabled = !!selectedPath && /(?:^|[^a-z])ww\d+/i.test(selectedPath);
+  const onClick = async () => {
+    if (!selectedPath) return;
+    setErr(null);
+    setBusy(true);
+    try {
+      // Flush any unsaved edits first so the roll sees the latest body.
+      if (entry && entry.body !== entry.saved) {
+        await flushSave(selectedPath, entry.body);
+      }
+      let res;
+      try {
+        res = await api.rollNoteNextWeek(selectedPath, false);
+      } catch (e: any) {
+        const msg = String(e?.message ?? e);
+        if (msg.includes("409")) {
+          if (!confirm("Next-week note already exists. Overwrite?")) {
+            setBusy(false); return;
+          }
+          res = await api.rollNoteNextWeek(selectedPath, true);
+        } else if (msg.includes("400")) {
+          setErr("Filename must contain a 'wwN' token (e.g. 'ww16').");
+          setBusy(false); return;
+        } else {
+          throw e;
+        }
+      }
+      qc.invalidateQueries({ queryKey: ["notes"] });
+      qc.invalidateQueries({ queryKey: ["tree"] });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      onCreated(res!.path);
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex items-center gap-2">
+      <button onClick={onClick} disabled={!enabled || busy}
+        title={enabled
+          ? "Create next-week copy of this note (drops done items, bumps wwN→wwN+1)"
+          : "Select a note whose filename contains 'wwN' (e.g. ww16)"}
+        className="rounded border border-emerald-600 text-emerald-700 px-3 py-1 text-sm disabled:opacity-40 hover:bg-emerald-50">
+        {busy ? "rolling…" : "→ Next Week"}
+      </button>
+      {err && <span className="text-xs text-rose-600">{err}</span>}
+    </div>
   );
 }
 

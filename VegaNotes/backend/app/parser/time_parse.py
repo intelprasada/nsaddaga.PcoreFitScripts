@@ -32,6 +32,24 @@ def _intel_ww1_start(year: int) -> date:
     return first_sat - timedelta(days=6)  # the Sunday before
 
 
+def format_intel_ww(d: date) -> str:
+    """Inverse of :func:`parse_intel_ww` — return ``"WWxx.y"`` (with year prefix
+    only when the date is not in the current calendar year)."""
+    # Find which Intel year/week this date belongs to. WW1 of year Y starts on
+    # the Sunday before the first Saturday of Y. If d is before that Sunday, it
+    # actually belongs to year Y-1's last work week (WW52/53).
+    year = d.year
+    start = _intel_ww1_start(year)
+    if d < start:
+        year -= 1
+        start = _intel_ww1_start(year)
+    week = ((d - start).days // 7) + 1
+    day = (d - (start + timedelta(days=(week - 1) * 7))).days  # 0..6
+    today_year = _today().year
+    prefix = f"{year}" if year != today_year else ""
+    return f"{prefix}WW{week}.{day}"
+
+
 def parse_intel_ww(value: str, *, today: Optional[date] = None) -> Optional[str]:
     """Parse Intel work-week notation into an ISO date.
 
