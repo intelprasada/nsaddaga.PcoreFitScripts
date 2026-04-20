@@ -135,6 +135,45 @@ def reindex_file(path: Path, session: Session) -> Note:
         for ref in pt["refs"]:
             session.add(Link(src_task_id=tid, dst_slug=ref["dst_slug"], kind=ref["kind"]))
 
+    # Apply agenda reference-row write-through: a `#task <ID>` line in this
+    # note may carry override attrs (e.g. `#status done`, `#eta ww18`) that
+    # update the original task wherever it was declared.
+    for rr in parsed.get("ref_rows", []):
+        ref_id = rr.get("ref_id")
+        overrides = rr.get("attrs") or {}
+        if not ref_id or not overrides:
+            continue
+        # Find the task with attrs.id == ref_id.
+        sql = text(
+            "SELECT t.id FROM task t JOIN taskattr a ON a.task_id = t.id "
+            "WHERE a.key = 'id' AND a.value = :rid LIMIT 1"
+        ).bindparams(rid=ref_id)
+        row = session.exec(sql).first()
+        if not row:
+            continue
+        # session.exec().first() returns a Row when running raw SQL.
+        try:
+            tgt_id = int(row[0])
+        except (TypeError, ValueError):
+            continue
+        tgt = session.get(Task, tgt_id)
+        if tgt is None:
+            continue
+        for key, val in overrides.items():
+            if key == "status":
+                from ..parser.tokens import normalize_status
+                tgt.status = normalize_status(str(val))
+            # Replace single-valued attrs; append multi-valued.
+            if isinstance(val, list):
+                for v in val:
+                    session.add(TaskAttr(task_id=tgt_id, key=key, value=str(v), value_norm=str(v).lower()))
+            else:
+                session.exec(
+                    text("DELETE FROM taskattr WHERE task_id = :tid AND key = :k")
+                    .bindparams(tid=tgt_id, k=key)
+                )
+                session.add(TaskAttr(task_id=tgt_id, key=key, value=str(val), value_norm=str(val).lower()))
+
     return note
 
 

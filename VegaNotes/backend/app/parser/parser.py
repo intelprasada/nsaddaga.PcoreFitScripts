@@ -120,6 +120,23 @@ def _is_context_only_line(items: list) -> bool:
     return True
 
 
+def _is_ref_row(items: list) -> Token | None:
+    """If the line's first non-whitespace/bullet item is a `#task` token,
+    return that token (it's an agenda reference row). Otherwise None.
+    """
+    for x in items:
+        if isinstance(x, TextChunk):
+            t = _BULLET_STRIP.sub("", x.text).strip()
+            if t:
+                return None
+            continue
+        if isinstance(x, Token):
+            if x.kind == "attr" and x.name == "task":
+                return x
+            return None
+    return None
+
+
 def _merge_inherited(task: ParsedTask, inherited: Dict[str, list]) -> None:
     for key, values in inherited.items():
         spec = REGISTRY.get(key)
@@ -166,6 +183,10 @@ def parse(md: str) -> Dict[str, Any]:
     stack: List[ParsedTask] = []
     current: Optional[ParsedTask] = None
     taken_slugs: Dict[str, int] = {}
+    # Reference rows: lines that point to an existing task by `#task <ID>`
+    # (no `!`-prefix declaration). Each row may carry override attrs that
+    # the indexer applies to the referenced task.
+    ref_rows: List[Dict[str, Any]] = []
     # Each frame: (indent, {key: [values]}). Frames are scoped by indent so
     # siblings replace and shallower lines cancel deeper ones.
     ctx_stack: List[tuple[int, Dict[str, list]]] = []
@@ -236,6 +257,30 @@ def parse(md: str) -> Dict[str, Any]:
             tasks.append(task)
             current = task
         elif attr_toks:
+            # Agenda reference row: line whose leading token (after any
+            # leading whitespace/bullet) is `#task <ID>`. The ID points to
+            # an existing task declared elsewhere with `!task ... #id <ID>`.
+            # Other attrs on the same line are write-through overrides.
+            task_ref = _is_ref_row(items)
+            if task_ref is not None:
+                overrides: Dict[str, Any] = {}
+                for t in attr_toks:
+                    if t is task_ref:
+                        continue
+                    spec = REGISTRY.get(t.name)
+                    if spec is None:
+                        continue
+                    if spec.multi:
+                        overrides.setdefault(t.name, []).append(t.value)
+                    else:
+                        overrides[t.name] = t.value
+                ref_rows.append({
+                    "ref_id": task_ref.value,
+                    "line": line_no,
+                    "indent": line_indent,
+                    "attrs": overrides,
+                })
+                continue
             if _is_context_only_line(items):
                 # Hierarchical attachment: if this attr-only line is indented
                 # *deeper* than the current task, treat it as a continuation
@@ -267,6 +312,7 @@ def parse(md: str) -> Dict[str, Any]:
     return {
         "tasks": [t.to_dict() for t in tasks],
         "refs": refs_out,
+        "ref_rows": ref_rows,
     }
 
 
