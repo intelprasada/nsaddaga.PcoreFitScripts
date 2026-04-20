@@ -1,43 +1,49 @@
 {
+  "ref_rows": [],
+  "refs": [
+    {
+      "dst_slug": "wire-up-sso",
+      "kind": "task",
+      "src_slug": "migrate-index"
+    },
+    {
+      "dst_slug": "rfc-2026-04",
+      "kind": "link",
+      "src_slug": "migrate-index"
+    }
+  ],
   "tasks": [
     {
-      "slug": "wire-up-sso",
-      "title": "Wire up SSO",
-      "line": 2,
-      "indent": 0,
-      "kind": "task",
-      "parent_slug": null,
-      "status": "todo",
       "attrs": {
-        "project": [
-          "veganotes"
-        ],
+        "eta": "2026-04-24",
         "owner": [
           "alice"
         ],
-        "eta": "2026-04-24",
-        "priority": "P1"
+        "priority": "P1",
+        "project": [
+          "veganotes"
+        ]
       },
       "attrs_norm": {
         "eta": "2026-04-24",
         "priority": 1
       },
-      "refs": []
+      "indent": 0,
+      "kind": "task",
+      "line": 2,
+      "parent_slug": null,
+      "refs": [],
+      "slug": "wire-up-sso",
+      "status": "todo",
+      "title": "Wire up SSO"
     },
     {
-      "slug": "add-login-screen",
-      "title": "Add login screen",
-      "line": 3,
-      "indent": 1,
-      "kind": "task",
-      "parent_slug": "wire-up-sso",
-      "status": "todo",
       "attrs": {
+        "eta": "2026-04-23",
         "owner": [
           "bob",
           "alice"
         ],
-        "eta": "2026-04-23",
         "project": [
           "veganotes"
         ]
@@ -45,40 +51,40 @@
       "attrs_norm": {
         "eta": "2026-04-23"
       },
-      "refs": []
-    },
-    {
-      "slug": "add-oauth-callback",
-      "title": "Add OAuth callback",
-      "line": 4,
       "indent": 1,
       "kind": "task",
+      "line": 3,
       "parent_slug": "wire-up-sso",
-      "status": "in-progress",
+      "refs": [],
+      "slug": "add-login-screen",
+      "status": "todo",
+      "title": "Add login screen"
+    },
+    {
       "attrs": {
+        "eta": "2026-04-24",
         "owner": [
           "alice"
         ],
-        "eta": "2026-04-24",
-        "status": "in-progress",
         "project": [
           "veganotes"
-        ]
+        ],
+        "status": "in-progress"
       },
       "attrs_norm": {
         "eta": "2026-04-24",
         "status": "in-progress"
       },
-      "refs": []
+      "indent": 1,
+      "kind": "task",
+      "line": 4,
+      "parent_slug": "wire-up-sso",
+      "refs": [],
+      "slug": "add-oauth-callback",
+      "status": "in-progress",
+      "title": "Add OAuth callback"
     },
     {
-      "slug": "migrate-index",
-      "title": "Migrate index",
-      "line": 5,
-      "indent": 0,
-      "kind": "task",
-      "parent_slug": null,
-      "status": "done",
       "attrs": {
         "feature": [
           "search-rewrite"
@@ -91,28 +97,23 @@
       "attrs_norm": {
         "status": "done"
       },
+      "indent": 0,
+      "kind": "task",
+      "line": 5,
+      "parent_slug": null,
       "refs": [
         {
-          "kind": "task",
-          "dst_slug": "wire-up-sso"
+          "dst_slug": "wire-up-sso",
+          "kind": "task"
         },
         {
-          "kind": "link",
-          "dst_slug": "rfc-2026-04"
+          "dst_slug": "rfc-2026-04",
+          "kind": "link"
         }
-      ]
-    }
-  ],
-  "refs": [
-    {
-      "src_slug": "migrate-index",
-      "dst_slug": "wire-up-sso",
-      "kind": "task"
-    },
-    {
-      "src_slug": "migrate-index",
-      "dst_slug": "rfc-2026-04",
-      "kind": "link"
+      ],
+      "slug": "migrate-index",
+      "status": "done",
+      "title": "Migrate index"
     }
   ]
 }

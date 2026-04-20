@@ -115,12 +115,33 @@ export interface ParsedTask {
   refs: { kind: string; dst_slug: string }[];
 }
 
+export interface RefRow {
+  ref_id: string;
+  line: number;
+  indent: number;
+  attrs: Record<string, string | string[]>;
+}
+
 export interface ParseResult {
   tasks: ParsedTask[];
   refs: { src_slug: string; dst_slug: string; kind: string }[];
+  ref_rows: RefRow[];
 }
 
 const BULLET_STRIP = /^\s*([-*+]\s+|\d+[.)]\s+)?/;
+
+function isRefRow(items: Item[]): Token | null {
+  for (const x of items) {
+    if (x.kind === "text") {
+      const t = x.text.replace(BULLET_STRIP, "").trim();
+      if (t) return null;
+      continue;
+    }
+    if (x.kind === "attr" && x.name === "task") return x as Token;
+    return null;
+  }
+  return null;
+}
 
 function isContextOnlyLine(items: Item[]): boolean {
   for (const x of items) {
@@ -201,6 +222,7 @@ function inheritFromParent(task: ParsedTask, parent: ParsedTask): void {
 export function parse(md: string): ParseResult {
   const tasks: ParsedTask[] = [];
   const stack: ParsedTask[] = [];
+  const refRows: RefRow[] = [];
   let current: ParsedTask | null = null;
   const taken: Record<string, number> = {};
   // Each frame is [indent, attrs] so we can scope contexts hierarchically.
@@ -273,8 +295,22 @@ export function parse(md: string): ParseResult {
       if (stack.length) inheritFromParent(task, stack[stack.length - 1]);
       stack.push(task); tasks.push(task); current = task;
     } else if (attrs.length) {
+      const lineIndent = indentLevel(raw);
+      // Agenda ref row: leading token is `#task <ID>`.
+      const taskRef = isRefRow(items);
+      if (taskRef) {
+        const overrides: Record<string, string | string[]> = {};
+        for (const t of attrs) {
+          if (t === taskRef) continue;
+          const prev = overrides[t.name];
+          if (prev === undefined) overrides[t.name] = t.value;
+          else if (Array.isArray(prev)) prev.push(t.value);
+          else overrides[t.name] = [prev, t.value];
+        }
+        refRows.push({ ref_id: taskRef.value, line: lineNo, indent: lineIndent, attrs: overrides });
+        continue;
+      }
       if (isContextOnlyLine(items)) {
-        const lineIndent = indentLevel(raw);
         if (current && lineIndent > current.indent) {
           // Continuation of the current task — attach instead of pushing
           // to the global context stack so the attrs don't leak onto
@@ -297,7 +333,7 @@ export function parse(md: string): ParseResult {
     t.refs.map((r) => ({ src_slug: t.slug, dst_slug: r.dst_slug, kind: r.kind })),
   );
   rollupToParents(tasks);
-  return { tasks, refs };
+  return { tasks, refs, ref_rows: refRows };
 }
 
 function rollupToParents(tasks: ParsedTask[]): void {

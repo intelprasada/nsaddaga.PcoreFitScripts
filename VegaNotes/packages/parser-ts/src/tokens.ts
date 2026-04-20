@@ -39,6 +39,7 @@ export function normalizeStatus(value: string): string {
 
 export const REGISTRY: Record<string, TokenSpec> = {
   task:     { name: "task",     multi: true },
+  id:       { name: "id",       multi: false },
   eta:      { name: "eta",      multi: false, normalize: (v) => parseEta(v) },
   priority: { name: "priority", multi: false, normalize: (v) => parsePriorityRank(v) },
   project:  { name: "project",  multi: true },

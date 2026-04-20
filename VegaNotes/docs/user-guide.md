@@ -210,6 +210,43 @@ Renders:
 
 Done tasks are excluded automatically.
 
+### Roll to next week (`Next Week Agenda` button)
+
+Open any note whose filename contains an Intel work-week tag (e.g.
+`FIT weekly ww16.md`) and click **Next Week Agenda** in the editor toolbar.
+VegaNotes will:
+
+1. **Inject stable `#id` tokens** into every `!task` / `!AR` line in the
+   *current* file that doesn't already have one. The IDs use the format
+   `T-XXXXXX` (six Crockford-base32 chars). The source file is rewritten in
+   place — keep the IDs as-is.
+2. **Strip every done item** (a task or AR whose normalized `#status` is
+   `done`) including its nested children.
+3. **Bump `wwNN[.D]` references** in the title and prose by +1 — but **not**
+   inside `#eta` values. ETAs intentionally survive so you can review each
+   surviving item: either mark it done now or set a fresh future ETA.
+4. **Write the new file** (`FIT weekly ww17.md`) where every surviving
+   `!task` / `!AR` becomes an *agenda reference row*:
+
+   ```md
+   - #task T-A3F9K2 Wire up SSO #status in-progress #eta ww18
+   ```
+
+The reference row has no `!task`, so the indexer does **not** create a
+duplicate Task. Instead, the override attrs (`#status`, `#eta`, …) are
+applied write-through to the canonical task that lives in ww16.
+
+This means:
+- Marking `T-A3F9K2` done in `ww17` updates the same task. Re-rolling
+  `ww17 → ww18` will silently drop it — no orphans.
+- The original `ww16` note remains the system-of-record for the task title,
+  owners, and history.
+- Hierarchies are preserved: a child `!AR` becomes a child `#task` reference
+  at the same indent level.
+
+Tip: the new note is created **above** the source in the navigation tree so
+the latest week is always on top.
+
 ---
 
 ## 7. Pull tasks by feature (cross-team view)
@@ -233,13 +270,19 @@ can render a "who/what/where" panel from a single call.
 
 ## 8. Bidirectional links
 
-Refer to other tasks with `#task <slug>` or arbitrary anchors with
+Refer to other tasks with `#task <slug-or-id>` or arbitrary anchors with
 `#link <slug>`:
 
 ```md
 - !task Migrate index #feature search-rewrite
   Blocked by #task wire-up-sso, tracked in #link rfc-2026-04
 ```
+
+When `#task` appears **mid-prose** (as above) it is a directed link to the
+target. When it is the **leading token** of a line, it is an *agenda
+reference row* (see §6 — Roll to next week) and the parser does not create a
+new task. Both forms accept either a slug (`wire-up-sso`) or a stable ID
+(`T-A3F9K2`).
 
 The backend stores the edge once but serves it both ways via the
 `links_bidir` SQL view. Hit `GET /api/cards/{task_id}/links` and you get

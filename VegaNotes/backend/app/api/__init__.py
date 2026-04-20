@@ -226,13 +226,17 @@ def roll_note_next_week(
         raise HTTPException(404, "source note not found")
     src_md = src_full.read_text(encoding="utf-8")
     try:
-        new_md, new_base, cur, nxt = roll_to_next_week(src_md, src_full.name)
+        new_md, new_base, cur, nxt, patched_src = roll_to_next_week(src_md, src_full.name)
     except ValueError as e:
         raise HTTPException(400, str(e))
     dst_full = src_full.parent / new_base
     dst_rel = str(dst_full.relative_to(settings.notes_dir))
     if dst_full.exists() and not body.overwrite:
         raise HTTPException(409, f"target note already exists: {dst_rel}")
+    # Write the source back if we injected new IDs (so they persist).
+    if patched_src != src_md:
+        src_full.write_text(patched_src, encoding="utf-8")
+        reindex_file(src_full, s)
     dst_full.parent.mkdir(parents=True, exist_ok=True)
     dst_full.write_text(new_md, encoding="utf-8")
     note = reindex_file(dst_full, s)

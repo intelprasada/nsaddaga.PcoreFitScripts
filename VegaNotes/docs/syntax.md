@@ -11,8 +11,10 @@ back into the file.
 | Token             | Meaning                                                   | Example                          |
 | ----------------- | --------------------------------------------------------- | -------------------------------- |
 | `!task <title>`   | Declares a task. Title runs until the next known `#token` | `- !task Wire up auth #eta +2d`  |
-| `#task <slug>`    | Reference to an existing task → directed link             | `Blocked by #task auth-init`     |
-| `#eta <when>`     | Due date (ISO, `+2d`, `tomorrow`, `next fri`)             | `#eta 2026-05-01`                |
+| `!AR <title>`     | Action-required item — same shape as `!task`, kind `ar`   | `- !AR follow up with vendor`    |
+| `#task <ID>`      | **Reference** to an existing task by stable ID. As the **leading** token on a line it is an *agenda reference row* (no new task created); mid-prose it is a directed link | `- #task T-A3F9K2 Wire up SSO #status done` |
+| `#id <ID>`        | Stable identifier auto-injected by the agenda roll. Format `T-` + 6 Crockford-base32 chars. Once present it is preserved across rolls and edits. | `!task Wire up SSO #id T-A3F9K2` |
+| `#eta <when>`     | Due date (ISO, `+2d`, `tomorrow`, `next fri`, `wwNN[.D]`) | `#eta 2026-05-01`                |
 | `#priority <val>` | Priority in user vocabulary (P0..P3, high/med/low)        | `#priority P1`                   |
 | `#project <name>` | Project bucket                                            | `#project veganotes`             |
 | `#owner <name>`   | Owner — repeat for multiple                               | `#owner alice #owner bob`        |
@@ -32,6 +34,15 @@ back into the file.
    (round-tripped on re-serialize).
 5. `!task` titles are read until the next *known* `#token`, so you can write
    natural English titles without escaping.
+6. **Reference rows**: a line whose first non-whitespace/bullet token is
+   `#task <ID>` does **not** create a task. The line points at the task that
+   carries `#id <ID>` somewhere else, and any other tokens on the line
+   (e.g. `#status done`, `#eta ww18`) are *write-through overrides* — the
+   indexer applies them to the canonical task. The freeform text after the ID
+   is a cached title (informational only).
+7. `#id` is single-valued. The agenda-roll button injects one into every
+   `!task`/`!AR` that lacks it; keep the auto-generated value as-is so future
+   rolls can resolve references.
 
 ## Worked example
 

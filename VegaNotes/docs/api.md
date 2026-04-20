@@ -19,6 +19,16 @@ HTTP Basic on every endpoint except `/healthz` and `/readyz`.
 - `GET    /api/notes/{path}`     — raw markdown
 - `PUT    /api/notes/{path}`     — write markdown (triggers reindex)
 - `DELETE /api/notes/{path}`
+- `POST   /api/notes/next-week`  — roll an Intel-WW note to the next week.
+  Body: `{"path": "<rel>", "overwrite": false}`. Manager role required for
+  the source project. Behavior:
+  1. Auto-injects `#id T-XXXXXX` into every `!task`/`!AR` in the source that
+     lacks one and rewrites the source file in place.
+  2. Strips done items, bumps `wwNN` prose references (not `#eta` values).
+  3. Writes the new file, where every surviving `!task`/`!AR` becomes a
+     `#task <ID>` reference row. Override attrs on the row write through to
+     the canonical task at index time.
+  Response: `{id, path, from_ww, to_ww}`.
 
 ### Tasks
 - `GET /api/tasks` — composable filters:

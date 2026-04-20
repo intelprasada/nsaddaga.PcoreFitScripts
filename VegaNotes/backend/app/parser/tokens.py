@@ -55,6 +55,7 @@ class TokenSpec:
 
 REGISTRY: Dict[str, TokenSpec] = {
     "task":     TokenSpec("task",     multi=True),
+    "id":       TokenSpec("id",       multi=False),
     "eta":      TokenSpec("eta",      normalize=parse_eta),
     "priority": TokenSpec("priority", normalize=parse_priority_rank),
     "project":  TokenSpec("project",  multi=True),
