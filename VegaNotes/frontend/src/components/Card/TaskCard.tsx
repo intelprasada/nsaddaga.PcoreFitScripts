@@ -55,12 +55,12 @@ export function TaskCard({ task, onOpen }: Props) {
       {ars.length > 0 && (
         <button
           onClick={(e) => { e.stopPropagation(); setExpanded((x) => !x); }}
-          className="mt-2 w-full text-left text-[11px] text-amber-700 hover:text-amber-900 flex items-center gap-1"
+          className="mt-2 w-full text-left text-[13px] text-amber-800 hover:text-amber-900 flex items-center gap-1.5 bg-amber-50 border border-amber-200 rounded px-2 py-1"
           title="Action Required items (subtasks declared with !AR)"
         >
-          <span>{expanded ? "▾" : "▸"}</span>
-          <span className="font-semibold">{ars.length} AR{ars.length === 1 ? "" : "s"}</span>
-          <span className="text-slate-500">({arDone} done / {ars.length - arDone} open)</span>
+          <span className="text-sm">{expanded ? "▾" : "▸"}</span>
+          <span className="font-bold">{ars.length} AR{ars.length === 1 ? "" : "s"}</span>
+          <span className="text-slate-600">({arDone} done / {ars.length - arDone} open)</span>
         </button>
       )}
       <AnimatePresence initial={false}>
@@ -69,7 +69,7 @@ export function TaskCard({ task, onOpen }: Props) {
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            className="mt-1 ml-3 border-l border-amber-200 pl-2 space-y-1 overflow-hidden"
+            className="mt-1.5 ml-2 border-l-2 border-amber-300 pl-3 space-y-1.5 overflow-hidden"
           >
             {ars.map((a) => (
               <ArRow key={a.id} ar={a} onCycle={() =>
@@ -86,10 +86,10 @@ export function TaskCard({ task, onOpen }: Props) {
 function ArRow({ ar, onCycle }: { ar: ChildTask; onCycle: () => void }) {
   const done = ar.status === "done";
   return (
-    <li className="flex items-center gap-2 text-[12px]">
+    <li className="flex items-center gap-2 text-[13px]">
       <button
         onClick={(e) => { e.stopPropagation(); onCycle(); }}
-        className={`chip text-[10px] cursor-pointer ${
+        className={`chip text-[11px] px-2 py-0.5 cursor-pointer font-medium ${
           done
             ? "chip-status"
             : ar.status === "in-progress"
@@ -102,10 +102,10 @@ function ArRow({ ar, onCycle }: { ar: ChildTask; onCycle: () => void }) {
       >
         {ar.status}
       </button>
-      <span className={done ? "line-through text-slate-400" : "text-slate-700"}>
+      <span className={done ? "line-through text-slate-400" : "text-slate-800"}>
         {ar.title}
       </span>
-      {ar.eta && <span className="chip chip-eta text-[10px]">{ar.eta}</span>}
+      {ar.eta && <span className="chip chip-eta text-[11px]">{ar.eta}</span>}
     </li>
   );
 }

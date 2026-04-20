@@ -465,6 +465,16 @@ def list_project_notes(
     for p in sorted(pdir.rglob("*.md")):
         rel = str(p.relative_to(settings.notes_dir))
         note = s.exec(select(Note).where(Note.path == rel)).first()
+        if note is None:
+            # Self-heal: a markdown file exists on disk but the indexer never
+            # persisted (or lost) its row. Without an id the editor cannot
+            # open the note. Lazily reindex so the UI keeps working.
+            try:
+                note = reindex_file(p, s)
+                s.commit()
+            except Exception:
+                s.rollback()
+                note = None
         out.append({
             "path": rel,
             "id": note.id if note else None,
@@ -493,6 +503,13 @@ def tree(
         for p in sorted(child.rglob("*.md")):
             rel = str(p.relative_to(nd))
             note = s.exec(select(Note).where(Note.path == rel)).first()
+            if note is None:
+                try:
+                    note = reindex_file(p, s)
+                    s.commit()
+                except Exception:
+                    s.rollback()
+                    note = None
             notes.append({
                 "path": rel,
                 "id": note.id if note else None,
@@ -504,6 +521,13 @@ def tree(
     for p in sorted(nd.glob("*.md")):
         rel = str(p.relative_to(nd))
         note = s.exec(select(Note).where(Note.path == rel)).first()
+        if note is None:
+            try:
+                note = reindex_file(p, s)
+                s.commit()
+            except Exception:
+                s.rollback()
+                note = None
         loose.append({
             "path": rel,
             "id": note.id if note else None,
