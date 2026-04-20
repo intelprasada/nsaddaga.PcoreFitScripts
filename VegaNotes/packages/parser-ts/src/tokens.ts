@@ -11,13 +11,39 @@ export interface TokenSpec {
   normalize?: Normalize;
 }
 
+const STATUS_ALIASES: Record<string, string> = {
+  "in progress": "in-progress",
+  "in_progress": "in-progress",
+  "inprogress": "in-progress",
+  "wip": "in-progress",
+  "doing": "in-progress",
+  "working": "in-progress",
+  "complete": "done",
+  "completed": "done",
+  "finished": "done",
+  "closed": "done",
+  "open": "todo",
+  "pending": "todo",
+  "to-do": "todo",
+  "todo": "todo",
+  "block": "blocked",
+  "blocked": "blocked",
+  "stuck": "blocked",
+};
+
+export function normalizeStatus(value: string): string {
+  if (!value) return "todo";
+  const v = value.trim().toLowerCase();
+  return STATUS_ALIASES[v] ?? v;
+}
+
 export const REGISTRY: Record<string, TokenSpec> = {
   task:     { name: "task",     multi: true },
   eta:      { name: "eta",      multi: false, normalize: (v) => parseEta(v) },
   priority: { name: "priority", multi: false, normalize: (v) => parsePriorityRank(v) },
   project:  { name: "project",  multi: true },
   owner:    { name: "owner",    multi: true },
-  status:   { name: "status",   multi: false },
+  status:   { name: "status",   multi: false, normalize: (v) => normalizeStatus(v) },
   estimate: { name: "estimate", multi: false, normalize: (v) => parseDuration(v) },
   feature:  { name: "feature",  multi: true },
   link:     { name: "link",     multi: true },

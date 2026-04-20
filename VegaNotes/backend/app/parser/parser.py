@@ -72,7 +72,7 @@ class ParsedTask:
 def _attach_attr(task: ParsedTask, tok: Token) -> None:
     spec = REGISTRY[tok.name]
     if tok.name == "status":
-        task.status = tok.value.strip().lower() or "todo"
+        task.status = spec.normalize(tok.value) if spec.normalize else (tok.value.strip().lower() or "todo")
     if tok.name in {"task", "link"}:
         kind = "task" if tok.name == "task" else "link"
         task.refs.append({"kind": kind, "dst_slug": slugify(tok.value)})
@@ -208,10 +208,19 @@ def parse(md: str) -> Dict[str, Any]:
             current = task
         elif attr_toks:
             if _is_context_only_line(items):
-                ctx_attrs: Dict[str, list] = {}
-                for tok in attr_toks:
-                    ctx_attrs.setdefault(tok.name, []).append(tok.value)
-                ctx_stack.append(ctx_attrs)
+                # Hierarchical attachment: if this attr-only line is indented
+                # *deeper* than the current task, treat it as a continuation
+                # of that task (attach the tokens to it) rather than a global
+                # context line. This prevents a `#eta` indented under task A
+                # from leaking onto sibling tasks B, C that follow A.
+                if current is not None and line_indent > current.indent:
+                    for tok in attr_toks:
+                        _attach_attr(current, tok)
+                else:
+                    ctx_attrs: Dict[str, list] = {}
+                    for tok in attr_toks:
+                        ctx_attrs.setdefault(tok.name, []).append(tok.value)
+                    ctx_stack.append(ctx_attrs)
             elif current is not None:
                 for tok in attr_toks:
                     _attach_attr(current, tok)
@@ -222,7 +231,61 @@ def parse(md: str) -> Dict[str, Any]:
         for r in t.refs:
             refs_out.append({"src_slug": t.slug, "dst_slug": r["dst_slug"], "kind": r["kind"]})
 
+    _rollup_to_parents(tasks)
+
     return {
         "tasks": [t.to_dict() for t in tasks],
         "refs": refs_out,
     }
+
+
+def _rollup_to_parents(tasks: List[ParsedTask]) -> None:
+    """Back-propagate child state to parents:
+
+    1. **ETA**: a parent inherits the latest (maximum) ETA of any descendant
+       if that ETA is later than the parent's own (or the parent has no ETA).
+       This means a parent task is never marked as completing earlier than its
+       longest child.
+    2. **Status**: if a parent is marked `done` but any descendant is *not*
+       done, the parent's status is downgraded to `in-progress` (with a
+       fall-back to `todo` if all non-done children are still `todo`). The
+       written markdown is left unchanged — only the parsed view reflects
+       the rolled-up state.
+
+    Processed bottom-up (deepest first) so transitive rollups converge in a
+    single pass.
+    """
+    by_slug = {t.slug: t for t in tasks}
+    children: Dict[str, List[ParsedTask]] = {}
+    for t in tasks:
+        if t.parent_slug:
+            children.setdefault(t.parent_slug, []).append(t)
+    # Deepest first.
+    ordered = sorted(tasks, key=lambda t: t.indent, reverse=True)
+    for t in ordered:
+        kids = children.get(t.slug)
+        if not kids:
+            continue
+        # ETA rollup: take max(ISO date) across kids' attrs_norm.eta.
+        kid_etas = [k.attrs_norm.get("eta") for k in kids if k.attrs_norm.get("eta")]
+        if kid_etas:
+            max_kid_eta = max(kid_etas)  # ISO-date strings sort lexically
+            cur_eta = t.attrs_norm.get("eta")
+            if cur_eta is None or max_kid_eta > cur_eta:
+                t.attrs_norm["eta"] = max_kid_eta
+                # Mirror back into raw attrs so consumers that read .attrs
+                # also see the rolled-up value (use ISO; original ww-string
+                # form is not reconstructable here).
+                t.attrs["eta"] = max_kid_eta
+        # Status rollup: if parent says done but any kid isn't, downgrade.
+        if t.status == "done":
+            non_done = [k for k in kids if k.status != "done"]
+            if non_done:
+                if any(k.status == "in-progress" for k in non_done):
+                    t.status = "in-progress"
+                elif any(k.status == "blocked" for k in non_done):
+                    t.status = "blocked"
+                else:
+                    t.status = "in-progress"  # mixed todo+done parent → in-progress
+                t.attrs["status"] = t.status
+                t.attrs_norm["status"] = t.status

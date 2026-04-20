@@ -84,6 +84,10 @@ export const api = {
   saveNote: (path: string, body_md: string) =>
     req<{ id: number; path: string }>("/notes", { method: "PUT", body: JSON.stringify({ path, body_md }) }),
   deleteNote: (id: number) => req(`/notes/${id}`, { method: "DELETE" }),
+  rollNoteNextWeek: (path: string, overwrite = false) =>
+    req<{ id: number; path: string; from_ww: number; to_ww: number }>("/notes/next-week", {
+      method: "POST", body: JSON.stringify({ path, overwrite }),
+    }),
   parsePreview: (body_md: string) => req("/parse", { method: "POST", body: JSON.stringify({ body_md }) }),
 
   tasks: (params: Record<string, string | boolean | undefined>) => {
@@ -94,9 +98,12 @@ export const api = {
   updateTask: (id: number, patch: { status?: string }) =>
     req<Task>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 
-  agenda: (owner?: string, days = 7) => {
-    const qs = new URLSearchParams({ days: String(days) });
+  agenda: (owner?: string, days?: number, start?: string, end?: string) => {
+    const qs = new URLSearchParams();
+    if (days != null) qs.set("days", String(days));
     if (owner) qs.set("owner", owner);
+    if (start) qs.set("start", start);
+    if (end) qs.set("end", end);
     return req<AgendaResponse>(`/agenda?${qs.toString()}`);
   },
   features: () => req<string[]>("/features"),

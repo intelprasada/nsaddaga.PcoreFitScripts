@@ -84,8 +84,8 @@ function lex(line: string): Item[] {
         last = end;
         continue;
       }
-      const [value, end] = readValue(line, TOKEN_RE.lastIndex);
-      out.push({ kind: "attr", name, value, raw: line.slice(start, end), col: start });
+      const [value, end] = readValue(line, TOKEN_RE.lastIndex, name === "status");
+      out.push({ kind: "attr", name, value: name === "status" ? value.trim() : value, raw: line.slice(start, end), col: start });
       TOKEN_RE.lastIndex = end;
       last = end;
     }
@@ -134,7 +134,7 @@ function isContextOnlyLine(items: Item[]): boolean {
 
 function attachAttr(task: ParsedTask, tok: Token): void {
   const spec = REGISTRY[tok.name];
-  if (tok.name === "status") task.status = tok.value.trim().toLowerCase() || "todo";
+  if (tok.name === "status") task.status = (spec.normalize ? String(spec.normalize(tok.value)) : tok.value.trim().toLowerCase()) || "todo";
   if (tok.name === "task" || tok.name === "link") {
     task.refs.push({ kind: tok.name, dst_slug: slugify(tok.value) });
     return;
@@ -252,9 +252,17 @@ export function parse(md: string): ParseResult {
       stack.push(task); tasks.push(task); current = task;
     } else if (attrs.length) {
       if (isContextOnlyLine(items)) {
-        const ctxAttrs: Record<string, string[]> = {};
-        for (const t of attrs) (ctxAttrs[t.name] || (ctxAttrs[t.name] = [])).push(t.value);
-        ctxStack.push(ctxAttrs);
+        const lineIndent = indentLevel(raw);
+        if (current && lineIndent > current.indent) {
+          // Continuation of the current task — attach instead of pushing
+          // to the global context stack so the attrs don't leak onto
+          // sibling tasks declared later at a shallower indent.
+          for (const t of attrs) attachAttr(current, t);
+        } else {
+          const ctxAttrs: Record<string, string[]> = {};
+          for (const t of attrs) (ctxAttrs[t.name] || (ctxAttrs[t.name] = [])).push(t.value);
+          ctxStack.push(ctxAttrs);
+        }
       } else if (current) {
         for (const t of attrs) attachAttr(current, t);
       }
@@ -264,5 +272,42 @@ export function parse(md: string): ParseResult {
   const refs = tasks.flatMap((t) =>
     t.refs.map((r) => ({ src_slug: t.slug, dst_slug: r.dst_slug, kind: r.kind })),
   );
+  rollupToParents(tasks);
   return { tasks, refs };
+}
+
+function rollupToParents(tasks: ParsedTask[]): void {
+  const children: Record<string, ParsedTask[]> = {};
+  for (const t of tasks) {
+    if (t.parent_slug) (children[t.parent_slug] || (children[t.parent_slug] = [])).push(t);
+  }
+  // Deepest first so transitive rollups converge.
+  const ordered = [...tasks].sort((a, b) => b.indent - a.indent);
+  for (const t of ordered) {
+    const kids = children[t.slug];
+    if (!kids || kids.length === 0) continue;
+    // ETA rollup (ISO date strings sort lexically).
+    const kidEtas = kids
+      .map((k) => k.attrs_norm["eta"])
+      .filter((v): v is string => typeof v === "string");
+    if (kidEtas.length) {
+      const maxKid = kidEtas.reduce((a, b) => (a > b ? a : b));
+      const cur = t.attrs_norm["eta"];
+      if (typeof cur !== "string" || maxKid > cur) {
+        t.attrs_norm["eta"] = maxKid;
+        t.attrs["eta"] = maxKid;
+      }
+    }
+    // Status rollup: parent-done with non-done kids → in-progress.
+    if (t.status === "done") {
+      const nonDone = kids.filter((k) => k.status !== "done");
+      if (nonDone.length) {
+        let downgraded = "in-progress";
+        if (nonDone.some((k) => k.status === "blocked")) downgraded = "blocked";
+        t.status = downgraded;
+        t.attrs["status"] = downgraded;
+        t.attrs_norm["status"] = downgraded;
+      }
+    }
+  }
 }

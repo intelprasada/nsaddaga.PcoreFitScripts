@@ -31,6 +31,18 @@ export function parseIntelWw(value: string, today: Date = todayUTC()): string | 
   return isoDate(start);
 }
 
+export function formatIntelWw(d: Date | string, todayRef: Date = todayUTC()): string {
+  const date = typeof d === "string" ? new Date(d + "T00:00:00Z") : d;
+  let year = date.getUTCFullYear();
+  let start = intelWw1Start(year);
+  if (date < start) { year -= 1; start = intelWw1Start(year); }
+  const dayDiff = Math.floor((date.getTime() - start.getTime()) / 86400000);
+  const week = Math.floor(dayDiff / 7) + 1;
+  const day = dayDiff - (week - 1) * 7;
+  const prefix = year !== todayRef.getUTCFullYear() ? `${year}` : "";
+  return `${prefix}WW${week}.${day}`;
+}
+
 function todayUTC(): Date {
   const n = new Date();
   return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate()));

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type ChildTask, type Task } from "../../api/client";
+import { formatIntelWw } from "@veganotes/parser";
 
 interface Props { task: Task; onOpen?: (t: Task) => void; }
 
@@ -16,6 +17,15 @@ const AR_NEXT: Record<string, string> = {
   done: "todo",
   blocked: "todo",
 };
+
+function etaLabel(eta: string | null | undefined): string {
+  if (!eta) return "";
+  // Backend stores normalized ISO. Render as Intel WW for compactness.
+  if (/^\d{4}-\d{2}-\d{2}/.test(eta)) {
+    try { return formatIntelWw(eta.slice(0, 10)); } catch { return eta; }
+  }
+  return eta;
+}
 
 export function TaskCard({ task, onOpen }: Props) {
   const prio = (task.attrs.priority as string) ?? "";
@@ -42,7 +52,7 @@ export function TaskCard({ task, onOpen }: Props) {
       className={`card border-l-4 ${accent} cursor-pointer`}>
       <div className="flex items-start justify-between gap-2">
         <div className="font-medium text-sm">{task.title}</div>
-        {task.eta && <span className="chip chip-eta">{task.eta}</span>}
+        {task.eta && <span className="chip chip-eta" title={task.eta}>{etaLabel(task.eta)}</span>}
       </div>
       <div className="mt-2 flex flex-wrap gap-1">
         {prio && <span className="chip chip-priority">{prio}</span>}
@@ -105,7 +115,7 @@ function ArRow({ ar, onCycle }: { ar: ChildTask; onCycle: () => void }) {
       <span className={done ? "line-through text-slate-400" : "text-slate-800"}>
         {ar.title}
       </span>
-      {ar.eta && <span className="chip chip-eta text-[11px]">{ar.eta}</span>}
+      {ar.eta && <span className="chip chip-eta text-[11px]" title={ar.eta}>{etaLabel(ar.eta)}</span>}
     </li>
   );
 }
