@@ -33,6 +33,12 @@ def init_db() -> None:
         if "kind" not in existing:
             conn.execute(text("ALTER TABLE task ADD COLUMN kind TEXT NOT NULL DEFAULT 'task'"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_task_kind ON task(kind)"))
+        # User: pass_hash + is_admin added when multi-user auth landed.
+        user_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(user)")).fetchall()}
+        if user_cols and "pass_hash" not in user_cols:
+            conn.execute(text("ALTER TABLE user ADD COLUMN pass_hash TEXT NOT NULL DEFAULT ''"))
+        if user_cols and "is_admin" not in user_cols:
+            conn.execute(text("ALTER TABLE user ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0"))
         # FTS5 virtual table for note search.
         conn.execute(text(
             "CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts "

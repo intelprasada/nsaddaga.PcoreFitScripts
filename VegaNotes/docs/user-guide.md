@@ -291,38 +291,91 @@ view renders them.
 
 ---
 
-## 9. Project sharing & roles
+## 9. Users, sharing & roles
 
-Each project has a member list. Two roles:
+VegaNotes is multi-user. There are two layers of authorization:
+
+1. **Account role** (DB-wide): `admin` or regular user.
+2. **Project role** (per project): `manager` or `member`.
+
+### Logging in
+
+Authentication is HTTP Basic (the browser pops a username/password dialog).
+
+* On first boot the user named in `VEGANOTES_BASIC_AUTH_USER` (default
+  `admin`) is auto-created in the DB as an admin, with the password from
+  `VEGANOTES_BASIC_AUTH_PASS_HASH` (default `admin`). After that, the admin's
+  password lives in the DB — rotate it from the Admin tab, no redeploy
+  needed.
+* Every other user must be created (or have a password set) via the **Admin**
+  tab before they can log in.
+
+#### Logging out
+
+HTTP Basic has no real "logout"; browsers cache credentials until they're
+restarted. The **logout** button in the navbar overwrites the cached creds
+with bogus ones and reloads, which causes the browser to re-prompt.
+
+| Browser     | Behavior                                                      |
+| ----------- | ------------------------------------------------------------- |
+| Firefox     | Works every time.                                             |
+| Chrome/Edge | Usually works. If the prompt doesn't reappear, hard-refresh   |
+|             | (`Ctrl+Shift+R`) or close the tab.                            |
+| Safari      | Same as Chrome — occasionally needs a hard-refresh.           |
+
+For testing **multiple identities side-by-side**, the most reliable trick is
+an incognito/private window per identity (or a separate browser profile).
+
+### Admin tab (admins only)
+
+Only visible to users with the `admin` flag. Lets you:
+
+* Create a new login (username + password, optionally admin).
+* Set or reset any user's password.
+* Promote a user to admin / demote them.
+* Delete a user (their `ProjectMember` rows are removed too).
+
+Guardrails enforced by the backend:
+
+* You cannot demote, delete, or remove your own admin flag.
+* You cannot remove admin from the **last remaining** admin.
+
+> **Heads-up about pre-existing users.** Names that appeared as `@owner`
+> mentions in your notes were auto-created **without a password** and show
+> up as `not set — cannot log in` in the Admin tab. They can be assigned to
+> tasks and projects, but won't be able to authenticate until you set a
+> password for them.
+
+### Project membership
+
+Each project has its own member list. Two project roles:
 
 * **manager** — full CRUD on the project's notes and tasks.
-* **member** — can only edit tasks they own (i.e. tasks where their
-  username appears in `#owner` / `@user`).
+* **member** — can only edit tasks where they appear in `@user` / `#owner`.
 
-Manage members:
+Admins are implicitly managers of every project.
+
+Manage members from the Sidebar's project right-click menu, or via the API:
 
 ```sh
 # add bob as a member
 curl -u admin:admin -X PUT -H 'content-type: application/json' \
   -d '{"user_name":"bob","role":"member"}' \
-  http://localhost:8765/api/projects/acme/members
+  http://localhost:8000/api/projects/acme/members
 
 # promote bob to manager
 curl -u admin:admin -X PUT -H 'content-type: application/json' \
   -d '{"user_name":"bob","role":"manager"}' \
-  http://localhost:8765/api/projects/acme/members
+  http://localhost:8000/api/projects/acme/members
 
 # remove bob
 curl -u admin:admin -X DELETE \
-  http://localhost:8765/api/projects/acme/members/bob
+  http://localhost:8000/api/projects/acme/members/bob
 ```
 
 When bob logs in he sees only `acme` in his Sidebar. He can drag his own
 tasks across columns; if he tries to drag someone else's task the API
 returns `403 members can only edit their own tasks`.
-
-The bootstrap admin (set by `VEGANOTES_BASIC_AUTH_USER`) is implicitly a
-manager of every project.
 
 ---
 

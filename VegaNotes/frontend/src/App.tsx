@@ -9,6 +9,7 @@ import { GraphView } from "./components/Graph/GraphView";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { NoteEditor } from "./components/Editor/NoteEditor";
 import { Sidebar } from "./components/Sidebar/Sidebar";
+import { AdminPanel } from "./components/Admin/AdminPanel";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api/client";
 
@@ -25,6 +26,7 @@ function ViewSwitcher({ selectedPath, setSelectedPath, draft, setDraft }: {
     case "timeline": return <TimelineView />;
     case "calendar": return <CalendarView />;
     case "graph":    return <GraphView />;
+    case "admin":    return <AdminPanel />;
     case "editor":   return <EditorPane selectedPath={selectedPath} setSelectedPath={setSelectedPath} draft={draft} setDraft={setDraft} />;
   }
 }
@@ -428,15 +430,47 @@ function EditInVimButton({ selectedPath, entry, flushSave }: {
 
 function NavBar() {
   const { view, set } = useUI();
+  const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => api.me() });
+  const tabs: ("editor" | "kanban" | "agenda" | "timeline" | "calendar" | "graph" | "admin")[] = [
+    "editor", "kanban", "agenda", "timeline", "calendar", "graph",
+  ];
+  if (me?.is_admin) tabs.push("admin");
+
+  const logout = async () => {
+    // HTTP Basic has no real logout — overwrite the browser's cached creds
+    // for this origin with a bogus pair, then reload so the next request
+    // re-prompts. Works reliably in Firefox; Chrome usually drops them too.
+    try {
+      await fetch("/api/me", {
+        headers: { Authorization: "Basic " + btoa("logout:logout") },
+        cache: "no-store",
+      });
+    } catch { /* expected 401 */ }
+    // Tiny delay to let the failed request settle, then full reload.
+    setTimeout(() => { window.location.reload(); }, 50);
+  };
+
   return (
     <nav className="flex items-center gap-3 bg-white border-b px-4 py-2">
       <span className="font-bold text-lg text-sky-700">VegaNotes</span>
-      {(["editor", "kanban", "agenda", "timeline", "calendar", "graph"] as const).map((v) => (
+      {tabs.map((v) => (
         <button key={v}
           className={`text-sm rounded px-2 py-1 ${view === v ? "bg-sky-100 text-sky-900" : "text-slate-600 hover:bg-slate-100"}`}
           onClick={() => set({ view: v })}>{v}</button>
       ))}
-      <span className="ml-auto text-xs text-slate-400">⌘K</span>
+      {me && (
+        <span className="ml-auto text-xs text-slate-500">
+          {me.name}{me.is_admin ? " · admin" : ""}
+        </span>
+      )}
+      <button
+        onClick={logout}
+        className="text-xs text-slate-600 hover:bg-slate-100 rounded px-2 py-1 border"
+        title="Sign out (clears cached HTTP Basic credentials and reloads)"
+      >
+        logout
+      </button>
+      <span className="text-xs text-slate-400">⌘K</span>
     </nav>
   );
 }

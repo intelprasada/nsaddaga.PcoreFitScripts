@@ -198,6 +198,19 @@ curl -s $AUTH -X POST $BASE/notes/stamp-ids \
 
 # Delete a note
 curl -s $AUTH -X DELETE $BASE/notes/42
+
+# Who am I?
+curl -s $AUTH $BASE/me
+
+# Admin: create / reset / promote / delete a user
+curl -s $AUTH $BASE/admin/users
+curl -s $AUTH -X POST $BASE/admin/users \
+  -H 'content-type: application/json' \
+  -d '{"name":"alice","password":"alice123","is_admin":false}'
+curl -s $AUTH -X PATCH $BASE/admin/users/alice \
+  -H 'content-type: application/json' \
+  -d '{"password":"newpw"}'
+curl -s $AUTH -X DELETE $BASE/admin/users/alice
 ```
 
 ---

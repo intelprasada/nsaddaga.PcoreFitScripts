@@ -239,8 +239,8 @@ readable and fully self-contained.
 | Variable                          | Default       | Notes                                       |
 | --------------------------------- | ------------- | ------------------------------------------- |
 | `VEGANOTES_DATA_DIR`              | `/data`       | Root of `notes/`, `index.sqlite`, `git/`.   |
-| `VEGANOTES_BASIC_AUTH_USER`       | `admin`       | HTTP Basic username.                        |
-| `VEGANOTES_BASIC_AUTH_PASS_HASH`  | bcrypt(admin) | bcrypt hash; generate with `passlib`/`bcrypt`. |
+| `VEGANOTES_BASIC_AUTH_USER`       | `admin`       | HTTP Basic username. **Bootstrap-only**: on first boot this user is auto-created in the DB as an admin; subsequent password changes happen via the Admin tab and persist in `index.sqlite`. |
+| `VEGANOTES_BASIC_AUTH_PASS_HASH`  | bcrypt(admin) | bcrypt hash used to seed the bootstrap admin's password. Generate with `passlib`/`bcrypt`. Not consulted after the admin row exists. |
 | `VEGANOTES_SERVE_STATIC`          | `true`        | Set `false` in dev (Vite serves the SPA).   |
 
 ---

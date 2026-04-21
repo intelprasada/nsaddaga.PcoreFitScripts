@@ -142,5 +142,25 @@ export const api = {
     }),
 
   users: () => req<string[]>("/users"),
+  me: () => req<{ name: string; is_admin: boolean }>("/me"),
+
+  adminListUsers: () =>
+    req<{ name: string; is_admin: boolean; has_password: boolean }[]>("/admin/users"),
+  adminCreateUser: (name: string, password: string, is_admin = false) =>
+    req<{ name: string; is_admin: boolean; has_password: boolean }>("/admin/users", {
+      method: "POST",
+      body: JSON.stringify({ name, password, is_admin }),
+    }),
+  adminPatchUser: (
+    name: string,
+    patch: { password?: string; is_admin?: boolean },
+  ) =>
+    req<{ name: string; is_admin: boolean; has_password: boolean }>(
+      `/admin/users/${encodeURIComponent(name)}`,
+      { method: "PATCH", body: JSON.stringify(patch) },
+    ),
+  adminDeleteUser: (name: string) =>
+    req(`/admin/users/${encodeURIComponent(name)}`, { method: "DELETE" }),
+
   search: (q: string) => req<{ id: number; path: string; title: string }[]>(`/search?q=${encodeURIComponent(q)}`),
 };

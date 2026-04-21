@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import bindparam, text
 from sqlmodel import Session, select
 
-from ..auth import require_user
+from ..auth import hash_password, require_admin, require_user
 from ..config import settings
 from ..db import get_session
 from ..indexer import reindex_file, remove_path
@@ -34,8 +34,9 @@ def _project_for_path(rel_path: str) -> Optional[str]:
 
 
 def _user_role_for_project(s: Session, user: str, project: Optional[str]) -> str:
-    """Returns 'manager' | 'member' | 'none'. Admin user is always manager."""
-    if user == settings.basic_auth_user:
+    """Returns 'manager' | 'member' | 'none'. Admins are always managers."""
+    u = s.exec(select(User).where(User.name == user)).first()
+    if u is not None and u.is_admin:
         return "manager"
     if project is None:
         return "manager"  # root-level notes are unowned/open
@@ -770,6 +771,113 @@ def patch_task(
 @router.get("/users")
 def list_users(s: Session = Depends(get_session)) -> list[str]:
     return [u.name for u in s.exec(select(User).order_by(User.name)).all()]
+
+
+@router.get("/me")
+def whoami(
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    u = s.exec(select(User).where(User.name == user)).first()
+    return {"name": user, "is_admin": bool(u and u.is_admin)}
+
+
+# ---------- admin: user management ----------------------------------------
+
+class UserCreateIn(BaseModel):
+    name: str
+    password: str
+    is_admin: bool = False
+
+
+class UserPatchIn(BaseModel):
+    password: Optional[str] = None
+    is_admin: Optional[bool] = None
+
+
+def _user_to_dict(u: User) -> dict[str, Any]:
+    return {"name": u.name, "is_admin": bool(u.is_admin), "has_password": bool(u.pass_hash)}
+
+
+@router.get("/admin/users")
+def admin_list_users(
+    s: Session = Depends(get_session),
+    _admin: str = Depends(require_admin),
+) -> list[dict[str, Any]]:
+    return [_user_to_dict(u) for u in s.exec(select(User).order_by(User.name)).all()]
+
+
+@router.post("/admin/users", status_code=201)
+def admin_create_user(
+    body: UserCreateIn,
+    s: Session = Depends(get_session),
+    _admin: str = Depends(require_admin),
+) -> dict[str, Any]:
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "name required")
+    if not body.password:
+        raise HTTPException(400, "password required")
+    existing = s.exec(select(User).where(User.name == name)).first()
+    if existing is not None:
+        raise HTTPException(409, f"user '{name}' already exists")
+    u = User(name=name, pass_hash=hash_password(body.password), is_admin=body.is_admin)
+    s.add(u)
+    s.commit()
+    s.refresh(u)
+    return _user_to_dict(u)
+
+
+@router.patch("/admin/users/{name}")
+def admin_patch_user(
+    name: str,
+    body: UserPatchIn,
+    s: Session = Depends(get_session),
+    admin: str = Depends(require_admin),
+) -> dict[str, Any]:
+    u = s.exec(select(User).where(User.name == name)).first()
+    if u is None:
+        raise HTTPException(404, "user not found")
+    if body.password is not None:
+        if not body.password:
+            raise HTTPException(400, "password cannot be empty")
+        u.pass_hash = hash_password(body.password)
+    if body.is_admin is not None:
+        # Prevent removing admin from yourself or from the last remaining admin.
+        if not body.is_admin and u.is_admin:
+            if u.name == admin:
+                raise HTTPException(400, "cannot remove admin from yourself")
+            others = s.exec(select(User).where(User.is_admin == True, User.name != u.name)).all()  # noqa: E712
+            if not others:
+                raise HTTPException(400, "cannot remove admin from the last admin")
+        u.is_admin = body.is_admin
+    s.add(u)
+    s.commit()
+    s.refresh(u)
+    return _user_to_dict(u)
+
+
+@router.delete("/admin/users/{name}")
+def admin_delete_user(
+    name: str,
+    s: Session = Depends(get_session),
+    admin: str = Depends(require_admin),
+) -> dict[str, str]:
+    if name == admin:
+        raise HTTPException(400, "cannot delete yourself")
+    u = s.exec(select(User).where(User.name == name)).first()
+    if u is None:
+        raise HTTPException(404, "user not found")
+    if u.is_admin:
+        others = s.exec(select(User).where(User.is_admin == True, User.name != u.name)).all()  # noqa: E712
+        if not others:
+            raise HTTPException(400, "cannot delete the last admin")
+    # Detach any project memberships referencing this user.
+    for pm in s.exec(select(ProjectMember).where(ProjectMember.user_name == name)).all():
+        s.delete(pm)
+    s.delete(u)
+    s.commit()
+    return {"status": "deleted", "name": name}
 
 
 @router.get("/search")

@@ -8,6 +8,28 @@ prefer the live docs for exact request/response schemas.
 
 HTTP Basic on every endpoint except `/healthz` and `/readyz`.
 
+Credentials are validated against the `user` table (bcrypt `pass_hash` per
+user). The username from `VEGANOTES_BASIC_AUTH_USER` is bootstrapped as an
+admin on first boot using `VEGANOTES_BASIC_AUTH_PASS_HASH`; after that, the
+DB is the source of truth.
+
+There is no real "logout" — the frontend's logout button overwrites the
+browser's cached creds with bogus ones and reloads. Reliable in Firefox,
+usually-works in Chrome/Safari; an incognito window is the cleanest way to
+test multiple identities at once.
+
+### Identity & admin
+
+- `GET    /api/me`                        — `{name, is_admin}` for the caller
+- `GET    /api/users`                     — names of every user in the DB
+- `GET    /api/admin/users`               — full user list (admin only)
+- `POST   /api/admin/users`               — `{name, password, is_admin?}` (admin only)
+- `PATCH  /api/admin/users/{name}`        — `{password?, is_admin?}` (admin only)
+- `DELETE /api/admin/users/{name}`        — admin only; cascades `ProjectMember`
+
+Guardrails: you can't demote/delete yourself, and you can't remove admin
+from the last remaining admin.
+
 ## Endpoints
 
 ### Health

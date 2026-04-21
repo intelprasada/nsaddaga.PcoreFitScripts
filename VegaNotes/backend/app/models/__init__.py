@@ -43,6 +43,8 @@ class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
     saved_views_json: str = "[]"
+    pass_hash: str = ""
+    is_admin: bool = False
 
 
 class TaskOwner(SQLModel, table=True):
