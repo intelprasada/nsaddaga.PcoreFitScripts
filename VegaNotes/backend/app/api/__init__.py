@@ -15,7 +15,7 @@ from ..auth import require_user
 from ..config import settings
 from ..db import get_session
 from ..indexer import reindex_file, remove_path
-from ..markdown_ops import roll_to_next_week, update_task_status
+from ..markdown_ops import inject_missing_ids, roll_to_next_week, update_task_status
 from ..models import (
     Feature, Link, Note, Project, ProjectMember, Task, TaskAttr, TaskFeature,
     TaskOwner, TaskProject, User,
@@ -241,6 +241,39 @@ def roll_note_next_week(
     dst_full.write_text(new_md, encoding="utf-8")
     note = reindex_file(dst_full, s)
     return {"id": note.id, "path": note.path, "from_ww": cur, "to_ww": nxt}
+
+
+class StampIdsIn(BaseModel):
+    path: str
+
+
+@router.post("/notes/stamp-ids")
+def stamp_task_ids(
+    body: StampIdsIn,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    """Inject stable `#id <ID>` tokens into every `!task`/`!ar` line in the
+    note that doesn't already have one. Idempotent. Used to opt a note into
+    cross-week deduplication without waiting for "Next Week Agenda".
+    """
+    rel = body.path
+    if ".." in rel or rel.startswith("/"):
+        raise HTTPException(400, "invalid path")
+    project = _project_for_path(rel)
+    role = _user_role_for_project(s, user, project)
+    if role == "none" or (role == "member" and project is not None):
+        raise HTTPException(403, "manager role required to modify notes")
+    full = settings.notes_dir / rel
+    if not full.exists():
+        raise HTTPException(404, "note not found")
+    src_md = full.read_text(encoding="utf-8")
+    patched, mapping = inject_missing_ids(src_md)
+    injected = len(mapping)
+    if patched != src_md:
+        full.write_text(patched, encoding="utf-8")
+        reindex_file(full, s)
+    return {"path": rel, "injected": injected, "body_md": patched}
 
 
 @router.delete("/notes/{note_id}")

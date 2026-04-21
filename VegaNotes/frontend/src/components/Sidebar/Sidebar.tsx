@@ -5,6 +5,12 @@ import { api, type TreeNode } from "../../api/client";
 interface Props {
   selectedPath: string;
   onSelect: (path: string) => void;
+  /**
+   * Called after a note or project is deleted. Receives a predicate that
+   * matches deleted note paths. App uses this to drop in-memory draft entries
+   * so unsaved buffers can't resurrect the file via autosave.
+   */
+  onAfterDelete?: (matches: (path: string) => boolean) => void;
 }
 
 type MenuKind =
@@ -24,7 +30,7 @@ interface MenuState {
  * Top-level entries are projects (folders under notes/). Loose root-level
  * files appear under a "(no project)" group at the bottom.
  */
-export function Sidebar({ selectedPath, onSelect }: Props) {
+export function Sidebar({ selectedPath, onSelect, onAfterDelete }: Props) {
   const qc = useQueryClient();
   const { data: tree = [] } = useQuery<TreeNode[]>({
     queryKey: ["tree"],
@@ -69,6 +75,7 @@ export function Sidebar({ selectedPath, onSelect }: Props) {
   const delProject = useMutation({
     mutationFn: (name: string) => api.deleteProject(name),
     onSuccess: (_d, name) => {
+      onAfterDelete?.((p) => p === name || p.startsWith(`${name}/`));
       refreshAll();
       if (selectedPath.startsWith(`${name}/`)) onSelect("");
     },
@@ -76,9 +83,11 @@ export function Sidebar({ selectedPath, onSelect }: Props) {
   });
 
   const delNote = useMutation({
-    mutationFn: (id: number) => api.deleteNote(id),
-    onSuccess: (_d, _id) => {
+    mutationFn: ({ id }: { id: number; path: string }) => api.deleteNote(id),
+    onSuccess: (_d, vars) => {
+      onAfterDelete?.((p) => p === vars.path);
       refreshAll();
+      if (selectedPath === vars.path) onSelect("");
     },
     onError: (e: any) => alert(`Delete failed: ${e?.message ?? e}`),
   });
@@ -252,7 +261,7 @@ export function Sidebar({ selectedPath, onSelect }: Props) {
                 setMenu(null);
                 return;
               }
-              if (window.confirm(`Delete note "${path}"?`)) delNote.mutate(id);
+              if (window.confirm(`Delete note "${path}"?`)) delNote.mutate({ id, path });
               setMenu(null);
             },
           })}

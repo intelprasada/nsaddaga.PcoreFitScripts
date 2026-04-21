@@ -88,6 +88,10 @@ export const api = {
     req<{ id: number; path: string; from_ww: number; to_ww: number }>("/notes/next-week", {
       method: "POST", body: JSON.stringify({ path, overwrite }),
     }),
+  stampTaskIds: (path: string) =>
+    req<{ path: string; injected: number; body_md: string }>("/notes/stamp-ids", {
+      method: "POST", body: JSON.stringify({ path }),
+    }),
   noteAbsPath: (path: string) =>
     req<{ path: string; abs_path: string; vim_cmd: string }>(
       `/notes/abs-path?path=${encodeURIComponent(path)}`,
