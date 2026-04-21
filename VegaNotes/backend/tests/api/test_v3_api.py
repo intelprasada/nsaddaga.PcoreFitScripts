@@ -102,3 +102,59 @@ def test_member_role_value_validated(client):
         headers={"Authorization": ADMIN},
     )
     assert r.status_code == 400
+
+
+def test_owner_can_edit_their_task_without_project_membership(client):
+    """Regression: an `@user` mention in markdown grants edit rights on that
+    one task even when the user has no `ProjectMember` row for the project."""
+    # Create a user with a known password but NO project membership in `alpha`.
+    r = client.post(
+        "/api/admin/users",
+        json={"name": "ghost", "password": "pw", "is_admin": False},
+        headers={"Authorization": ADMIN},
+    )
+    assert r.status_code in (200, 201), r.text
+
+    assert r.status_code in (200, 201), r.text
+    GHOST = "Basic " + base64.b64encode(b"ghost:pw").decode()
+
+    # Admin authors a task in alpha/ that mentions @ghost as the owner.
+    md = (
+        "# Alpha\n"
+        "- !task Owned by ghost @ghost #status todo\n"
+        "- !task Not theirs @admin #status todo\n"
+    )
+    r = client.put(
+        "/api/notes",
+        json={"path": "alpha/plan.md", "body_md": md},
+        headers={"Authorization": ADMIN},
+    )
+    assert r.status_code == 200, r.text
+
+    # Ghost is NOT a project member.
+    r = client.get("/api/projects/alpha/members", headers={"Authorization": ADMIN})
+    assert all(m["user_name"] != "ghost" for m in r.json())
+
+    # Find the two tasks.
+    r = client.get("/api/tasks?q=ghost", headers={"Authorization": ADMIN})
+    owned = next(t for t in r.json()["tasks"] if t["title"] == "Owned by ghost")
+    r = client.get("/api/tasks?q=Not", headers={"Authorization": ADMIN})
+    others = next(t for t in r.json()["tasks"] if t["title"] == "Not theirs")
+
+    # Ghost CAN PATCH the task they own — even without project membership.
+    r = client.patch(
+        f"/api/tasks/{owned['id']}",
+        json={"status": "in-progress", "notes": "ghost was here"},
+        headers={"Authorization": GHOST},
+    )
+    assert r.status_code == 200, r.text
+
+    # Ghost CANNOT PATCH a task they don't own.
+    r = client.patch(
+        f"/api/tasks/{others['id']}",
+        json={"status": "done"},
+        headers={"Authorization": GHOST},
+    )
+    assert r.status_code == 403, r.text
+    # Server detail should be precise so the frontend can show it.
+    assert "no access" in r.json()["detail"].lower() or "own" in r.json()["detail"].lower()

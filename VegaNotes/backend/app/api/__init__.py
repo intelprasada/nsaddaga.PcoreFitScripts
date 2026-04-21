@@ -756,15 +756,21 @@ def patch_task(
         raise HTTPException(404, "note not found")
     project = _project_for_path(note.path)
     role = _user_role_for_project(s, user, project)
-    if role == "none":
+    owners = s.exec(
+        select(User.name).join(TaskOwner, TaskOwner.user_id == User.id)
+        .where(TaskOwner.task_id == task_id)
+    ).all()
+    is_owner = user in owners
+    # Ownership-grants-edit: an `@user` mention in the markdown is a
+    # first-class permission grant on that single task, regardless of
+    # ProjectMember rows. This keeps the @-mention contract honest — if you
+    # appear in `owners` everywhere in the UI, you can also save edits to
+    # the tasks you own. Project-membership remains required for whole-file
+    # writes (PUT /api/notes) and for editing tasks you do NOT own.
+    if role == "none" and not is_owner:
         raise HTTPException(403, "no access to project")
-    if role == "member":
-        owners = s.exec(
-            select(User.name).join(TaskOwner, TaskOwner.user_id == User.id)
-            .where(TaskOwner.task_id == task_id)
-        ).all()
-        if user not in owners:
-            raise HTTPException(403, "members can only edit their own tasks")
+    if role != "manager" and not is_owner:
+        raise HTTPException(403, "members can only edit their own tasks")
 
     md = note.body_md
     changed = False

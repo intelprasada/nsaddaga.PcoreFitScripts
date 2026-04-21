@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type Task } from "../../api/client";
+import { api, ApiError, type Task } from "../../api/client";
 
 const STATUSES = ["todo", "in-progress", "blocked", "done"];
 const PRIORITIES = ["", "P0", "P1", "P2", "P3"];
@@ -73,10 +73,24 @@ export function TaskEditPopover({ task, onClose }: Props) {
       onClose();
     },
     onError: (e: any) => {
-      const msg = String(e?.message ?? e);
-      setErr(msg.includes("403")
-        ? "You can't edit this task. Members can only edit tasks they own."
-        : msg);
+      // Prefer the typed ApiError carrying the server's `detail` field.
+      if (e instanceof ApiError) {
+        if (e.status === 403) {
+          if (/no access to project/i.test(e.detail)) {
+            setErr("Permission denied: you don't have access to this task's project. Ask an admin to add you to the project, or to add you as an @owner of this task.");
+          } else if (/manager role/i.test(e.detail)) {
+            setErr("Permission denied: this action requires the project manager role.");
+          } else if (/own/i.test(e.detail)) {
+            setErr("You can't edit this task — only its @owners (or a project manager / admin) can.");
+          } else {
+            setErr(`Permission denied: ${e.detail}`);
+          }
+        } else {
+          setErr(`${e.status}: ${e.detail}`);
+        }
+      } else {
+        setErr(String(e?.message ?? e));
+      }
     },
   });
 
