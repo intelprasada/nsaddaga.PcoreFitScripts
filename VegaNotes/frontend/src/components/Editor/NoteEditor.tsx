@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useRef, useState } from "react";
 
 interface Props {
   value: string;
@@ -8,33 +8,28 @@ interface Props {
 /**
  * VegaNotes markdown editor.
  *
- * Implementation: a transparent <textarea> stacked on top of a syntax-
- * highlighted <pre> mirror. To keep typing smooth on large notes, the
- * editor manages its own local string state and only pushes upward on a
- * short debounce (or on blur / unmount). The highlight pass is fed via
- * React's `useDeferredValue` so it can be skipped when input is bursty.
+ * Architecture: a transparent <textarea> stacked on top of a syntax-highlighted
+ * mirror <pre> made of one <div> per source line. To keep typing smooth on
+ * large notes:
+ *   - keystrokes only update local state and a debounced upward push;
+ *   - highlight runs through useDeferredValue so React can interrupt;
+ *   - per-line LRU cache means unchanged lines never re-tokenize (#47);
+ *   - the mirror is patched line-by-line — only changed lines have their
+ *     innerHTML rewritten, instead of rebuilding the whole document (#48);
+ *   - scroll sync is rAF-throttled to avoid layout thrash on long notes (#52).
  */
 export function NoteEditor({ value, onChange }: Props) {
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const preRef = useRef<HTMLPreElement | null>(null);
 
-  // Local string keeps keystrokes off the App-level state path.
   const [local, setLocal] = useState(value);
-  // Track the last value we pushed up so an incoming prop change that just
-  // mirrors our own emission doesn't clobber the cursor.
   const lastEmitted = useRef(value);
   const flushTimer = useRef<number | null>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
-  // Mirror `local` into a ref so the unmount cleanup (which has a stale
-  // closure on `local` and runs AFTER React has nulled DOM refs) can still
-  // read the most recent typed text. Without this, switching tabs while a
-  // sub-200ms edit was pending lost the in-flight characters.
   const localRef = useRef(local);
   useEffect(() => { localRef.current = local; }, [local]);
 
-  // Sync local <- prop only on a real external swap (path switch, server
-  // reload, etc.), never on echoes of our own debounced upward push.
   useEffect(() => {
     if (value !== local && value !== lastEmitted.current) {
       setLocal(value);
@@ -42,11 +37,40 @@ export function NoteEditor({ value, onChange }: Props) {
     }
   }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Render the highlighted overlay from a deferred copy so React can
-  // interrupt and prioritize keystrokes.
   const deferred = useDeferredValue(local);
-  const html = useMemo(() => highlight(deferred), [deferred]);
-  useEffect(() => { if (preRef.current) preRef.current.innerHTML = html; }, [html]);
+
+  // Per-line shadow + DOM patcher. We track the last-applied per-line HTML
+  // strings so a render only touches DOM nodes whose content actually changed.
+  const lastLineHtml = useRef<string[]>([]);
+  useEffect(() => {
+    const pre = preRef.current;
+    if (!pre) return;
+    const newLines = deferred.split("\n");
+    const newHtml = newLines.map((ln) => highlightLineCached(ln));
+    const prev = lastLineHtml.current;
+
+    // Patch existing line nodes in place where HTML differs.
+    const common = Math.min(prev.length, newHtml.length);
+    for (let i = 0; i < common; i++) {
+      if (prev[i] !== newHtml[i]) {
+        const node = pre.childNodes[i] as HTMLElement | undefined;
+        if (node) node.innerHTML = newHtml[i] || ZWS;
+      }
+    }
+    // Append new line nodes.
+    for (let i = prev.length; i < newHtml.length; i++) {
+      const div = document.createElement("div");
+      div.className = "vega-line";
+      div.innerHTML = newHtml[i] || ZWS;
+      pre.appendChild(div);
+    }
+    // Remove trailing line nodes the new content no longer has.
+    for (let i = prev.length - 1; i >= newHtml.length; i--) {
+      const node = pre.childNodes[i];
+      if (node) pre.removeChild(node);
+    }
+    lastLineHtml.current = newHtml;
+  }, [deferred]);
 
   const scheduleEmit = (next: string) => {
     if (flushTimer.current != null) window.clearTimeout(flushTimer.current);
@@ -68,10 +92,6 @@ export function NoteEditor({ value, onChange }: Props) {
     }
   };
 
-  // Make sure unmount (tab switch / new note) doesn't drop the in-flight edit.
-  // Read from `localRef` (always current) — the DOM textarea ref has already
-  // been detached by React at this point, and a closure on `local` would be
-  // stuck at the initial-mount value.
   useEffect(() => () => flushNow(localRef.current), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const update = (next: string) => {
@@ -101,10 +121,20 @@ export function NoteEditor({ value, onChange }: Props) {
     }
   }
 
+  // rAF-throttled scroll sync — coalesces bursts into one DOM write per frame.
+  const scrollScheduled = useRef(false);
   function onScroll(e: React.UIEvent<HTMLTextAreaElement>) {
     if (!preRef.current) return;
-    preRef.current.scrollTop = e.currentTarget.scrollTop;
-    preRef.current.scrollLeft = e.currentTarget.scrollLeft;
+    const ta = e.currentTarget;
+    if (scrollScheduled.current) return;
+    scrollScheduled.current = true;
+    requestAnimationFrame(() => {
+      scrollScheduled.current = false;
+      const pre = preRef.current;
+      if (!pre) return;
+      pre.scrollTop = ta.scrollTop;
+      pre.scrollLeft = ta.scrollLeft;
+    });
   }
 
   return (
@@ -128,15 +158,17 @@ export function NoteEditor({ value, onChange }: Props) {
   );
 }
 
-/* ---------- highlighter ---------------------------------------------------
- * Build the inner HTML of the mirror <pre>. We escape, then wrap matched
- * tokens in <span class="vega-..."> via non-overlapping passes.
- */
-const HEADING_RE = /^(\s*)(#{1,6})(\s+)(.*)$/gm;
-const TASK_RE    = /!task\b/g;
-const AR_RE      = /!AR\b/g;
-const USER_RE    = /(^|[\s([])@([a-zA-Z][\w.-]*)/g;
-const ATTR_RE    = /#([a-zA-Z][\w-]*)/g;
+/* ---------- highlighter (per-line, cached) -------------------------------- */
+
+// Empty-line placeholder: zero-width space so the <div> has a layout line
+// and the mirror's vertical extent matches the textarea exactly.
+const ZWS = "\u200b";
+
+const HEADING_LINE_RE = /^(\s*)(#{1,6})(\s+)(.*)$/;
+const TASK_RE = /!task\b/g;
+const AR_RE   = /!AR\b/g;
+const USER_RE = /(^|[\s([])@([a-zA-Z][\w.-]*)/g;
+const ATTR_RE = /#([a-zA-Z][\w-]*)/g;
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
@@ -144,26 +176,49 @@ function escapeHtml(s: string): string {
   );
 }
 
-function highlight(src: string): string {
-  // Trailing newline so the mirror grows with the textarea.
-  let s = escapeHtml(src.endsWith("\n") ? src : src + "\n");
-  // Headings first (line-based, multiline flag).
-  s = s.replace(HEADING_RE, (_m, lead, hashes, sp, rest) =>
-    `${lead}${hashes}${sp}<span class="vega-heading">${rest}</span>`);
-  // !task literal.
+function highlightLine(line: string): string {
+  let s = escapeHtml(line);
+  const m = HEADING_LINE_RE.exec(s);
+  if (m) {
+    s = `${m[1]}${m[2]}${m[3]}<span class="vega-heading">${m[4]}</span>`;
+  }
   s = s.replace(TASK_RE, '<span class="vega-task">!task</span>');
-  // !AR literal (Action Required sub-item under a parent task).
   s = s.replace(AR_RE, '<span class="vega-ar">!AR</span>');
-  // @user (preserves the leading char that gated the match).
   s = s.replace(USER_RE, (_m, lead, name) =>
     `${lead}<span class="vega-user">@${name}</span>`);
-  // #attr — must NOT eat the # inside our already-emitted spans, so guard
-  // by skipping any # that is immediately preceded by a letter/digit (which
-  // would already be inside a class name like "vega-heading").
-  s = s.replace(ATTR_RE, (m, name, off, full) => {
+  s = s.replace(ATTR_RE, (m2, name, off, full) => {
     const prev = full[off - 1];
-    if (prev && /[A-Za-z0-9_-]/.test(prev)) return m;
+    if (prev && /[A-Za-z0-9_-]/.test(prev)) return m2;
     return `<span class="vega-attr">#${name}</span>`;
   });
   return s;
+}
+
+// Bounded LRU cache. Most lines repeat unchanged across keystrokes, so the
+// cache lifts ~99% of the work in steady-state typing on large notes.
+const LINE_CACHE_MAX = 8192;
+const lineCache = new Map<string, string>();
+
+function highlightLineCached(line: string): string {
+  const hit = lineCache.get(line);
+  if (hit !== undefined) {
+    // LRU touch: re-insert to move to most-recent end.
+    lineCache.delete(line);
+    lineCache.set(line, hit);
+    return hit;
+  }
+  const out = highlightLine(line);
+  lineCache.set(line, out);
+  if (lineCache.size > LINE_CACHE_MAX) {
+    // Evict oldest (Map iterates in insertion order).
+    const firstKey = lineCache.keys().next().value as string | undefined;
+    if (firstKey !== undefined) lineCache.delete(firstKey);
+  }
+  return out;
+}
+
+// Exported for tests / external benchmarks. Renders the full document once,
+// not used in the hot render path (which patches per-line via the cache).
+export function highlight(src: string): string {
+  return src.split("\n").map(highlightLineCached).join("\n");
 }
