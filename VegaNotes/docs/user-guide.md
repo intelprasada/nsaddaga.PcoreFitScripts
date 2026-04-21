@@ -185,6 +185,27 @@ nothing else in the file is touched.
 Tip: if a task has no `#status` token, it shows up in `todo` and a `#status`
 token will be appended on the first drop.
 
+### Free-form `#status` values still bucket correctly
+
+You can hand-write descriptive statuses like
+`#status blocked by HSD approval` or `#status done but pending QA` — the
+parser scans the text for keywords and groups it into the right column on
+the Kanban while preserving your wording on disk. Trigger words and
+priority order are documented in `docs/syntax.md` → *Status keywords*.
+
+### Click a card to edit attributes inline
+
+Click anywhere on a card (the small **⋮⋮** handle in the top-right is for
+dragging). A popover opens with editable **status / priority / ETA / owners
+/ features / notes** fields. Each save fires one `PATCH /api/tasks/{id}`
+sending only the fields you changed; ownership rules are enforced server-
+side, so members get a friendly *"can't edit — not your task"* message
+when they try to edit a task they don't own.
+
+The **Notes** textarea writes free-form per-task notes as `#note <line>`
+continuation entries indented under the task in the markdown file (one
+entry per line in the textarea). Clearing the textarea removes the block.
+
 ---
 
 ## 6. Agenda — what's due next

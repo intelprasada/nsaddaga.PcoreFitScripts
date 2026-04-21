@@ -15,8 +15,18 @@ from typing import Callable, Dict
 from .time_parse import parse_eta, parse_duration, parse_priority_rank
 
 
-# Canonical task statuses. Aliases (case-insensitive) are mapped to one of
-# these values by :func:`normalize_status`. Anything else is preserved.
+# Canonical task statuses. ``normalize_status`` first tries an exact alias
+# match (case-insensitive); if that fails, it scans the raw value for any
+# trigger word from each canonical status's vocabulary, in priority order.
+# This means free-form values like "blocked by hsd approval" or "done but
+# waiting on QA" still bucket into the right kanban column while keeping
+# their original wording on disk.
+#
+# Order matters for ambiguous strings — earlier canonicals win:
+#   blocked > done > in-progress > todo
+# Rationale: "blocked" is the most actionable signal (call attention to
+# it); a "done" qualifier overrides "in progress"; "todo" is the default
+# fallback so it goes last.
 _STATUS_ALIASES: Dict[str, str] = {
     "in progress": "in-progress",
     "in_progress": "in-progress",
@@ -37,12 +47,41 @@ _STATUS_ALIASES: Dict[str, str] = {
     "stuck": "blocked",
 }
 
+# Trigger words scanned with word boundaries inside free-form values.
+# Listed canonical-by-canonical in priority order.
+_STATUS_TRIGGERS: list[tuple[str, list[str]]] = [
+    ("blocked",     ["blocked", "block", "stuck", "waiting", "hold", "on-hold", "on_hold"]),
+    ("done",        ["done", "complete", "completed", "finished", "closed", "shipped", "merged"]),
+    ("in-progress", ["wip", "doing", "working", "inprogress", "in-progress", "in_progress", "started", "ongoing"]),
+    ("todo",        ["todo", "to-do", "pending", "open", "new", "queued", "backlog"]),
+]
+# Pre-compile a single regex per canonical for fast scanning.
+import re as _re
+_STATUS_TRIGGER_RES: list[tuple[str, "_re.Pattern[str]"]] = [
+    (canon, _re.compile(r"\b(?:" + "|".join(_re.escape(w) for w in words) + r")\b", _re.IGNORECASE))
+    for canon, words in _STATUS_TRIGGERS
+]
+
 
 def normalize_status(value: str) -> str:
     if not value:
         return "todo"
     v = value.strip().lower()
-    return _STATUS_ALIASES.get(v, v)
+    # 1. Exact alias hit (covers single-word inputs like "wip", "complete").
+    if v in _STATUS_ALIASES:
+        return _STATUS_ALIASES[v]
+    # 2. If the value is exactly one of the canonical buckets, keep it.
+    if v in {"todo", "in-progress", "blocked", "done"}:
+        return v
+    # 3. Free-form value — scan for trigger words, in canonical priority
+    #    order (blocked > done > in-progress > todo).
+    for canon, pat in _STATUS_TRIGGER_RES:
+        if pat.search(v):
+            return canon
+    # 4. Nothing matched — preserve the original (lower-cased) so we never
+    #    silently lose information; the kanban will still bucket it under
+    #    "todo" (fallback) but the literal value remains in the .md file.
+    return v
 
 
 @dataclass(frozen=True)

@@ -18,7 +18,7 @@ back into the file.
 | `#priority <val>` | Priority in user vocabulary (P0..P3, high/med/low)        | `#priority P1`                   |
 | `#project <name>` | Project bucket                                            | `#project veganotes`             |
 | `#owner <name>`   | Owner — repeat for multiple                               | `#owner alice #owner bob`        |
-| `#status <val>`   | `todo` \| `in-progress` \| `done` \| `blocked`            | `#status done`                   |
+| `#status <val>`   | Task status — accepts canonical values, alias keywords, or any free-form text. The parser **scans the value for trigger words** to bucket it into one of `todo` / `in-progress` / `blocked` / `done` for views like the Kanban; the original text is preserved on disk. See *Status keywords* below. | `#status done`, `#status blocked by HSD approval` |
 | `#estimate <dur>` | Effort (`30m`, `2h`, `1d`, `0.5w`)                        | `#estimate 4h`                   |
 | `#feature <name>` | Cross-cutting feature label                               | `#feature search-rewrite`        |
 | `#link <slug>`    | Generic bidirectional link                                | `#link rfc-2026-04`              |
@@ -61,6 +61,40 @@ This produces:
 - `migrate-index` has `direction='out'` links to `wire-up-sso` and `rfc-2026-04`
 - `wire-up-sso` automatically has a `direction='in'` link from `migrate-index`
   via the `links_bidir` view.
+
+## Status keywords
+
+`#status` is the most permissive token: any value works, but the parser
+canonicalizes each task into one of four buckets that views (Kanban, agenda,
+filters) understand. The literal text you typed is **preserved on disk** —
+canonicalization only affects in-memory grouping.
+
+Resolution order (first hit wins):
+
+1. **Exact alias match** (case-insensitive) against the table below.
+2. **Already a canonical value** (`todo` / `in-progress` / `blocked` / `done`) — kept.
+3. **Trigger-word scan** of the value for any of the keywords below, in
+   priority order **`blocked` > `done` > `in-progress` > `todo`**. So
+   `#status blocked by HSD approval` → bucket = `blocked`,
+   `#status done but pending QA` → bucket = `done`.
+4. Otherwise the value is preserved verbatim (kanban falls back to **todo**
+   for unknown buckets, but no information is lost from the file).
+
+| Canonical bucket | Exact aliases (case-insensitive)                                     | Free-form trigger words (word-boundary match anywhere in the value) |
+| ---------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| **`blocked`**    | `block`, `blocked`, `stuck`                                          | `blocked`, `block`, `stuck`, `waiting`, `hold`, `on-hold`, `on_hold` |
+| **`done`**       | `complete`, `completed`, `done`, `finished`, `closed`                | `done`, `complete`, `completed`, `finished`, `closed`, `shipped`, `merged` |
+| **`in-progress`**| `in progress`, `in-progress`, `in_progress`, `inprogress`, `wip`, `doing`, `working` | `wip`, `doing`, `working`, `inprogress`, `in-progress`, `in_progress`, `started`, `ongoing` |
+| **`todo`**       | `todo`, `to-do`, `open`, `pending` (also: empty `#status` defaults here) | `todo`, `to-do`, `pending`, `open`, `new`, `queued`, `backlog` |
+
+Tuning: edit `_STATUS_ALIASES` and `_STATUS_TRIGGERS` in
+`backend/app/parser/tokens.py`. Order of `_STATUS_TRIGGERS` decides
+ambiguous-string priority — re-order to change which bucket wins for values
+that mention multiple keywords.
+
+The Edit Task popover and Kanban drag-and-drop only emit canonical values,
+so structured edits stay clean; free-form `#status` text only enters when
+hand-edited in the markdown file.
 
 ## Adding a new token
 
