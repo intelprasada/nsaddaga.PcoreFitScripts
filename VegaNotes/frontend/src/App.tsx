@@ -40,6 +40,15 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
+  // Mirror of the live notes list so cleanup/beforeunload handlers can check
+  // whether a draft path still exists on the server. Without this, deleting a
+  // note whose buffer is still cached in `draft` would resurrect it via
+  // autosave on tab switch / page unload.
+  const knownPathsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    knownPathsRef.current = new Set(notes.map((n) => n.path));
+  }, [notes]);
+
   useEffect(() => {
     if (!selectedPath && notes[0]) setSelectedPath(notes[0].path);
   }, [notes, selectedPath, setSelectedPath]);
@@ -90,7 +99,9 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
       saveTimers.current[path] = setTimeout(() => {
         delete saveTimers.current[path];
         const cur = draft[path];
-        if (cur && cur.body !== cur.saved) flushSave(path, cur.body);
+        if (!cur || cur.body === cur.saved) return;
+        if (cur.savedAt > 0 && !knownPathsRef.current.has(path)) return;
+        flushSave(path, cur.body);
       }, 800);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -104,7 +115,8 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
       // Use a fresh closure over current draft via setDraft trick.
       setDraft((prev) => {
         for (const [path, e] of Object.entries(prev)) {
-          if (e.body !== e.saved) {
+          if (e.body !== e.saved
+              && (e.savedAt === 0 || knownPathsRef.current.has(path))) {
             api.saveNote(path, e.body).then(() => {
               setDraft((p2) => p2[path]
                 ? { ...p2, [path]: { ...p2[path], saved: e.body, savedAt: Date.now() } }
@@ -125,7 +137,8 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
   useEffect(() => {
     const handler = () => {
       for (const [path, e] of Object.entries(draft)) {
-        if (e.body !== e.saved) {
+        if (e.body !== e.saved
+            && (e.savedAt === 0 || knownPathsRef.current.has(path))) {
           // Best-effort sync POST via sendBeacon if available.
           try { api.saveNote(path, e.body); } catch {}
         }
@@ -148,6 +161,36 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
   };
 
   const onSave = () => { if (selectedPath && entry) flushSave(selectedPath, entry.body); };
+
+  const onStampIds = async () => {
+    if (!selectedPath || !entry) return;
+    if (dirty) {
+      const ok = window.confirm(
+        `${selectedPath} has unsaved changes. Save them before stamping IDs?`,
+      );
+      if (!ok) return;
+      await flushSave(selectedPath, entry.body);
+    }
+    setStatus("saving");
+    try {
+      const r = await api.stampTaskIds(selectedPath);
+      setDraft((prev) => ({
+        ...prev,
+        [selectedPath]: { body: r.body_md, saved: r.body_md, savedAt: Date.now() },
+      }));
+      qc.invalidateQueries({ queryKey: ["notes"] });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      setStatus("saved");
+      if (r.injected === 0) {
+        alert("All tasks already have IDs.");
+      } else {
+        alert(`Stamped ${r.injected} new task ID${r.injected === 1 ? "" : "s"}.`);
+      }
+    } catch (e: any) {
+      setStatus("error");
+      alert(`Stamp IDs failed: ${e?.message ?? e}`);
+    }
+  };
 
   const onRefresh = async () => {
     if (!selectedPath) return;
@@ -200,6 +243,11 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
           disabled={!selectedPath} onClick={onRefresh}
           title="Reload this note from disk (e.g. after editing in Vim or rolling to next week)">
           ↻ Refresh
+        </button>
+        <button className="rounded border px-3 py-1 text-sm disabled:opacity-50"
+          disabled={!selectedPath} onClick={onStampIds}
+          title="Inject stable #id tokens into every !task / !AR line that doesn't have one. Required for cross-week deduplication.">
+          # Stamp IDs
         </button>
         <NewNoteButton selectedPath={selectedPath} onCreated={setSelectedPath} />
         <NextWeekButton selectedPath={selectedPath} entry={entry}
@@ -402,7 +450,20 @@ export default function App() {
         <NavBar />
         <FilterBar />
         <div className="flex-1 flex overflow-hidden">
-          <Sidebar selectedPath={selectedPath} onSelect={(p) => { setSelectedPath(p); useUI.getState().set({ view: "editor" }); }} />
+          <Sidebar
+            selectedPath={selectedPath}
+            onSelect={(p) => { setSelectedPath(p); useUI.getState().set({ view: "editor" }); }}
+            onAfterDelete={(matches) => {
+              setDraft((prev) => {
+                const next: DraftMap = {};
+                for (const [path, e] of Object.entries(prev)) {
+                  if (!matches(path)) next[path] = e;
+                }
+                return next;
+              });
+              if (matches(selectedPath)) setSelectedPath("");
+            }}
+          />
           <main className="flex-1 overflow-y-auto">
             <ViewSwitcher selectedPath={selectedPath} setSelectedPath={setSelectedPath} draft={draft} setDraft={setDraft} />
           </main>
