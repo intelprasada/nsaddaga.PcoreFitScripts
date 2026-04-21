@@ -326,6 +326,71 @@ def remove_attr(md: str, line_no: int, key: str) -> str:
     return "".join(lines)
 
 
+def _continuation_pad(lines: list[str], task_line_no: int) -> str:
+    """Indent string for a continuation line written under the task at
+    ``lines[task_line_no]``.
+
+    Strategy (in order):
+
+    1. **Mirror an existing sibling continuation** of this same task — any
+       line below the task whose indent is strictly greater than the task's
+       and whose first non-whitespace char is ``#`` or ``@``. Copy its
+       leading whitespace verbatim.
+    2. **Mirror any other task's continuation** in the same file — compute
+       the *delta* (extra leading whitespace beyond the task's own) and
+       apply that delta to the target task. Falls back to step 3 if none
+       found.
+    3. **Default**: tab-style (``\\t`` in the task's whitespace) → add one
+       more ``\\t``. Space-style → add ``  `` (two spaces). Root-level
+       task → ``  ``.
+
+    This avoids the previous bug where deeply space-indented tasks got an
+    even deeper run of spaces (+8 on an 8-space task), placing notes two
+    tab-stops below the task instead of one indent step deeper.
+    """
+    task_line = lines[task_line_no]
+    task_ws_len = len(task_line) - len(task_line.lstrip(" \t"))
+    task_ws = task_line[:task_ws_len]
+
+    # 1. Existing NON-note continuation under THIS task wins. We deliberately
+    #    skip sibling `#note` lines because we're about to rewrite them — and
+    #    if a previous buggy save left them at the wrong indent we'd happily
+    #    perpetuate it.
+    for j in range(task_line_no + 1, len(lines)):
+        raw = lines[j]
+        stripped = raw.lstrip(" \t")
+        ws_len = len(raw) - len(stripped)
+        if ws_len <= task_ws_len:
+            break
+        if stripped[:1] in ("#", "@") and not re.match(r"#note(\s|$)", stripped, re.IGNORECASE):
+            return raw[:ws_len]
+
+    # 2. Learn the convention from any other task's continuation in the file.
+    last_task_ws: str | None = None
+    for raw in lines:
+        stripped = raw.lstrip(" \t")
+        ws_len = len(raw) - len(stripped)
+        ws = raw[:ws_len]
+        if stripped.startswith(("- !task", "* !task", "- !AR", "* !AR",
+                                 "!task", "!AR")):
+            last_task_ws = ws
+            continue
+        if last_task_ws is None:
+            continue
+        if ws_len > len(last_task_ws) and stripped[:1] in ("#", "@") \
+                and not re.match(r"#note(\s|$)", stripped, re.IGNORECASE):
+            delta = ws[len(last_task_ws):]
+            if delta:
+                return task_ws + delta
+
+    # 3. Defaults.
+    if not task_ws:
+        return "  "
+    if "\t" in task_ws:
+        return task_ws + "\t"
+    return task_ws + "  "
+
+
 def replace_notes(md: str, task_line_no: int, task_indent: int, new_notes: str) -> str:
     """Rewrite the multi-line ``#note`` continuation block under a task.
 
@@ -356,7 +421,12 @@ def replace_notes(md: str, task_line_no: int, task_indent: int, new_notes: str) 
         block_end += 1
 
     new_block: list[str] = []
-    pad = " " * (task_indent + 2)
+    # Mirror the task line's whitespace style so generated #note lines align
+    # with hand-authored continuation lines (e.g. tab-indented #status). The
+    # legacy `task_indent` integer is intentionally ignored here because it
+    # collapses tabs and spaces into a single character count, which produced
+    # visibly misaligned output (see issue #54).
+    pad = _continuation_pad(lines, task_line_no)
     for raw_line in (new_notes or "").split("\n"):
         text = raw_line.strip()
         if not text:
@@ -366,6 +436,56 @@ def replace_notes(md: str, task_line_no: int, task_indent: int, new_notes: str) 
     # If the file didn't end with a newline at task_line_no, ensure we don't
     # break joining; splitlines(keepends=True) already preserved that.
     return "".join(lines[:block_start] + new_block + lines[block_end:])
+
+
+def append_note(md: str, task_line_no: int, text: str) -> str:
+    """Append one or more new ``#note`` continuation lines under a task.
+
+    Unlike :func:`replace_notes` (which rewrites the whole block), this is the
+    journaling primitive: it leaves every existing ``#note`` line in place and
+    inserts the new entries **after** the last existing one, so each save adds
+    a row instead of overwriting prior history.
+
+    ``text`` may contain newlines — each non-empty line becomes one entry.
+    The emitted line shape is the bare ``<pad>#note <text>`` form; no
+    timestamp or author is auto-prefixed (users keep their notes clean).
+    """
+    if not text or not text.strip():
+        return md
+    lines = md.splitlines(keepends=True)
+    if task_line_no < 0 or task_line_no >= len(lines):
+        raise ValueError(f"line {task_line_no} out of range")
+
+    # Locate the end of any existing #note continuation block under this task.
+    task_raw = lines[task_line_no]
+    task_ws_len = len(task_raw) - len(task_raw.lstrip(" \t"))
+    insert_at = task_line_no + 1
+    while insert_at < len(lines):
+        raw = lines[insert_at]
+        stripped = raw.lstrip(" \t")
+        ind = len(raw) - len(stripped)
+        if ind <= task_ws_len:
+            break
+        if not re.match(r"#note(\s|$)", stripped, re.IGNORECASE):
+            break
+        insert_at += 1
+
+    pad = _continuation_pad(lines, task_line_no)
+
+    new_block: list[str] = []
+    for raw_line in text.split("\n"):
+        body = raw_line.strip()
+        if not body:
+            continue
+        new_block.append(f"{pad}#note {body}\n")
+
+    # Edge case: the task line might not end with a newline (last line of file
+    # with no trailing newline). Make sure we don't merge the task line and the
+    # first appended note.
+    if insert_at == task_line_no + 1 and not lines[task_line_no].endswith(("\n", "\r")):
+        lines[task_line_no] = lines[task_line_no] + "\n"
+
+    return "".join(lines[:insert_at] + new_block + lines[insert_at:])
 
 
 def replace_multi_attr(md: str, line_no: int, key: str, values: list[str]) -> str:

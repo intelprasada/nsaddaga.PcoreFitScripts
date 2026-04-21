@@ -148,3 +148,163 @@ def test_parser_ref_rows():
     rr = out["ref_rows"][0]
     assert rr["ref_id"] == "T-ABC123"
     assert rr["attrs"].get("status") == "in-progress"
+
+
+# --- replace_notes indent style (#54) ---------------------------------------
+
+from app.markdown_ops import replace_notes
+
+
+def test_replace_notes_preserves_tab_indent_style():
+    md = "\t- !task Foo\n\t\t#status todo\n"
+    # task line is index 0, _line_indent counts the tab as 1 char.
+    out = replace_notes(md, 0, 1, "first note\nsecond note")
+    lines = out.splitlines()
+    assert lines[0] == "\t- !task Foo"
+    assert lines[1] == "\t\t#note first note"
+    assert lines[2] == "\t\t#note second note"
+    # The hand-authored continuation line below should be preserved.
+    assert lines[3] == "\t\t#status todo"
+
+
+def test_replace_notes_preserves_4space_indent_style():
+    md = "    - !task Foo\n        #status todo\n"
+    out = replace_notes(md, 0, 4, "n1")
+    lines = out.splitlines()
+    assert lines[0] == "    - !task Foo"
+    assert lines[1] == "        #note n1"
+    assert lines[2] == "        #status todo"
+
+
+def test_replace_notes_preserves_2space_indent_style():
+    md = "  - !task Foo\n    #status todo\n"
+    out = replace_notes(md, 0, 2, "n1")
+    lines = out.splitlines()
+    assert lines[1] == "    #note n1"
+
+
+def test_replace_notes_root_level_task_uses_two_spaces():
+    md = "- !task Foo\n  #status todo\n"
+    out = replace_notes(md, 0, 0, "root note")
+    lines = out.splitlines()
+    assert lines[0] == "- !task Foo"
+    assert lines[1] == "  #note root note"
+    assert lines[2] == "  #status todo"
+
+
+def test_replace_notes_overwrites_existing_notes_with_correct_indent():
+    md = "\t- !task Foo\n\t\t#note old one\n\t\t#status todo\n"
+    out = replace_notes(md, 0, 1, "fresh")
+    lines = out.splitlines()
+    assert lines[1] == "\t\t#note fresh"
+    assert lines[2] == "\t\t#status todo"
+    assert "old one" not in out
+
+
+def test_replace_notes_empty_string_clears_block():
+    md = "\t- !task Foo\n\t\t#note keep me? no\n\t\t#status todo\n"
+    out = replace_notes(md, 0, 1, "")
+    assert "#note" not in out
+    assert "#status todo" in out
+
+
+# --- replace_notes: learns indent from existing siblings ---------------------
+
+def test_replace_notes_mirrors_existing_sibling_continuation():
+    # Two tasks; the first one already has a #status continuation that shows
+    # the file's convention. The note we insert under the SECOND task should
+    # use the same delta.
+    md = (
+        "        - !task First\n"
+        "            #status todo\n"
+        "        - !task Second\n"
+    )
+    out = replace_notes(md, 2, 8, "second note")
+    lines = out.splitlines()
+    # Task at 8sp, sibling-task continuation at 12sp (delta = 4sp). New note
+    # should match: 8 + 4 = 12 spaces — NOT 16.
+    assert lines[3] == "            #note second note", repr(lines[3])
+
+
+def test_replace_notes_under_8space_task_no_siblings_uses_2space_step():
+    # No other task in the file has a continuation line, so we fall back
+    # to the conservative 2-space step (not 8).
+    md = "        - !task Lonely\n"
+    out = replace_notes(md, 0, 8, "n")
+    lines = out.splitlines()
+    assert lines[1] == "          #note n", repr(lines[1])  # 8 + 2
+
+
+def test_replace_notes_ignores_existing_note_block_for_indent_inference():
+    # If THIS task only has a hand-authored #note above ours (no #status etc.),
+    # we deliberately DO NOT trust its indent — it might be from an earlier
+    # buggy save. Fall through to step 2/3.
+    md = (
+        "  - !task X\n"
+        "      #note hand-authored at 6sp (possibly bad)\n"
+    )
+    out = replace_notes(md, 0, 2, "replacement")
+    lines = out.splitlines()
+    # No other task-with-continuation in the file → default 2-space step.
+    # Task at 2sp + 2sp = 4sp.
+    assert lines[1] == "    #note replacement", repr(lines[1])
+
+
+# --- append_note (issue #53) -------------------------------------------------
+
+from app.markdown_ops import append_note
+
+
+def test_append_note_inserts_after_existing_block():
+    md = (
+        "\t- !task Foo\n"
+        "\t\t#note first\n"
+        "\t\t#status todo\n"
+    )
+    out = append_note(md, 0, "second")
+    lines = out.splitlines()
+    # First note kept, new one inserted directly after, then #status untouched.
+    assert lines[1] == "\t\t#note first"
+    assert lines[2] == "\t\t#note second"
+    assert lines[3] == "\t\t#status todo"
+
+
+def test_append_note_with_no_existing_notes():
+    md = "\t- !task Foo\n\t\t#status todo\n"
+    out = append_note(md, 0, "first")
+    lines = out.splitlines()
+    assert lines[1] == "\t\t#note first"
+    assert lines[2] == "\t\t#status todo"
+
+
+def test_append_note_plain_text_no_auto_prefix():
+    md = "- !task Foo\n"
+    out = append_note(md, 0, "investigated")
+    lines = out.splitlines()
+    assert lines[1] == "  #note investigated"
+
+
+def test_append_note_multiline_creates_multiple_entries():
+    md = "- !task Foo\n"
+    out = append_note(md, 0, "line a\nline b\n\nline c")
+    lines = out.splitlines()
+    assert lines[1] == "  #note line a"
+    assert lines[2] == "  #note line b"
+    assert lines[3] == "  #note line c"
+
+
+def test_append_note_empty_input_is_noop():
+    md = "- !task Foo\n"
+    assert append_note(md, 0, "") == md
+    assert append_note(md, 0, "   \n  ") == md
+
+
+def test_append_note_preserves_prior_history_on_repeat_calls():
+    md = "- !task Foo\n"
+    md = append_note(md, 0, "one")
+    md = append_note(md, 0, "two")
+    md = append_note(md, 0, "three")
+    lines = md.splitlines()
+    assert lines[1] == "  #note one"
+    assert lines[2] == "  #note two"
+    assert lines[3] == "  #note three"

@@ -17,6 +17,7 @@ from ..db import get_session
 from ..indexer import reindex_file, remove_path
 from ..markdown_ops import (
     inject_missing_ids, replace_attr, replace_multi_attr, replace_notes,
+    append_note,
     remove_attr, roll_to_next_week, update_task_status,
 )
 from ..models import (
@@ -101,6 +102,7 @@ def _task_to_dict(s: Session, t: Task, *, include_children: bool = False) -> dic
         "eta": next((a.value_norm for a in attrs if a.key == "eta"), None),
         "priority_rank": next((int(a.value_norm) for a in attrs if a.key == "priority" and a.value_norm), 999),
         "notes": "\n".join(a.value for a in attrs if a.key == "note"),
+        "note_history": [a.value for a in attrs if a.key == "note"],
     }
     if include_children:
         kids = s.exec(
@@ -738,7 +740,14 @@ class TaskPatch(BaseModel):
     eta: Optional[str] = None       # e.g. "2026-W18", "2026-04-30", or "" to clear
     owners: Optional[list[str]] = None    # full replacement; [] clears
     features: Optional[list[str]] = None  # full replacement; [] clears
-    notes: Optional[str] = None     # multi-line free text; "" clears the block
+    # Append a new `#note` continuation line under the task (preferred).
+    # Multi-line input becomes one `#note` per non-empty line, all sharing
+    # the same auto-prepended timestamp + author. Existing notes are kept.
+    add_note: Optional[str] = None
+    # Legacy "overwrite the whole notes block" — only honored if `add_note`
+    # is not provided. Empty string clears the block. Kept for backwards
+    # compat but discouraged because it destroys history (see issue #53).
+    notes: Optional[str] = None
 
 
 @router.patch("/tasks/{task_id}")
@@ -793,7 +802,11 @@ def patch_task(
         cleaned = [f.strip() for f in body.features if f and f.strip()]
         md = replace_multi_attr(md, t.line, "feature", cleaned)
         changed = True
-    if body.notes is not None:
+    if body.add_note is not None and body.add_note.strip():
+        md = append_note(md, t.line, body.add_note)
+        changed = True
+    elif body.notes is not None:
+        # Legacy overwrite-the-block path. Discouraged; see issue #53.
         md = replace_notes(md, t.line, t.indent, body.notes)
         changed = True
 

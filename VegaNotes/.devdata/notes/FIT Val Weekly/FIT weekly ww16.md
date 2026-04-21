@@ -47,8 +47,10 @@
 @Kushwanth
 	#project jnc
         !task IDQ Ramp up #eta ww17 #id T-C83H1K
-      #note verified by smoke test
+            #note verified by smoke test
 	#project gfc
-        !task Enabling Swpf For the fsm #eta ww16 #id T-WYPS53
+       !task Enabling Swpf For the fsm #eta ww16 #id T-WYPS53
         !task MCA/Parity assertions for GFC #status blocked by HSD approval #id T-8A90E0
-      #note where is my notes
+        	#note testing indent fix second time
+        	#note plain note one
+        	#note plain note two

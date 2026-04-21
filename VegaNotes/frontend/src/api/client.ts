@@ -26,6 +26,7 @@ export interface Task {
   parent_task_id: number | null;
   note_id: number;
   notes?: string;
+  note_history?: string[];
   children?: ChildTask[];
 }
 
@@ -139,6 +140,7 @@ export const api = {
     eta?: string;
     owners?: string[];
     features?: string[];
+    add_note?: string;
     notes?: string;
   }) =>
     req<Task>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),

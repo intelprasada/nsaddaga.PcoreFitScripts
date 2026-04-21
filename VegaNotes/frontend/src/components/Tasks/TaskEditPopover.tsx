@@ -32,14 +32,14 @@ export function TaskEditPopover({ task, onClose }: Props) {
   const initialEta = task.eta ?? "";
   const initialOwners = task.owners.join(", ");
   const initialFeatures = task.features.join(", ");
-  const initialNotes = task.notes ?? "";
+  const noteHistory = task.note_history ?? (task.notes ? task.notes.split("\n").filter(Boolean) : []);
 
   const [status, setStatus] = useState(task.status);
   const [priority, setPriority] = useState(initialPriority);
   const [eta, setEta] = useState(initialEta);
   const [owners, setOwners] = useState(initialOwners);
   const [features, setFeatures] = useState(initialFeatures);
-  const [notes, setNotes] = useState(initialNotes);
+  const [newNote, setNewNote] = useState("");
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -61,7 +61,7 @@ export function TaskEditPopover({ task, onClose }: Props) {
       if (newOwners.join(",") !== task.owners.join(",")) patch.owners = newOwners;
       const newFeatures = splitCsv(features);
       if (newFeatures.join(",") !== task.features.join(",")) patch.features = newFeatures;
-      if (notes !== initialNotes) patch.notes = notes;
+      if (newNote.trim()) patch.add_note = newNote;
       if (Object.keys(patch).length === 0) return Promise.resolve(task);
       return api.updateTask(task.id, patch);
     },
@@ -158,13 +158,29 @@ export function TaskEditPopover({ task, onClose }: Props) {
               placeholder="auth, billing" />
           </Field>
 
-          <Field label="Notes" hint="Free-form per-task notes. Stored as `#note` continuation lines under the task in the .md file. Newlines = separate `#note` entries.">
+          <Field label="Notes — history" hint={noteHistory.length === 0 ? "No prior notes." : `${noteHistory.length} entr${noteHistory.length === 1 ? "y" : "ies"}, oldest first. Read-only — entries are append-only and preserved verbatim from the .md file.`}>
+            {noteHistory.length === 0 ? (
+              <div className="text-xs italic text-slate-400 border border-dashed rounded p-2">
+                (none)
+              </div>
+            ) : (
+              <ul className="border rounded divide-y bg-slate-50 max-h-32 overflow-y-auto">
+                {noteHistory.map((line, i) => (
+                  <li key={i} className="px-2 py-1 text-xs font-mono text-slate-700 whitespace-pre-wrap break-words">
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Field>
+
+          <Field label="Add a note" hint="Appended as a new `#note` continuation line under the task. Auto-prefixed with timestamp + your @handle. Newlines = multiple entries. Existing notes are NOT overwritten.">
             <textarea
               className="border rounded px-2 py-1 text-sm w-full font-mono"
-              rows={4}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="e.g. blocked on review from @alice; retry after WW19 sync"
+              rows={3}
+              value={newNote}
+              onChange={(e) => setNewNote(e.target.value)}
+              placeholder="e.g. filed bug 12345; waiting on @alice for review"
             />
           </Field>
 
