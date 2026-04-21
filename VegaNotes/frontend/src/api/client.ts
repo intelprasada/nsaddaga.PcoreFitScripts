@@ -47,13 +47,42 @@ export interface AgendaResponse {
 
 const BASE = "/api";
 
+/** Error thrown by `req()` for any non-2xx response. Carries the parsed
+ * server `detail` (when JSON) so callers can surface a precise message. */
+export class ApiError extends Error {
+  status: number;
+  detail: string;
+  path: string;
+  body: unknown;
+  constructor(status: number, statusText: string, path: string, detail: string, body: unknown) {
+    super(`${status} ${detail || statusText} on ${path}`);
+    this.status = status;
+    this.path = path;
+    this.detail = detail || statusText;
+    this.body = body;
+  }
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(BASE + path, {
     credentials: "include",
     ...init,
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
   });
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText} on ${path}`);
+  if (!r.ok) {
+    let body: unknown = null;
+    let detail = "";
+    try {
+      body = await r.json();
+      if (body && typeof body === "object" && "detail" in (body as any)) {
+        const d = (body as any).detail;
+        detail = typeof d === "string" ? d : JSON.stringify(d);
+      }
+    } catch {
+      try { detail = await r.text(); } catch { /* ignore */ }
+    }
+    throw new ApiError(r.status, r.statusText, path, detail, body);
+  }
   return r.json() as Promise<T>;
 }
 
