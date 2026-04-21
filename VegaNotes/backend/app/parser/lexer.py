@@ -121,10 +121,18 @@ def lex(line: str) -> List[Union[TextChunk, Token]]:
                 i = end
                 last = end
                 continue
-            value, end = _read_value(line, m.end(), until_hash=(name == "status"))
+            value, end = _read_value(line, m.end(), until_hash=(name in ("status", "note")))
             raw = line[start:end]
             if name == "status":
                 value = value.strip()
+            elif name == "note":
+                # Trim trailing whitespace but keep internal spaces; an empty
+                # note token (just `#note` with no value) is dropped.
+                value = value.strip()
+                if not value:
+                    i = end
+                    last = end
+                    continue
             out.append(Token(kind="attr", name=name, value=value, raw=raw, col=start))
             i = end
             last = end

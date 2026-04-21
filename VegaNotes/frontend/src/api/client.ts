@@ -25,6 +25,7 @@ export interface Task {
   priority_rank: number;
   parent_task_id: number | null;
   note_id: number;
+  notes?: string;
   children?: ChildTask[];
 }
 
@@ -103,7 +104,14 @@ export const api = {
     for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") qs.set(k, String(v));
     return req<TasksResponse>(`/tasks?${qs.toString()}`);
   },
-  updateTask: (id: number, patch: { status?: string }) =>
+  updateTask: (id: number, patch: {
+    status?: string;
+    priority?: string;
+    eta?: string;
+    owners?: string[];
+    features?: string[];
+    notes?: string;
+  }) =>
     req<Task>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 
   agenda: (owner?: string, days?: number, start?: string, end?: string) => {

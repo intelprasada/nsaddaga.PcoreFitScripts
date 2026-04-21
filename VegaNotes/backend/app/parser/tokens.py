@@ -64,6 +64,7 @@ REGISTRY: Dict[str, TokenSpec] = {
     "estimate": TokenSpec("estimate", normalize=parse_duration),
     "feature":  TokenSpec("feature",  multi=True),
     "link":     TokenSpec("link",     multi=True),
+    "note":     TokenSpec("note",     multi=True),
 }
 
 

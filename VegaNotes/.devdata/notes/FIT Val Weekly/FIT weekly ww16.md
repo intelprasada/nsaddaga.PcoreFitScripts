@@ -1,7 +1,7 @@
 # FIT Val weekly ww16
 @aboli
 	#project gfc
-		!task MCA – Disable IDQ proof assertion failing during XLAT Error #id T-32M9NF
+ !task MCA – Disable IDQ proof assertion failing during XLAT Error #id T-32M9NF #priority P1 #eta 2026-W18 @alice @bob #feature auth
 		RTL and FV IDQ assertions failing in XLAT Error tests
 			!AR why failing now #eta WW17.1 #status todo #id T-RXDG03
 	#project jnc

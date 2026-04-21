@@ -437,17 +437,29 @@ function NavBar() {
   if (me?.is_admin) tabs.push("admin");
 
   const logout = async () => {
-    // HTTP Basic has no real logout — overwrite the browser's cached creds
-    // for this origin with a bogus pair, then reload so the next request
-    // re-prompts. Works reliably in Firefox; Chrome usually drops them too.
-    try {
-      await fetch("/api/me", {
-        headers: { Authorization: "Basic " + btoa("logout:logout") },
-        cache: "no-store",
-      });
-    } catch { /* expected 401 */ }
-    // Tiny delay to let the failed request settle, then full reload.
-    setTimeout(() => { window.location.reload(); }, 50);
+    // HTTP Basic has no real "logout" — there's no portable, JS-driven way
+    // to clear the browser's cached credentials. We do the best we can:
+    //
+    //   1. Drop our React Query cache so no stale identity lingers in the UI.
+    //   2. Fire two requests with bogus Authorization headers so the
+    //      browser's credential cache for this origin is overwritten with
+    //      garbage. (One request isn't always enough on Chrome.)
+    //   3. Hard-replace the URL with a cache-buster so bfcache can't restore
+    //      the previous session.
+    //
+    // This is reliable on Firefox; usually-works on Chrome/Edge/Safari.
+    // For deterministic multi-user testing, an incognito/private window per
+    // identity is still the gold-standard approach.
+    qc.clear();
+    for (let i = 0; i < 2; i++) {
+      try {
+        await fetch("/api/me", {
+          headers: { Authorization: `Basic ${btoa(`logout-${Date.now()}-${i}:x`)}` },
+          cache: "no-store",
+        });
+      } catch { /* expected 401 */ }
+    }
+    window.location.replace("/?_logout=" + Date.now());
   };
 
   return (
@@ -466,7 +478,7 @@ function NavBar() {
       <button
         onClick={logout}
         className="text-xs text-slate-600 hover:bg-slate-100 rounded px-2 py-1 border"
-        title="Sign out (clears cached HTTP Basic credentials and reloads)"
+        title="Sign out. Note: HTTP Basic credentials are cached by the browser; if the prompt re-appears with the old user already accepted, hard-refresh (Ctrl+Shift+R) or use a private/incognito window for the cleanest switch."
       >
         logout
       </button>

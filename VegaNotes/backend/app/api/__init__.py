@@ -15,7 +15,10 @@ from ..auth import hash_password, require_admin, require_user
 from ..config import settings
 from ..db import get_session
 from ..indexer import reindex_file, remove_path
-from ..markdown_ops import inject_missing_ids, roll_to_next_week, update_task_status
+from ..markdown_ops import (
+    inject_missing_ids, replace_attr, replace_multi_attr, replace_notes,
+    remove_attr, roll_to_next_week, update_task_status,
+)
 from ..models import (
     Feature, Link, Note, Project, ProjectMember, Task, TaskAttr, TaskFeature,
     TaskOwner, TaskProject, User,
@@ -97,6 +100,7 @@ def _task_to_dict(s: Session, t: Task, *, include_children: bool = False) -> dic
         "attrs": attr_map,
         "eta": next((a.value_norm for a in attrs if a.key == "eta"), None),
         "priority_rank": next((int(a.value_norm) for a in attrs if a.key == "priority" and a.value_norm), 999),
+        "notes": "\n".join(a.value for a in attrs if a.key == "note"),
     }
     if include_children:
         kids = s.exec(
@@ -730,6 +734,11 @@ def remove_member(
 
 class TaskPatch(BaseModel):
     status: Optional[str] = None
+    priority: Optional[str] = None  # e.g. "P1", "P2", or "" to clear
+    eta: Optional[str] = None       # e.g. "2026-W18", "2026-04-30", or "" to clear
+    owners: Optional[list[str]] = None    # full replacement; [] clears
+    features: Optional[list[str]] = None  # full replacement; [] clears
+    notes: Optional[str] = None     # multi-line free text; "" clears the block
 
 
 @router.patch("/tasks/{task_id}")
@@ -750,21 +759,46 @@ def patch_task(
     if role == "none":
         raise HTTPException(403, "no access to project")
     if role == "member":
-        # Members may only modify tasks they own.
         owners = s.exec(
             select(User.name).join(TaskOwner, TaskOwner.user_id == User.id)
             .where(TaskOwner.task_id == task_id)
         ).all()
         if user not in owners:
             raise HTTPException(403, "members can only edit their own tasks")
-    if body.status is None:
+
+    md = note.body_md
+    changed = False
+    if body.status is not None:
+        md = update_task_status(md, t.line, body.status)
+        changed = True
+    if body.priority is not None:
+        md = (replace_attr(md, t.line, "priority", body.priority.strip())
+              if body.priority.strip() else remove_attr(md, t.line, "priority"))
+        changed = True
+    if body.eta is not None:
+        md = (replace_attr(md, t.line, "eta", body.eta.strip())
+              if body.eta.strip() else remove_attr(md, t.line, "eta"))
+        changed = True
+    if body.owners is not None:
+        cleaned = [o.strip().lstrip("@") for o in body.owners if o and o.strip()]
+        md = replace_multi_attr(md, t.line, "owner", cleaned)
+        changed = True
+    if body.features is not None:
+        cleaned = [f.strip() for f in body.features if f and f.strip()]
+        md = replace_multi_attr(md, t.line, "feature", cleaned)
+        changed = True
+    if body.notes is not None:
+        md = replace_notes(md, t.line, t.indent, body.notes)
+        changed = True
+
+    if not changed:
         return _task_to_dict(s, t)
-    new_md = update_task_status(note.body_md, t.line, body.status)
+
     full = settings.notes_dir / note.path
-    full.write_text(new_md, encoding="utf-8")
+    full.write_text(md, encoding="utf-8")
     reindex_file(full, s)
     refreshed = s.get(Task, task_id)
-    return _task_to_dict(s, refreshed) if refreshed else {"status": body.status}
+    return _task_to_dict(s, refreshed) if refreshed else {"ok": True}
 
 
 # ---------- users / search -------------------------------------------------

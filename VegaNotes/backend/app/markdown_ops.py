@@ -303,3 +303,95 @@ def replace_attr(md: str, line_no: int, key: str, new_value: str) -> str:
         body = f"{body}{sep}#{key} {new_value}"
     lines[line_no] = body + nl
     return "".join(lines)
+
+
+def remove_attr(md: str, line_no: int, key: str) -> str:
+    """Strip every ``#key <value>`` token (or ``@value`` for owner) from line."""
+    if not is_known(key):
+        raise ValueError(f"unknown token '{key}'")
+    lines = md.splitlines(keepends=True)
+    if line_no < 0 or line_no >= len(lines):
+        raise ValueError(f"line {line_no} out of range")
+    raw = lines[line_no]
+    nl = ""
+    body = raw
+    while body.endswith("\n") or body.endswith("\r"):
+        nl = body[-1] + nl
+        body = body[:-1]
+    body = re.sub(rf"\s*#{re.escape(key)}\s+\S+", "", body, flags=re.IGNORECASE)
+    if key == "owner":
+        body = re.sub(r"\s*@[a-zA-Z][\w.-]*", "", body)
+    body = re.sub(r"\s{2,}", " ", body).rstrip()
+    lines[line_no] = body + nl
+    return "".join(lines)
+
+
+def replace_notes(md: str, task_line_no: int, task_indent: int, new_notes: str) -> str:
+    """Rewrite the multi-line ``#note`` continuation block under a task.
+
+    The notes block is the contiguous run of lines immediately after
+    ``task_line_no`` whose stripped text begins with ``#note `` *and* whose
+    indent is strictly greater than ``task_indent``. (Other indented
+    continuation lines such as ``#status``/``@user`` are left untouched.)
+
+    ``new_notes`` is split on newlines; each non-empty line is emitted as
+    ``<task_indent+2 spaces>#note <text>`` immediately after the task line.
+    Passing an empty string deletes the block.
+    """
+    lines = md.splitlines(keepends=True)
+    if task_line_no < 0 or task_line_no >= len(lines):
+        raise ValueError(f"line {task_line_no} out of range")
+
+    # Find the existing notes block right after the task line.
+    block_start = task_line_no + 1
+    block_end = block_start
+    while block_end < len(lines):
+        raw = lines[block_end]
+        stripped_left = raw.lstrip(" \t")
+        ind = len(raw) - len(stripped_left)
+        if ind <= task_indent:
+            break
+        if not re.match(r"#note(\s|$)", stripped_left, re.IGNORECASE):
+            break
+        block_end += 1
+
+    new_block: list[str] = []
+    pad = " " * (task_indent + 2)
+    for raw_line in (new_notes or "").split("\n"):
+        text = raw_line.strip()
+        if not text:
+            continue
+        new_block.append(f"{pad}#note {text}\n")
+
+    # If the file didn't end with a newline at task_line_no, ensure we don't
+    # break joining; splitlines(keepends=True) already preserved that.
+    return "".join(lines[:block_start] + new_block + lines[block_end:])
+
+
+def replace_multi_attr(md: str, line_no: int, key: str, values: list[str]) -> str:
+    """Replace every occurrence of a multi-valued attr on ``line_no`` with ``values``.
+
+    For ``owner``, the ``@user`` sugar is used (and any existing ``#owner``
+    tokens are stripped); for other multi-valued keys, ``#key value`` tokens
+    are appended.
+    """
+    if not is_known(key):
+        raise ValueError(f"unknown token '{key}'")
+    md = remove_attr(md, line_no, key)
+    if not values:
+        return md
+    lines = md.splitlines(keepends=True)
+    raw = lines[line_no]
+    nl = ""
+    body = raw
+    while body.endswith("\n") or body.endswith("\r"):
+        nl = body[-1] + nl
+        body = body[:-1]
+    sep = "" if not body or body.endswith(" ") else " "
+    if key == "owner":
+        suffix = " ".join(f"@{v.lstrip('@')}" for v in values)
+    else:
+        suffix = " ".join(f"#{key} {v}" for v in values)
+    body = f"{body}{sep}{suffix}"
+    lines[line_no] = body + nl
+    return "".join(lines)
