@@ -1,67 +1,23 @@
 import { useMemo, useState } from "react";
-import {
-  DndContext, DragEndEvent, PointerSensor, useDroppable, useSensor, useSensors,
-} from "@dnd-kit/core";
-import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type Task } from "../../api/client";
 import { TaskCard } from "../Card/TaskCard";
 import { TaskEditPopover } from "../Tasks/TaskEditPopover";
 import { useUI } from "../../store/ui";
 
-const COLUMNS = ["todo", "in-progress", "blocked", "done"];
-
-function Column({ id, tasks, onOpen }: { id: string; tasks: Task[]; onOpen: (t: Task) => void }) {
-  const { setNodeRef, isOver } = useDroppable({ id });
-  return (
-    <div ref={setNodeRef}
-      className={`flex-1 min-w-[260px] rounded-lg p-3 transition ${
-        isOver ? "bg-sky-100" : "bg-slate-100"
-      }`}>
-      <div className="text-xs uppercase tracking-wide text-slate-500 mb-2 flex justify-between">
-        <span>{id}</span><span>{tasks.length}</span>
-      </div>
-      <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-        <div className="space-y-2">
-          {tasks.map((t) => <SortableCard key={t.id} task={t} onOpen={onOpen} />)}
-        </div>
-      </SortableContext>
-    </div>
-  );
-}
-
-function SortableCard({ task, onOpen }: { task: Task; onOpen: (t: Task) => void }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
-  const style = { transform: CSS.Transform.toString(transform), transition };
-  // Drag listeners are bound to a small handle so the rest of the card
-  // remains clickable for opening the edit popover.
-  return (
-    <div ref={setNodeRef} style={style} className="relative">
-      <div
-        {...attributes}
-        {...listeners}
-        title="drag to move between columns"
-        className="absolute top-1 right-1 z-10 cursor-grab text-slate-300 hover:text-slate-600 text-xs select-none px-1"
-      >⋮⋮</div>
-      <div className={isDragging ? "opacity-60" : ""}>
-        <TaskCard task={task} onOpen={onOpen} />
-      </div>
-    </div>
-  );
-}
+const COLUMNS = ["todo", "in-progress", "blocked", "done"] as const;
 
 /**
- * On drop, call PATCH /api/tasks/{id} with the new status. The backend
- * rewrites the underlying .md file and re-indexes — guaranteed round-trip.
+ * Kanban board.
  *
- * Click anywhere on a card (outside the drag handle) to open the inline
- * edit popover for the task.
+ * Status changes happen via ◀/▶ buttons on each card — no drag-and-drop.
+ * That tradeoff: arrows are reliable, work on touch, don't repaint the
+ * whole board on every pointer move, and skip the per-frame transform
+ * math that made the dnd-kit approach feel sluggish (issue #58 follow-up).
  */
 export function KanbanBoard() {
   const { filters } = useUI();
   const qc = useQueryClient();
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const [editing, setEditing] = useState<Task | null>(null);
   const { data } = useQuery({
     queryKey: ["tasks", filters, "kanban"],
@@ -84,29 +40,75 @@ export function KanbanBoard() {
   const move = useMutation({
     mutationFn: ({ task, newStatus }: { task: Task; newStatus: string }) =>
       api.updateTask(task.id, { status: newStatus }),
-    onSuccess: () => {
+    // Optimistic: flip the card's status in cache immediately so the UI
+    // moves on the next frame instead of waiting for the PATCH round-trip
+    // (which on a large file can take 1-2 s due to the full reindex; see
+    // issues #50 and #51).
+    onMutate: async ({ task, newStatus }) => {
+      await qc.cancelQueries({ queryKey: ["tasks"] });
+      const snapshots: Array<[readonly unknown[], unknown]> = [];
+      qc.getQueriesData({ queryKey: ["tasks"] }).forEach(([key, data]) => {
+        snapshots.push([key, data]);
+        if (!data || typeof data !== "object") return;
+        const d = data as { tasks?: Task[] };
+        if (!Array.isArray(d.tasks)) return;
+        qc.setQueryData(key, {
+          ...d,
+          tasks: d.tasks.map((t) =>
+            t.id === task.id ? { ...t, status: newStatus } : t,
+          ),
+        });
+      });
+      return { snapshots };
+    },
+    onError: (_err, _vars, ctx) => {
+      // Roll back on failure.
+      ctx?.snapshots.forEach(([key, data]) => qc.setQueryData(key, data));
+    },
+    onSettled: () => {
+      // Reconcile in the background. The optimistic state already shows
+      // the right column, so this refetch is invisible to the user.
       qc.invalidateQueries({ queryKey: ["tasks"] });
       qc.invalidateQueries({ queryKey: ["agenda"] });
       qc.invalidateQueries({ queryKey: ["note"] });
     },
   });
 
-  const onDragEnd = (e: DragEndEvent) => {
-    if (!e.over) return;
-    const task = tasks.find((t) => t.id === Number(e.active.id));
-    if (!task) return;
-    const newStatus = String(e.over.id);
-    if (!COLUMNS.includes(newStatus) || newStatus === task.status) return;
+  const setStatus = (task: Task, newStatus: string) => {
+    if (newStatus === task.status) return;
     move.mutate({ task, newStatus });
   };
 
   return (
     <>
-      <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-        <div className="flex gap-3 p-4 overflow-x-auto">
-          {COLUMNS.map((c) => <Column key={c} id={c} tasks={grouped[c]} onOpen={setEditing} />)}
-        </div>
-      </DndContext>
+      <div className="flex gap-3 p-4 overflow-x-auto">
+        {COLUMNS.map((c) => (
+          <div key={c} className="flex-1 min-w-[260px] rounded-lg p-3 bg-slate-100">
+            <div className="text-xs uppercase tracking-wide text-slate-500 mb-2 flex justify-between">
+              <span>{c}</span><span>{grouped[c].length}</span>
+            </div>
+            <div className="space-y-2">
+              {grouped[c].map((t) => (
+                <div key={t.id} className="relative group">
+                  <TaskCard task={t} onOpen={setEditing} />
+                  <select
+                    aria-label="Set status"
+                    title="Set status"
+                    value={t.status}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => { e.stopPropagation(); setStatus(t, e.target.value); }}
+                    className="absolute top-1 right-1 z-10 text-[11px] rounded border border-slate-300 bg-white/95 px-1 py-0.5 text-slate-700 opacity-60 group-hover:opacity-100 transition cursor-pointer hover:border-slate-400"
+                  >
+                    {COLUMNS.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
       {editing && <TaskEditPopover task={editing} onClose={() => setEditing(null)} />}
     </>
   );
