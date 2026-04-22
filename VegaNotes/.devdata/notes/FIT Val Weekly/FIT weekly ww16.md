@@ -1,35 +1,56 @@
 # FIT Val weekly ww16
+
+#opens
+    How often are we syncing main branch into MT1 and vice versa(TD and BU) - Supposed to be daily
 @aboli
 	#project gfc
- !task MCA – Disable IDQ proof assertion failing during XLAT Error #id T-32M9NF #priority P1 #eta 2026-W18 @alice @bob #feature auth
-		RTL and FV IDQ assertions failing in XLAT Error tests
-			!AR why failing now #eta WW17.1 #status todo #id T-RXDG03
+        !task MCA – Disable IDQ proof assertion failing during XLAT Error #id T-32M9NF #priority P1 #eta 2026-W18    
+    		RTL and FV IDQ assertions failing in XLAT Error tests
+			!AR why failing now #eta WW17.5 #status todo #id T-RXDG03
 	#project jnc
 		!task Review assertions that have not reached a proven status #id T-80YHPA
-			#eta ww16.5
+            #update 2/4 assertions fixed, review pending
+			#eta ww17.5
 		!task Assumptions review updates model TI #id T-KZ23T7
 			#status done
-		!task Review starvation covers. #status in-progress #id T-VBRGH9
+		!task Review starvation covers. #status done #id T-VBRGH9
+            !AR converted cover into assertion - found an RTL bug
 		!task Val Plan development and review #eta ww18 #id T-NVA2A4
 			!AR Track number of assertions/assumptions and COI for reporting progress #id T-K6CJ9M
+        !task STSR bug fix done in GFC to be done in JNC - IQ bypass CB added #priority low #eta ww18
+        !task Added new assertion on outputs with no assertions in GFC  #eta ww18
+            !AR 25 new assertions added - debug in progress
+        !task ARs from reviews to be completed #eta ww19
+        !task Reviewing unconverged covers
+            !AR 0/6 Done
 @namratha
 	!task IDQ weekly bucket debug #id T-P64EJ5
         !AR fe::Formal::Assert::cex::idq.fv_IDQ_RAT_intf_chk.idq_git_assume_uop_GatherScatter_window*.T_IDQ_RAT_FPV_MRN_Legal_Ld_mrn::gfc-a0 #id T-894R39
+            #update waiting on OOO resource for updates to RTL
         !AR fe::Formal::Assert::cex::idq.fv_idq_data_transfer._automatic_unique_case_LLJENG::gfc-a0 #id T-P6MCZY
-        !AR fe::Formal::Assert::cex::idq.fv_IDQ_RAT_intf_chk.idq_rat_cover_uop_loop*.T_IDQ_RAT_FPV_No_TMUL_STA_uops_opcode::gfc-a0 #id T-F442W1
+            Input signals is being used as sel of unique case
         !AR fe::Formal::Assert::cex::idq.fv_idq_global._automatic_unique_case_LLJENG::gfc-a0 #id T-4MVG4V
+            Input signals is being used as sel of unique case
+        !AR fe::Formal::Assert::cex::idq.fv_IDQ_RAT_intf_chk.idq_rat_cover_uop_loop*.T_IDQ_RAT_FPV_No_TMUL_STA_uops_opcode::gfc-a0 #id T-F442W1
+            #status wip failing since 12b
+            !AR why failing now?
         !AR fe::Assert::fv_idq_assume_mite_assert_legal_valid_ordid_range::msid_idq_fv_idq_dsbe_intf_inst_genblk::gfc-a0 #id T-17P0K5
+            #status wip
 	!task SEC IDQ weekly failures to debug #id T-BCFVTR
         !AR fe::Formal::Assert(sec)::cex::idq.idimmCM*H::gfc-a0 #id T-AEAZVE
+            #status wip
         !AR fe::Formal::Assert(sec)::cex::idq.IDBiqWrEnBranchEventM*H::gfc-a0" #id T-D9VN76
+            #status blocked due to Jasper tool issue
 	!task Prepare Presentation on IDQ Arch #id T-S19WZV
         !AR IDQ arch - IDQ high level proof stucture #status done #id T-N9FW7H
-        !AR MRN deep dive ww16 #id T-TJ5ZWD
+        !AR MRN deep dive #eta ww17.3 #id T-TJ5ZWD
 	!task Understand the MRN assertions present in proof and prepare a test plan to add more if needed. #id T-65EF77
-        !AR quantitative data to be reported here ETA ww17.2 #id T-BT1WQ2
-	!task Cover buckets debug #id T-NPB0VS #status done
+        !AR quantitative data to be reported here #eta ww17.5 #id T-BT1WQ2
+	!task Cover buckets debug #id T-NPB0VS 
+        !AR 10 covers unreachable #eta ww19
 	!task JNC bucket debug #id T-6C2FYG
-        !AR MRN counter bucket debug fe::Assert::fv_idq_assume_mite_assert_legal_valid_ordid_range::msid_idq_fv_idq_dsbe_intf_inst_genblk::gfc-a0 #id T-B003JJ
+        !AR MRN counter bucket debug  #id T-B003JJ
+            #status done
 
 @Muana
 	#project jnc
@@ -47,10 +68,55 @@
 @Kushwanth
 	#project jnc
         !task IDQ Ramp up #eta ww17 #id T-C83H1K
-            #note verified by smoke test
+            !AR issue checker review done
+        !task IDQ capsule chk #status done
 	#project gfc
-       !task Enabling Swpf For the fsm #eta ww16 #id T-WYPS53
+        !task Enabling Swpf For the fsm #eta ww16 #id T-WYPS53 #status done
         !task MCA/Parity assertions for GFC #status blocked by HSD approval #id T-8A90E0
-        	#note testing indent fix second time
-        	#note plain note one
-        	#note plain note two
+        !task PID deallocation check assertion added to fpv and run in simulations - level0
+            220/240 failing
+            #eta ww17
+        !task snp bit being set in wait for compl only state
+            RTL is resetting the bit on allocaiton, so the assertion is not checking anything.
+            !AR review the snp bit functionality - set and reset conditions should have checks
+
+@Kelsey
+	#project jnc
+        !task JNC work on MT1/ST1 bring up #id T-JR0RWV
+            10/191  SMT MinTE
+            119/191 MT1 minTE
+            5/191   typ MT1
+            5/191   typ SMT
+        !task JNC work on moving complex nukes from all thread to thread specific #id T-N7Y617
+            #eta ww17
+        !task JNC CTE ready for all state transitions mentioned in UCODE HAS #status done
+
+@Ragavi
+	#project jnc
+        !task JNC bucket debug #id T-D5E4TS
+            !AR ITLB cache miss bucket debug #status done. #id T-F5JFYD
+        !task 
+
+@Gautam
+	#project jnc
+        !task Signal refactoring for iq_tid_CM106L #status wip #id T-W2NA86
+        !task updating coverage for fe_idq_tlm_cov.e for SMT #status wip #id T-Y56TD4
+        !task predq tracker #status wip #id T-FGN8XX
+        !task updating coverage for fe_ifu_tlm_cov.e for SMT #status wip #id T-J12WAA
+        !task IDQ Ramp up #status wip #id T-QF0NVB
+        !task MRQ injector/preloader #status done #id T-98H8WB
+@Yongxi
+	#project csk
+        !task MRQ (mop recover queue) preloader/injector #status wip #id T-P507P5
+            !AR Enable with genfeed #id T-9XMWNK
+        !task SVA debug: btb_update_queue_valid_mismatch #status done #id T-SS8G6T
+        !task SVA debug: redundancy array multiple hit #status done #id T-WAYKE8
+        !task SVA debug: ONEHOT_DECODE_ic_mop_choose_way_mif2h ww15e #status done #id T-VMNHW6
+        !task SVA debug: ltt_fetch_from_ip_match ww15e #status done #id T-4R26QD
+        !task Extended run for btb duplicate queue feature with Marty’s new implementation #status done #id T-SDZWY7
+        !task SVA debug: btb round robin check selected cluster for update mismatch when btb update conflict #id T-32KQ8K
+            #status wip
+        !task SVA debug: btp update queue valid mismatch #id T-YPQV8Q
+            #status wip
+        !task SVA debug: mop update data mismatch #id T-G1SZTZ
+            #status wip

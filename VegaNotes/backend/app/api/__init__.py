@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import bindparam, text
 from sqlmodel import Session, select
@@ -25,6 +25,9 @@ from ..models import (
     TaskOwner, TaskProject, User,
 )
 from ..parser import parse
+from ..safe_io import (
+    StaleWriteError, _safe_write_unlocked, etag_for, safe_write, with_file_lock,
+)
 
 router = APIRouter(dependencies=[Depends(require_user)])
 
@@ -137,6 +140,10 @@ def _split(csv: Optional[str]) -> list[str]:
 class NoteIn(BaseModel):
     path: str
     body_md: str
+    # Optional; when provided, the server requires the file's current sha256
+    # etag to match exactly. Mismatch -> 409 with the current content + etag
+    # so the client can reconcile. See issue #60.
+    if_match: Optional[str] = None
 
 
 @router.get("/notes")
@@ -178,7 +185,12 @@ def get_note(note_id: int, s: Session = Depends(get_session)) -> dict[str, Any]:
     n = s.get(Note, note_id)
     if not n:
         raise HTTPException(404, "note not found")
-    return {"id": n.id, "path": n.path, "title": n.title, "body_md": n.body_md, "updated_at": n.updated_at}
+    full = settings.notes_dir / n.path
+    return {
+        "id": n.id, "path": n.path, "title": n.title,
+        "body_md": n.body_md, "updated_at": n.updated_at,
+        "etag": etag_for(full),
+    }
 
 
 @router.put("/notes")
@@ -186,21 +198,35 @@ def upsert_note(
     body: NoteIn,
     s: Session = Depends(get_session),
     user: str = Depends(require_user),
+    if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> dict[str, Any]:
     if ".." in body.path or body.path.startswith("/"):
         raise HTTPException(400, "invalid path")
     project = _project_for_path(body.path)
-    # Members may only modify .md files in projects they have access to;
-    # creating arbitrary .md files inside a project requires manager role
-    # (members are only allowed to PATCH tasks they own — see /tasks/{id}).
     role = _user_role_for_project(s, user, project)
     if role == "none" or (role == "member" and project is not None):
         raise HTTPException(403, "manager role required to write notes")
     full = settings.notes_dir / body.path
-    full.parent.mkdir(parents=True, exist_ok=True)
-    full.write_text(body.body_md, encoding="utf-8")
+    expected = body.if_match if body.if_match is not None else if_match
+    try:
+        new_etag = safe_write(
+            full, body.body_md,
+            notes_dir=settings.notes_dir, expected_etag=expected,
+        )
+    except StaleWriteError as e:
+        # 409 Conflict — body carries current content + etag for the
+        # client to surface a recovery / merge UI. See issue #60.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "stale_write",
+                "message": "the file changed under you; reload before saving",
+                "current_content": e.current_content,
+                "current_etag": e.current_etag,
+            },
+        )
     note = reindex_file(full, s)
-    return {"id": note.id, "path": note.path}
+    return {"id": note.id, "path": note.path, "etag": new_etag}
 
 
 class RollNextWeekIn(BaseModel):
@@ -231,21 +257,26 @@ def roll_note_next_week(
     src_full = settings.notes_dir / src_rel
     if not src_full.exists():
         raise HTTPException(404, "source note not found")
-    src_md = src_full.read_text(encoding="utf-8")
-    try:
-        new_md, new_base, cur, nxt, patched_src = roll_to_next_week(src_md, src_full.name)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    dst_full = src_full.parent / new_base
-    dst_rel = str(dst_full.relative_to(settings.notes_dir))
-    if dst_full.exists() and not body.overwrite:
-        raise HTTPException(409, f"target note already exists: {dst_rel}")
-    # Write the source back if we injected new IDs (so they persist).
-    if patched_src != src_md:
-        src_full.write_text(patched_src, encoding="utf-8")
-        reindex_file(src_full, s)
-    dst_full.parent.mkdir(parents=True, exist_ok=True)
-    dst_full.write_text(new_md, encoding="utf-8")
+    # Read+write under the source file's lock so a concurrent edit can't
+    # interleave between the read and the write-back of injected IDs.
+    with with_file_lock(src_full):
+        src_md = src_full.read_text(encoding="utf-8")
+        try:
+            new_md, new_base, cur, nxt, patched_src = roll_to_next_week(src_md, src_full.name)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        dst_full = src_full.parent / new_base
+        dst_rel = str(dst_full.relative_to(settings.notes_dir))
+        if dst_full.exists() and not body.overwrite:
+            raise HTTPException(409, f"target note already exists: {dst_rel}")
+        if patched_src != src_md:
+            _safe_write_unlocked(src_full, patched_src, notes_dir=settings.notes_dir)
+            reindex_file(src_full, s)
+    # Destination is a different file -> different lock domain. safe_write
+    # creates it atomically and the existence check above + safe_write's
+    # internal lock together prevent a parallel create from clobbering us
+    # in the rare overwrite=True case.
+    safe_write(dst_full, new_md, notes_dir=settings.notes_dir)
     note = reindex_file(dst_full, s)
     return {"id": note.id, "path": note.path, "from_ww": cur, "to_ww": nxt}
 
@@ -274,12 +305,15 @@ def stamp_task_ids(
     full = settings.notes_dir / rel
     if not full.exists():
         raise HTTPException(404, "note not found")
-    src_md = full.read_text(encoding="utf-8")
-    patched, mapping = inject_missing_ids(src_md)
-    injected = len(mapping)
-    if patched != src_md:
-        full.write_text(patched, encoding="utf-8")
-        reindex_file(full, s)
+    # RMW under the file lock so a concurrent edit can't interleave between
+    # read and the ID-injection write-back.
+    with with_file_lock(full):
+        src_md = full.read_text(encoding="utf-8")
+        patched, mapping = inject_missing_ids(src_md)
+        injected = len(mapping)
+        if patched != src_md:
+            _safe_write_unlocked(full, patched, notes_dir=settings.notes_dir)
+            reindex_file(full, s)
     return {"path": rel, "injected": injected, "body_md": patched}
 
 
@@ -814,7 +848,26 @@ def patch_task(
         return _task_to_dict(s, t)
 
     full = settings.notes_dir / note.path
-    full.write_text(md, encoding="utf-8")
+    # RMW under the file lock: re-read current bytes from disk so a
+    # concurrent writer (vim, another tab, another PATCH) doesn't get
+    # silently overwritten by our DB-cached body_md. See issue #60.
+    with with_file_lock(full):
+        if full.exists():
+            disk_md = full.read_text(encoding="utf-8")
+            if disk_md != note.body_md:
+                # Replay our mutations against the freshest content so the
+                # patch is correctly anchored. The line numbers we have are
+                # from the cached parse; if the file has shifted we have to
+                # bail out rather than corrupt it. The client should refetch
+                # the task and retry.
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "stale_task",
+                        "message": "task base content changed under you; refetch and retry",
+                    },
+                )
+        _safe_write_unlocked(full, md, notes_dir=settings.notes_dir)
     reindex_file(full, s)
     refreshed = s.get(Task, task_id)
     return _task_to_dict(s, refreshed) if refreshed else {"ok": True}
