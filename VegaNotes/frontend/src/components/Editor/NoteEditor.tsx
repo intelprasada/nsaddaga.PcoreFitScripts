@@ -14,8 +14,9 @@ interface Props {
  *   - keystrokes only update local state and a debounced upward push;
  *   - highlight runs through useDeferredValue so React can interrupt;
  *   - per-line LRU cache means unchanged lines never re-tokenize (#47);
- *   - the mirror is patched line-by-line — only changed lines have their
- *     innerHTML rewritten, instead of rebuilding the whole document (#48);
+ *   - the mirror is one <pre> with one highlighted string so its layout
+ *     geometry matches the textarea exactly (caret stays aligned — see #57
+ *     for why the per-line <div> mirror was reverted);
  *   - scroll sync is rAF-throttled to avoid layout thrash on long notes (#52).
  */
 export function NoteEditor({ value, onChange }: Props) {
@@ -39,37 +40,15 @@ export function NoteEditor({ value, onChange }: Props) {
 
   const deferred = useDeferredValue(local);
 
-  // Per-line shadow + DOM patcher. We track the last-applied per-line HTML
-  // strings so a render only touches DOM nodes whose content actually changed.
-  const lastLineHtml = useRef<string[]>([]);
+  // Render the highlighted overlay. We keep the mirror as a single <pre>
+  // whose innerHTML is the full highlighted string so its layout matches the
+  // textarea exactly. The per-line cache (highlightLineCached) keeps the
+  // tokenize cost ~constant per keystroke even for very large docs.
   useEffect(() => {
     const pre = preRef.current;
     if (!pre) return;
-    const newLines = deferred.split("\n");
-    const newHtml = newLines.map((ln) => highlightLineCached(ln));
-    const prev = lastLineHtml.current;
-
-    // Patch existing line nodes in place where HTML differs.
-    const common = Math.min(prev.length, newHtml.length);
-    for (let i = 0; i < common; i++) {
-      if (prev[i] !== newHtml[i]) {
-        const node = pre.childNodes[i] as HTMLElement | undefined;
-        if (node) node.innerHTML = newHtml[i] || ZWS;
-      }
-    }
-    // Append new line nodes.
-    for (let i = prev.length; i < newHtml.length; i++) {
-      const div = document.createElement("div");
-      div.className = "vega-line";
-      div.innerHTML = newHtml[i] || ZWS;
-      pre.appendChild(div);
-    }
-    // Remove trailing line nodes the new content no longer has.
-    for (let i = prev.length - 1; i >= newHtml.length; i--) {
-      const node = pre.childNodes[i];
-      if (node) pre.removeChild(node);
-    }
-    lastLineHtml.current = newHtml;
+    const html = deferred.split("\n").map(highlightLineCached).join("\n");
+    if (pre.innerHTML !== html) pre.innerHTML = html;
   }, [deferred]);
 
   const scheduleEmit = (next: string) => {
@@ -159,10 +138,6 @@ export function NoteEditor({ value, onChange }: Props) {
 }
 
 /* ---------- highlighter (per-line, cached) -------------------------------- */
-
-// Empty-line placeholder: zero-width space so the <div> has a layout line
-// and the mirror's vertical extent matches the textarea exactly.
-const ZWS = "\u200b";
 
 const HEADING_LINE_RE = /^(\s*)(#{1,6})(\s+)(.*)$/;
 const TASK_RE = /!task\b/g;
