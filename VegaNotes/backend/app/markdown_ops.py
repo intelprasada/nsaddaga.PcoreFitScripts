@@ -57,6 +57,11 @@ def strip_done_tasks(md: str) -> str:
     Uses the structural parser to identify done tasks (their `#status done`
     may be on a continuation line, not the `!task` line itself), then drops
     that line and everything beneath it that is more deeply indented.
+
+    Note: ``_rollup_to_parents`` intentionally keeps a parent alive when it is
+    marked ``#status done`` but still has non-done AR children — the open ARs
+    act as a reminder. Those tasks are stripped once ALL their AR children are
+    done (either inline or via continuation ``#status done``).
     """
     from .parser import parse
     parsed = parse(md)
@@ -70,8 +75,6 @@ def strip_done_tasks(md: str) -> str:
     for i, line in enumerate(lines):
         if skip_indent is not None:
             if not line.strip():
-                # blank lines belong to whichever block they sit between; drop
-                # them while still inside a stripped subtree.
                 continue
             if _line_indent(line) > skip_indent:
                 continue
@@ -216,9 +219,11 @@ def _extract_task_id(line: str) -> Optional[str]:
 
 
 def rewrite_tasks_as_refs(md: str) -> str:
-    """Convert every surviving `!task <title> ... #id <ID>` line into a
-    reference row ``- #task <ID> <title>`` preserving any sibling attrs
-    (status/eta/etc) appended after the title.
+    """Convert every surviving ``!task``/``!AR`` declaration line (that has an
+    ``#id`` token) into a reference row, preserving any sibling attrs.
+
+    - ``!task`` lines  → ``- #task <ID> <title> [attrs]``
+    - ``!AR`` lines    → ``- #AR <ID> <title> [attrs]``
 
     Lines without an ``#id`` token are left as-is (the caller is expected
     to run :func:`inject_missing_ids` first).
@@ -240,13 +245,14 @@ def rewrite_tasks_as_refs(md: str) -> str:
             nl = body[-1] + nl
             body = body[:-1]
         lead = m.group("lead")
+        bang = m.group("bang").upper()   # "TASK" or "AR"
+        ref_keyword = "#AR" if bang == "AR" else "#task"
         title = m.group("title").strip()
         rest = m.group("rest") or ""
-        # Strip the `#id <ID>` token from rest (it lives only on the source
-        # `!task` line — refs reference the ID directly).
+        # Strip the `#id <ID>` token (lives only on the source line).
         rest_clean = _ID_TOKEN_RE.sub("", rest).strip()
         rest_clean = re.sub(r"\s{2,}", " ", rest_clean).strip()
-        pieces = [f"{lead}#task {tid}", title]
+        pieces = [f"{lead}{ref_keyword} {tid}", title]
         if rest_clean:
             pieces.append(rest_clean)
         out.append(" ".join(p for p in pieces if p) + nl)

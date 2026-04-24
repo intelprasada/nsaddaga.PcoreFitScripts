@@ -121,8 +121,8 @@ def _is_context_only_line(items: list) -> bool:
 
 
 def _is_ref_row(items: list) -> Token | None:
-    """If the line's first non-whitespace/bullet item is a `#task` token,
-    return that token (it's an agenda reference row). Otherwise None.
+    """If the line's first non-whitespace/bullet item is a ``#task`` or ``#ar``
+    token, return that token (it's an agenda reference row). Otherwise None.
     """
     for x in items:
         if isinstance(x, TextChunk):
@@ -131,7 +131,7 @@ def _is_ref_row(items: list) -> Token | None:
                 return None
             continue
         if isinstance(x, Token):
-            if x.kind == "attr" and x.name == "task":
+            if x.kind == "attr" and x.name in ("task", "ar"):
                 return x
             return None
     return None
