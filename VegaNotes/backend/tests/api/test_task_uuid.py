@@ -155,3 +155,25 @@ def test_patch_unknown_uuid_returns_404(client):
         headers={"Authorization": ADMIN},
     )
     assert r.status_code == 404, r.text
+
+
+def test_get_by_uuid(client):
+    """GET /api/tasks/T-ABCDEF returns the task dict (mirrors PATCH lookup)."""
+    task = _setup(client)
+    uuid = task["task_uuid"]
+
+    r = client.get(f"/api/tasks/{uuid}", headers={"Authorization": ADMIN})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["id"] == task["id"]
+    assert data["task_uuid"] == uuid
+
+    # int PK should also work.
+    r = client.get(f"/api/tasks/{task['id']}", headers={"Authorization": ADMIN})
+    assert r.status_code == 200, r.text
+    assert r.json()["task_uuid"] == uuid
+
+
+def test_get_unknown_returns_404(client):
+    r = client.get("/api/tasks/T-ZZZZZZ", headers={"Authorization": ADMIN})
+    assert r.status_code == 404, r.text

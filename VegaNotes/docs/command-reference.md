@@ -171,7 +171,38 @@ curl -su admin:admin http://<host>/api/notes | jq '.[0]'
 
 ---
 
-## 8. API quick hits (`curl`)
+## 8. `vn` CLI (terminal-friendly wrapper)
+
+A pip-installable shell helper that talks to the same REST API. See
+[`tools/vn/README.md`](../tools/vn/README.md) for full docs.
+
+```bash
+# Install (Python 3.9+; on hosts where `pip` is Python 3.6, use `python3 -m pip`)
+python3 -m pip install --user -e VegaNotes/tools/vn
+
+# Configure once: ~/.veganotes/credentials
+#   [default]
+#   url = http://localhost:8000
+#   user = admin
+#   password = admin
+
+# Patch a task (status, priority, eta, owners, features, add-note)
+vn task T-123 status=done priority=P1 eta=2026-W18
+
+# List tasks with filters
+vn list --owner kushwanth --status open --hide-done
+vn list --project gfc --priority P0,P1 --json
+
+# Create a new note: ww16/standup-notes.md
+vn note new --project ww16 --title 'standup notes'
+
+# Who am I?
+vn whoami
+```
+
+---
+
+## 9. API quick hits (`curl`)
 
 ```bash
 BASE=http://localhost:8000/api
@@ -215,7 +246,7 @@ curl -s $AUTH -X DELETE $BASE/admin/users/alice
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 ```bash
 # Vite serves 0-byte module / "doesn't provide an export named ..."
