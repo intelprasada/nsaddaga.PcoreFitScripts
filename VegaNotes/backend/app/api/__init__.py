@@ -31,6 +31,21 @@ from ..safe_io import (
 
 router = APIRouter(dependencies=[Depends(require_user)])
 
+_PRIORITY_LABELS = {"p0": 0, "p1": 1, "p2": 2, "p3": 3, "high": 1, "med": 2, "medium": 2, "low": 3}
+
+
+def _priority_rank(value_norm: str) -> int:
+    """Convert a stored priority value_norm to a sortable integer rank.
+
+    Handles both the new numeric form ('0','1','2','3') written by
+    parse_priority_rank and legacy label form ('p1','high',…) written
+    by older indexer versions before normalisation was wired up.
+    """
+    try:
+        return int(value_norm)
+    except (ValueError, TypeError):
+        return _PRIORITY_LABELS.get((value_norm or "").lower(), 999)
+
 
 # ---------- RBAC helpers ----------------------------------------------------
 
@@ -104,7 +119,10 @@ def _task_to_dict(s: Session, t: Task, *, include_children: bool = False) -> dic
         "features": features,
         "attrs": attr_map,
         "eta": next((a.value_norm for a in attrs if a.key == "eta"), None),
-        "priority_rank": next((int(a.value_norm) for a in attrs if a.key == "priority" and a.value_norm), 999),
+        "priority_rank": next(
+            (_priority_rank(a.value_norm) for a in attrs if a.key == "priority" and a.value_norm),
+            999,
+        ),
         "notes": "\n".join(a.value for a in attrs if a.key == "note"),
         "note_history": [a.value for a in attrs if a.key == "note"],
     }

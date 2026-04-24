@@ -308,3 +308,105 @@ def test_append_note_preserves_prior_history_on_repeat_calls():
     assert lines[1] == "  #note one"
     assert lines[2] == "  #note two"
     assert lines[3] == "  #note three"
+
+
+# ---------------------------------------------------------------------------
+# strip_done_tasks — AR roll-forward behaviour (#70)
+# ---------------------------------------------------------------------------
+
+def test_strip_done_task_with_open_ar_child_survives():
+    """Done parent (inline #status) + non-done AR child → rollup keeps parent alive.
+
+    _rollup_to_parents intentionally downgrades a done parent to in-progress
+    when any AR child is still open, so the open AR acts as a reminder.
+    The block is stripped only once ALL AR children are done.
+    """
+    from app.markdown_ops import strip_done_tasks
+    md = (
+        "# ww16\n"
+        "!task Done task #status done\n"
+        "\t!AR Still open AR\n"
+        "\n"
+        "!task Open task #status wip\n"
+        "\t!AR Open AR\n"
+    )
+    result = strip_done_tasks(md)
+    # Rollup keeps the done-parent alive because the AR is still open
+    assert "Done task" in result, "done parent with open AR should survive (rollup)"
+    assert "Still open AR" in result, "open AR under kept parent should survive"
+    assert "Open task" in result
+    assert "Open AR" in result
+
+
+def test_strip_done_task_continuation_status_with_open_ar_survives():
+    """Done parent (#status done on continuation line) + open AR child → kept alive."""
+    from app.markdown_ops import strip_done_tasks
+    md = (
+        "# ww16\n"
+        "!task Done task\n"
+        "\t#status done\n"
+        "\t!AR Still open AR\n"
+    )
+    result = strip_done_tasks(md)
+    # Rollup keeps the parent alive because the AR is still open
+    assert "Done task" in result
+    assert "Still open AR" in result
+
+
+def test_strip_done_ar_under_open_parent():
+    """Done AR under open parent is dropped; open AR and parent survive."""
+    from app.markdown_ops import strip_done_tasks
+    md = (
+        "# ww16\n"
+        "!task Open task #status wip\n"
+        "\t!AR Open AR\n"
+        "\t!AR Done AR #status done\n"
+    )
+    result = strip_done_tasks(md)
+    assert "Open task" in result
+    assert "Open AR" in result
+    assert "Done AR" not in result
+
+
+def test_strip_done_ar_continuation_status_under_open_parent():
+    """Done AR (#status done on continuation line) under open parent is dropped."""
+    from app.markdown_ops import strip_done_tasks
+    md = (
+        "# ww16\n"
+        "!task Open task #status wip\n"
+        "\t!AR Open AR\n"
+        "\t!AR Done AR\n"
+        "\t\t#status done\n"
+    )
+    result = strip_done_tasks(md)
+    assert "Open task" in result
+    assert "Open AR" in result
+    assert "Done AR" not in result
+
+
+def test_roll_forward_open_ar_carried_done_ar_dropped():
+    """Full roll: open AR survives as #AR ref row; done AR is dropped."""
+    from app.markdown_ops import roll_to_next_week
+    md = (
+        "# Sprint ww16\n"
+        "!task Active #status wip\n"
+        "\t!AR Open action #status todo\n"
+        "\t!AR Done action #status done\n"
+        "\n"
+        "!task All done parent #status done\n"
+        "\t!AR Done child AR #status done\n"
+    )
+    new_md, new_base, cur, nxt, _ = roll_to_next_week(md, "sprint-ww16.md")
+    assert (cur, nxt) == (16, 17)
+    # All-done parent + all-done AR → entire block stripped
+    assert "All done parent" not in new_md
+    assert "Done child AR" not in new_md
+    # Open parent carries forward as #task ref row
+    assert "Active" in new_md
+    assert "#task T-" in new_md
+    # Open AR carries forward as #AR ref row (not #task)
+    assert "Open action" in new_md
+    assert "#AR T-" in new_md
+    # Done AR dropped
+    assert "Done action" not in new_md
+

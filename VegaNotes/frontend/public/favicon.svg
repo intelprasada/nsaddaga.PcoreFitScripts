@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- Background pill -->
+  <rect width="32" height="32" rx="8" fill="#16a34a"/>
+  <!-- Leaf / note lines -->
+  <path d="M10 11h12M10 16h8M10 21h10" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Small check mark top-right -->
+  <path d="M22 10l2 2 3-3" stroke="#bbf7d0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -94,6 +94,7 @@ class TokenSpec:
 
 REGISTRY: Dict[str, TokenSpec] = {
     "task":     TokenSpec("task",     multi=True),
+    "ar":       TokenSpec("ar",       multi=True),   # #AR <ID> reference rows
     "id":       TokenSpec("id",       multi=False),
     "eta":      TokenSpec("eta",      normalize=parse_eta),
     "priority": TokenSpec("priority", normalize=parse_priority_rank),

@@ -27,24 +27,21 @@ function etaLabel(eta: string | null | undefined): string {
   return eta;
 }
 
-function UuidBadge({ uuid }: { uuid: string }) {
+function UuidChip({ uuid }: { uuid: string }) {
   const [copied, setCopied] = useState(false);
-
   const copy = (e: React.MouseEvent) => {
     e.stopPropagation();
     const write = navigator.clipboard?.writeText(uuid);
     const finish = () => { setCopied(true); setTimeout(() => setCopied(false), 1500); };
-    if (write) write.then(finish).catch(finish);
-    else finish();
+    if (write) write.then(finish).catch(finish); else finish();
   };
-
   return (
     <button
       onClick={copy}
       title={copied ? "Copied!" : "Click to copy task ID"}
-      className="mt-2 font-mono text-[10px] text-slate-400 hover:text-slate-600 tracking-wide transition-colors"
+      className="chip font-mono text-[10px] bg-slate-50 border border-slate-200 text-slate-400 hover:text-slate-600 hover:border-slate-400 transition-colors px-1.5 py-0.5"
     >
-      {copied ? <span className="text-emerald-500">Copied!</span> : uuid}
+      {copied ? <span className="text-emerald-500 not-italic">✓</span> : uuid}
     </button>
   );
 }
@@ -79,6 +76,7 @@ export function TaskCard({ task, onOpen }: Props) {
         {task.eta && <span className="chip chip-eta" title={task.eta}>{etaLabel(task.eta)}</span>}
       </div>
       <div className="mt-2 flex flex-wrap gap-1">
+        {task.task_uuid && <UuidChip uuid={task.task_uuid} />}
         {prio && <span className="chip chip-priority">{prio}</span>}
         {task.owners.map((o) => <span key={o} className="chip chip-owner">@{o}</span>)}
         {task.projects.map((p) => <span key={p} className="chip chip-project">#{p}</span>)}
@@ -113,8 +111,6 @@ export function TaskCard({ task, onOpen }: Props) {
           </motion.ul>
         )}
       </AnimatePresence>
-
-      {task.task_uuid && <UuidBadge uuid={task.task_uuid} />}
     </motion.div>
   );
 }
