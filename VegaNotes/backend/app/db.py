@@ -45,6 +45,21 @@ def init_db() -> None:
             conn.execute(text("ALTER TABLE user ADD COLUMN pass_hash TEXT NOT NULL DEFAULT ''"))
         if user_cols and "is_admin" not in user_cols:
             conn.execute(text("ALTER TABLE user ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0"))
+        # Normalise legacy priority value_norm rows: old indexer stored 'p0'-'p3'
+        # as the value_norm; new indexer stores the integer rank ('0'-'3').
+        # Re-write any non-numeric priority value_norm to the integer rank.
+        _PRIO_MAP = {"p0": "0", "p1": "1", "p2": "2", "p3": "3",
+                     "high": "1", "med": "2", "medium": "2", "low": "3"}
+        rows = conn.execute(
+            text("SELECT id, value_norm FROM taskattr WHERE key='priority'")
+        ).fetchall()
+        for row_id, vn in rows:
+            if vn and not vn.lstrip("-").isdigit():
+                new_vn = _PRIO_MAP.get((vn or "").lower(), "999")
+                conn.execute(
+                    text("UPDATE taskattr SET value_norm=:vn WHERE id=:id"),
+                    {"vn": new_vn, "id": row_id},
+                )
         # FTS5 virtual table for note search.
         conn.execute(text(
             "CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts "
