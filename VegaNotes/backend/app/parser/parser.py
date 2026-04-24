@@ -93,6 +93,34 @@ def _attach_attr(task: ParsedTask, tok: Token) -> None:
             task.attrs_norm[tok.name] = norm
 
 
+def _title_from_items(items: list, decl: Token) -> str:
+    """Recover task title when ``decl.value`` is empty (new format: ``!task #id T-XXXX <title>``).
+
+    The lexer stops reading the title at the first known ``#token``, so for
+    lines like ``!task #id T-XXXX My Title #priority P1`` the title ends up
+    as a ``TextChunk`` *after* the ``#id`` attribute token.  Collect those
+    chunks (stopping at the next real attribute) and return the joined text.
+    """
+    after_decl = False
+    after_id = False
+    chunks: list[str] = []
+    for item in items:
+        if item is decl:
+            after_decl = True
+            continue
+        if not after_decl:
+            continue
+        if isinstance(item, Token):
+            if item.name == "id" and not after_id:
+                after_id = True
+                continue
+            # Any other token ends the title zone.
+            break
+        if isinstance(item, TextChunk) and after_id:
+            chunks.append(item.text)
+    return "".join(chunks).strip()
+
+
 def _indent_level(line: str) -> int:
     m = _LIST_PREFIX.match(line)
     if not m:
@@ -241,9 +269,10 @@ def parse(md: str) -> Dict[str, Any]:
 
         if decl is not None:
             prune_for_task(line_indent)
-            slug = _slug_collisions(slugify(decl.value), taken_slugs)
+            raw_title = decl.value.strip() or _title_from_items(items, decl)
+            slug = _slug_collisions(slugify(raw_title), taken_slugs)
             kind = decl.name if decl.name in {"task", "ar"} else "task"
-            task = ParsedTask(slug=slug, title=decl.value.strip(), line=line_no, indent=line_indent, kind=kind)
+            task = ParsedTask(slug=slug, title=raw_title, line=line_no, indent=line_indent, kind=kind)
             while stack and stack[-1].indent >= line_indent:
                 stack.pop()
             if stack:

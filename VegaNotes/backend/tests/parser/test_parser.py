@@ -70,3 +70,52 @@ def test_priority_rank():
     assert parse_priority_rank("P1") == 1
     assert parse_priority_rank("low") == 7
     assert parse_priority_rank("???") == 999
+
+
+# ---------------------------------------------------------------------------
+# Parser: title extraction with new #id-first format (#85)
+# ---------------------------------------------------------------------------
+
+def test_title_extracted_after_id_token():
+    """When !task #id T-XXXX appears before the title, the parser must
+    extract the correct title from the TextChunk that follows #id."""
+    from app.parser import parse
+    md = "!task #id T-DVND79 Disable IDQ assertion #priority P1 #eta 2026-W18\n"
+    result = parse(md)
+    tasks = result["tasks"]
+    assert len(tasks) == 1
+    assert tasks[0]["title"] == "Disable IDQ assertion"
+    assert tasks[0]["attrs"].get("priority") == "P1"
+    assert tasks[0]["attrs"].get("id") == "T-DVND79"
+
+
+def test_title_extracted_after_id_ar():
+    """`!AR #id T-XXXX My title` should also extract the title correctly."""
+    from app.parser import parse
+    md = "  !AR #id T-8XTQ99 why failing now #eta WW17.5 #status todo\n"
+    result = parse(md)
+    tasks = result["tasks"]
+    assert len(tasks) == 1
+    assert tasks[0]["title"] == "why failing now"
+    assert tasks[0]["kind"] == "ar"
+    assert tasks[0]["attrs"].get("id") == "T-8XTQ99"
+
+
+def test_title_old_format_still_works():
+    """Old format (!task <title> #attr) must still work unchanged."""
+    from app.parser import parse
+    md = "!task My old task #priority P2\n"
+    result = parse(md)
+    tasks = result["tasks"]
+    assert len(tasks) == 1
+    assert tasks[0]["title"] == "My old task"
+
+
+def test_title_no_title_is_empty():
+    """A task with only attributes and no title text should have empty title."""
+    from app.parser import parse
+    md = "!task #id T-XXXXX #priority P1\n"
+    result = parse(md)
+    tasks = result["tasks"]
+    assert len(tasks) == 1
+    assert tasks[0]["title"] == ""

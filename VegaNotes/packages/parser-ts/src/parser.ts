@@ -102,6 +102,27 @@ function indentLevel(line: string): number {
   return Math.floor(width / 2);
 }
 
+/**
+ * Recover task title when decl.value is empty (new format: !task #id T-XXXX <title>).
+ * The lexer stops at #id, so the title lives as a "text" item after the #id token.
+ */
+function titleFromItems(items: Item[], decl: Token): string {
+  let afterDecl = false;
+  let afterId = false;
+  const chunks: string[] = [];
+  for (const item of items) {
+    if (item === decl) { afterDecl = true; continue; }
+    if (!afterDecl) continue;
+    if (item.kind !== "text") {
+      const tok = item as Token;
+      if (tok.name === "id" && !afterId) { afterId = true; continue; }
+      break; // first real attribute — stop
+    }
+    if (afterId) chunks.push((item as TextChunk).text);
+  }
+  return chunks.join("").trim();
+}
+
 export interface ParsedTask {
   slug: string;
   title: string;
@@ -276,9 +297,10 @@ export function parse(md: string): ParseResult {
       const indent = indentLevel(raw);
       pruneForTask(indent);
       const kind = decl.name === "ar" ? "ar" : "task";
+      const rawTitle = decl.value.trim() || titleFromItems(items, decl);
       const task: ParsedTask = {
-        slug: slugCollide(slugify(decl.value)),
-        title: decl.value.trim(),
+        slug: slugCollide(slugify(rawTitle)),
+        title: rawTitle,
         line: lineNo,
         indent,
         kind,
