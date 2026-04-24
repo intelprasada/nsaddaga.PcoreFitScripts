@@ -40,8 +40,22 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
 }) {
   const qcLocal = useQueryClient();
   const { data: notes = [] } = useQuery({ queryKey: ["notes"], queryFn: () => api.notes() });
+  const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => api.me() });
+  const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: () => api.projects() });
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  // Derive write permission for the currently-selected note.
+  // - Admins can write anything.
+  // - Root notes (no "/" in path) are writable by everyone.
+  // - Project notes require manager role in that project.
+  const projectName = selectedPath.includes("/") ? selectedPath.split("/")[0] : null;
+  const projectRole = projectName
+    ? (projects.find((p) => p.name === projectName)?.role ?? null)
+    : null;
+  const canWrite = !selectedPath
+    ? false
+    : (me?.is_admin || projectName === null || projectRole === "manager");
 
   // Timestamps for global-query throttling (tree + tasks refresh at most every 5s).
   const lastGlobalInvalidate = useRef<number>(0);
@@ -110,6 +124,7 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
 
   // Debounced autosave: schedules per-path timers for ANY dirty draft entry.
   useEffect(() => {
+    if (!canWrite) return; // members can't save — don't even schedule
     for (const [path, e] of Object.entries(draft)) {
       if (e.body === e.saved) continue;
       if (saveTimers.current[path]) continue;
@@ -166,7 +181,7 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
   }, [draft]);
 
   const onChange = (v: string) => {
-    if (!selectedPath) return;
+    if (!selectedPath || !canWrite) return;
     setDraft((prev) => ({
       ...prev,
       [selectedPath]: {
@@ -249,20 +264,25 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
             {statusText}
           </span>
         )}
+        {selectedPath && !canWrite && projectRole && (
+          <span className="ml-auto text-xs bg-amber-100 text-amber-800 rounded px-2 py-0.5 font-medium">
+            👁 read-only · member of {projectName}
+          </span>
+        )}
       </div>
       <div className="flex-1 overflow-auto">
-        <NoteEditor value={body} onChange={onChange} />
+        <NoteEditor value={body} onChange={onChange} readOnly={!canWrite} />
       </div>
       <div className="flex gap-2 flex-wrap">
         <button className="rounded bg-sky-600 text-white px-3 py-1 text-sm disabled:opacity-50"
-          disabled={!selectedPath || !dirty} onClick={onSave}>Save</button>
+          disabled={!canWrite || !dirty} onClick={onSave}>Save</button>
         <button className="rounded border px-3 py-1 text-sm disabled:opacity-50"
           disabled={!selectedPath} onClick={onRefresh}
           title="Reload this note from disk (e.g. after editing in Vim or rolling to next week)">
           ↻ Refresh
         </button>
         <button className="rounded border px-3 py-1 text-sm disabled:opacity-50"
-          disabled={!selectedPath} onClick={onStampIds}
+          disabled={!canWrite || !selectedPath} onClick={onStampIds}
           title="Inject stable #id tokens into every !task / !AR line that doesn't have one. Required for cross-week deduplication.">
           # Stamp IDs
         </button>
