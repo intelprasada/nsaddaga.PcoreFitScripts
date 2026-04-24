@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import bindparam, text
 from sqlmodel import Session, select
 
-from ..auth import hash_password, require_admin, require_user
+from ..auth import hash_password, verify_password, require_admin, require_user
 from ..config import settings
 from ..db import get_session
 from ..indexer import reindex_all, reindex_file, remove_path
@@ -971,6 +971,33 @@ def whoami(
 ) -> dict[str, Any]:
     u = s.exec(select(User).where(User.name == user)).first()
     return {"name": user, "is_admin": bool(u and u.is_admin)}
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.patch("/me/password", status_code=200)
+def change_my_password(
+    body: ChangePasswordIn,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, str]:
+    """Any authenticated user can change their own password.
+    Requires the current password for verification.
+    """
+    if not body.new_password:
+        raise HTTPException(400, "new_password cannot be empty")
+    u = s.exec(select(User).where(User.name == user)).first()
+    if u is None:
+        raise HTTPException(404, "user not found")
+    if u.pass_hash and not verify_password(body.current_password, u.pass_hash):
+        raise HTTPException(403, "current password is incorrect")
+    u.pass_hash = hash_password(body.new_password)
+    s.add(u)
+    s.commit()
+    return {"status": "ok"}
 
 
 # ---------- admin: user management ----------------------------------------

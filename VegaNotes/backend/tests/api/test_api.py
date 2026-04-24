@@ -188,3 +188,67 @@ def test_fs_project_bootstrap(client):
 
     # Cleanup
     _shutil.rmtree(proj_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Self-service password change (#66)
+# ---------------------------------------------------------------------------
+
+def test_change_own_password(client):
+    """Any user can change their own password; wrong current password is rejected."""
+    _create_user(client, "pw-user", "oldpass")
+    user_auth = "Basic " + base64.b64encode(b"pw-user:oldpass").decode()
+
+    # Wrong current password → 403.
+    r = client.patch(
+        "/api/me/password",
+        json={"current_password": "wrongpass", "new_password": "newpass"},
+        headers={"Authorization": user_auth},
+    )
+    assert r.status_code == 403
+
+    # Empty new password → 400.
+    r = client.patch(
+        "/api/me/password",
+        json={"current_password": "oldpass", "new_password": ""},
+        headers={"Authorization": user_auth},
+    )
+    assert r.status_code == 400
+
+    # Correct change → 200.
+    r = client.patch(
+        "/api/me/password",
+        json={"current_password": "oldpass", "new_password": "newpass"},
+        headers={"Authorization": user_auth},
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+
+    # Old credentials now rejected.
+    r = client.get("/api/me", headers={"Authorization": user_auth})
+    assert r.status_code == 401
+
+    # New credentials work.
+    new_auth = "Basic " + base64.b64encode(b"pw-user:newpass").decode()
+    r = client.get("/api/me", headers={"Authorization": new_auth})
+    assert r.status_code == 200
+    assert r.json()["name"] == "pw-user"
+
+
+def test_admin_can_reset_any_password(client):
+    """Admin can reset another user's password via PATCH /admin/users/{name}."""
+    _create_user(client, "reset-target", "original")
+
+    # Admin resets to "forced".
+    r = client.patch(
+        "/api/admin/users/reset-target",
+        json={"password": "forced"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200
+
+    # New password works.
+    new_auth = "Basic " + base64.b64encode(b"reset-target:forced").decode()
+    r = client.get("/api/me", headers={"Authorization": new_auth})
+    assert r.status_code == 200
+    assert r.json()["name"] == "reset-target"
