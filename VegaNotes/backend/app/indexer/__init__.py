@@ -19,7 +19,7 @@ from sqlmodel import Session, select
 from ..config import settings
 from ..db import get_engine, init_db
 from ..models import (
-    Feature, Link, Note, Project, Task, TaskAttr, TaskFeature,
+    Feature, Link, Note, Project, ProjectMember, Task, TaskAttr, TaskFeature,
     TaskOwner, TaskProject, User,
 )
 from ..parser import parse
@@ -350,7 +350,42 @@ def reindex_all(session: Session) -> int:
     for path in sorted(settings.notes_dir.rglob("*.md")):
         reindex_file(path, session)
         n += 1
+    _bootstrap_orphan_projects(session)
     return n
+
+
+def _bootstrap_orphan_projects(session: Session) -> None:
+    """Auto-assign the first admin as manager for any project folder that has
+    no ProjectMember rows — e.g. folders created outside the UI by git or the
+    filesystem.  Without this, non-admin users cannot see or access those
+    projects at all.
+    """
+    admin = session.exec(
+        select(User).where(User.is_admin == True).order_by(User.name)  # noqa: E712
+    ).first()
+    if admin is None:
+        return  # No admin yet (fresh install, not seeded) — skip.
+
+    # Derive project names from note paths: "ProjectName/foo.md" → "ProjectName"
+    notes = session.exec(select(Note)).all()
+    project_names: set[str] = set()
+    for note in notes:
+        parts = note.path.replace("\\", "/").split("/")
+        if len(parts) >= 2:
+            project_names.add(parts[0])
+
+    for project_name in sorted(project_names):
+        has_member = session.exec(
+            select(ProjectMember).where(ProjectMember.project_name == project_name)
+        ).first()
+        if has_member is None:
+            log.warning(
+                "Project %r has no members; auto-assigning admin %r as manager.",
+                project_name,
+                admin.name,
+            )
+            session.add(ProjectMember(project_name=project_name, user_name=admin.name, role="manager"))
+    session.commit()
 
 
 def list_md_files() -> Iterable[Path]:
