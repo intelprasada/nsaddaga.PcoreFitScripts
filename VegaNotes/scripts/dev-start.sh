@@ -33,7 +33,7 @@ start_frontend() {
   cd "$REPO_ROOT/frontend"
   # Clear stale Vite cache to avoid stale module graph errors
   rm -rf node_modules/.vite
-  setsid npx vite --host > "$FRONTEND_LOG" 2>&1 &
+  setsid npx vite > "$FRONTEND_LOG" 2>&1 &
   echo "  PID=$!"
 }
 
