@@ -184,6 +184,11 @@ export const api = {
 
   users: () => req<string[]>("/users"),
   me: () => req<{ name: string; is_admin: boolean }>("/me"),
+  changeMyPassword: (current_password: string, new_password: string) =>
+    req<{ status: string }>("/me/password", {
+      method: "PATCH",
+      body: JSON.stringify({ current_password, new_password }),
+    }),
 
   adminListUsers: () =>
     req<{ name: string; is_admin: boolean; has_password: boolean }[]>("/admin/users"),

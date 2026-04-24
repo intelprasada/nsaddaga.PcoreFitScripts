@@ -10,6 +10,7 @@ import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { NoteEditor } from "./components/Editor/NoteEditor";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { AdminPanel } from "./components/Admin/AdminPanel";
+import { ChangePasswordModal } from "./components/Auth/ChangePasswordModal";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api/client";
 
@@ -467,6 +468,7 @@ function EditInVimButton({ selectedPath, entry, flushSave }: {
 function NavBar() {
   const { view, set } = useUI();
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => api.me() });
+  const [changingPw, setChangingPw] = useState(false);
   const tabs: ("editor" | "kanban" | "agenda" | "timeline" | "calendar" | "graph" | "admin")[] = [
     "editor", "kanban", "agenda", "timeline", "calendar", "graph",
   ];
@@ -511,6 +513,15 @@ function NavBar() {
           {me.name}{me.is_admin ? " · admin" : ""}
         </span>
       )}
+      {me && (
+        <button
+          onClick={() => setChangingPw(true)}
+          className="text-xs text-slate-600 hover:bg-slate-100 rounded px-2 py-1 border"
+          title="Change your password"
+        >
+          change password
+        </button>
+      )}
       <button
         onClick={logout}
         className="text-xs text-slate-600 hover:bg-slate-100 rounded px-2 py-1 border"
@@ -519,6 +530,7 @@ function NavBar() {
         logout
       </button>
       <span className="text-xs text-slate-400">⌘K</span>
+      {changingPw && <ChangePasswordModal onClose={() => setChangingPw(false)} />}
     </nav>
   );
 }
