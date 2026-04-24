@@ -26,7 +26,7 @@ from ..models import (
 )
 from ..parser import parse
 from ..safe_io import (
-    StaleWriteError, _safe_write_unlocked, etag_for, safe_write, with_file_lock,
+    StaleWriteError, _safe_write_unlocked, etag_for, etag_for_bytes, safe_write, with_file_lock,
 )
 
 router = APIRouter(dependencies=[Depends(require_user)])
@@ -227,10 +227,19 @@ def get_note(note_id: int, s: Session = Depends(get_session)) -> dict[str, Any]:
     if not n:
         raise HTTPException(404, "note not found")
     full = settings.notes_dir / n.path
+    # Always read body_md from disk so the editor never shows stale DB-cached
+    # content.  The DB copy is only authoritative for structured queries
+    # (tasks, attrs, FTS); the canonical document is always the .md file.
+    if full.exists():
+        disk_md = full.read_text(encoding="utf-8")
+        disk_etag = etag_for_bytes(disk_md.encode())
+    else:
+        disk_md = n.body_md  # fallback if file somehow missing
+        disk_etag = etag_for(full)
     return {
         "id": n.id, "path": n.path, "title": n.title,
-        "body_md": n.body_md, "updated_at": n.updated_at,
-        "etag": etag_for(full),
+        "body_md": disk_md, "updated_at": n.updated_at,
+        "etag": disk_etag,
     }
 
 
