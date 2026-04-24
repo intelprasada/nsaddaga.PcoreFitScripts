@@ -3,7 +3,6 @@ import { useDeferredValue, useEffect, useRef, useState } from "react";
 interface Props {
   value: string;
   onChange: (v: string) => void;
-  readOnly?: boolean;
 }
 
 /**
@@ -20,7 +19,7 @@ interface Props {
  *     for why the per-line <div> mirror was reverted);
  *   - scroll sync is rAF-throttled to avoid layout thrash on long notes (#52).
  */
-export function NoteEditor({ value, onChange, readOnly = false }: Props) {
+export function NoteEditor({ value, onChange }: Props) {
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const preRef = useRef<HTMLPreElement | null>(null);
 
@@ -118,7 +117,7 @@ export function NoteEditor({ value, onChange, readOnly = false }: Props) {
   }
 
   return (
-    <div className={`vega-editor-wrap relative w-full h-[28rem] rounded border bg-white ${readOnly ? "opacity-80 cursor-not-allowed" : ""}`}>
+    <div className="vega-editor-wrap relative w-full h-[28rem] rounded border bg-white">
       <pre
         ref={preRef}
         aria-hidden="true"
@@ -127,13 +126,12 @@ export function NoteEditor({ value, onChange, readOnly = false }: Props) {
       <textarea
         ref={taRef}
         value={local}
-        onChange={(e) => { if (!readOnly) update(e.target.value); }}
-        onKeyDown={(e) => { if (!readOnly) onKeyDown(e); }}
+        onChange={(e) => update(e.target.value)}
+        onKeyDown={onKeyDown}
         onScroll={onScroll}
-        onBlur={(e) => { if (!readOnly) flushNow(e.currentTarget.value); }}
-        readOnly={readOnly}
+        onBlur={(e) => flushNow(e.currentTarget.value)}
         spellCheck={false}
-        className={`vega-editor-ta absolute inset-0 w-full h-full m-0 p-3 bg-transparent text-transparent caret-slate-900 resize-none outline-none whitespace-pre-wrap break-words ${readOnly ? "cursor-not-allowed select-text" : ""}`}
+        className="vega-editor-ta absolute inset-0 w-full h-full m-0 p-3 bg-transparent text-transparent caret-slate-900 resize-none outline-none whitespace-pre-wrap break-words"
       />
     </div>
   );
@@ -146,15 +144,9 @@ const TASK_RE      = /!task\b/g;
 const AR_RE        = /!AR\b/g;
 // Task ID token: #id T-XXXXXXXX  (must run before ATTR_RE and REF_* so it isn't split)
 const ID_TOKEN_RE  = /#id\s+(T-[A-Z0-9]+)/gi;
-// Ref-row keywords: #task/#AR followed by optional T-XXXXXX id.
-// Run before ATTR_RE so they aren't re-wrapped as generic vega-attr.
-const REF_TASK_RE  = /#task(?:\s+T-[A-Z0-9]+)?\b/gi;
-const REF_AR_RE    = /#AR(?:\s+T-[A-Z0-9]+)?\b/gi;
-// Value-bearing attrs: keyword + next non-space token.
-// Must run before ATTR_RE so the value word isn't left as plain text.
-const ETA_RE       = /#eta\s+(\S+)/gi;
-const STATUS_RE    = /#status\s+(\S+)/gi;
-const PRIORITY_RE  = /#priority\s+(\S+)/gi;
+// Ref-row keywords: must run before ATTR_RE so they aren't re-wrapped as vega-attr.
+const REF_TASK_RE  = /#task\b/gi;
+const REF_AR_RE    = /#AR\b/gi;
 const USER_RE      = /(^|[\s([])@([a-zA-Z][\w.-]*)/g;
 const ATTR_RE      = /#([a-zA-Z][\w-]*)/g;
 
@@ -172,17 +164,13 @@ function highlightLine(line: string): string {
   }
   s = s.replace(TASK_RE, '<span class="vega-task">!task</span>');
   s = s.replace(AR_RE, '<span class="vega-ar">!AR</span>');
-  // #id T-XXXXXX: highlight entire token as a monospace chip.
-  // Must run before REF_* and ATTR_RE so '#id' is not re-wrapped.
+  // #id T-XXXXXX: highlight entire token (keyword + UUID) as a monospace chip.
+  // Must run before REF_* and ATTR_RE so '#id' is not re-wrapped as vega-attr.
   s = s.replace(ID_TOKEN_RE, '<span class="vega-id">#id $1</span>');
-  // Ref-row keywords: #task [T-XXXX] → emerald, #AR [T-XXXX] → amber.
-  // Run before ATTR_RE so the already-wrapped span text isn't re-matched.
-  s = s.replace(REF_TASK_RE, (m2) => `<span class="vega-task">${m2}</span>`);
-  s = s.replace(REF_AR_RE,   (m2) => `<span class="vega-ar">${m2}</span>`);
-  // Value-bearing attrs: show keyword + value as a single styled token.
-  s = s.replace(ETA_RE,      (_m, v) => `<span class="vega-eta">#eta ${v}</span>`);
-  s = s.replace(STATUS_RE,   (_m, v) => `<span class="vega-status">#status ${v}</span>`);
-  s = s.replace(PRIORITY_RE, (_m, v) => `<span class="vega-priority">#priority ${v}</span>`);
+  // Ref-row keywords: #task → emerald, #AR → amber.  Run before ATTR_RE so the
+  // already-wrapped span text isn't re-matched (ATTR_RE guard also checks for >).
+  s = s.replace(REF_TASK_RE, '<span class="vega-task">#task</span>');
+  s = s.replace(REF_AR_RE, '<span class="vega-ar">#AR</span>');
   s = s.replace(USER_RE, (_m, lead, name) =>
     `${lead}<span class="vega-user">@${name}</span>`);
   s = s.replace(ATTR_RE, (m2, name, off, full) => {
