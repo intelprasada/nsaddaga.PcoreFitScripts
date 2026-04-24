@@ -25,6 +25,7 @@ _TASK_LINE_FULL = re.compile(
     r"(?P<rest>(?:\s+#[^\n]*)?)\s*$",                # rest (attrs)
     re.IGNORECASE,
 )
+_BANG_KEYWORD_RE = re.compile(r"^(?P<lead>\s*(?:[-*+]\s+|\d+[.)]\s+)?!(?:task|AR)\b)", re.IGNORECASE)
 _ID_TOKEN_RE = re.compile(r"#id\s+(\S+)", re.IGNORECASE)
 # Crockford-style base32 alphabet (no I, L, O, U for unambiguity).
 _ID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -202,14 +203,28 @@ def inject_missing_ids(md: str) -> tuple[str, dict[int, str]]:
         new_id = generate_task_id(ids)
         ids.add(new_id)
         added[i] = new_id
-        # Append `#id <ID>` before the trailing newline, with a space sep.
-        body = raw
-        nl = ""
-        while body.endswith("\n") or body.endswith("\r"):
-            nl = body[-1] + nl
-            body = body[:-1]
-        sep = "" if not body or body.endswith(" ") else " "
-        lines[i] = f"{body}{sep}#id {new_id}{nl}"
+        # Insert `#id <ID>` immediately after the !task/!AR keyword so it is
+        # the first visible attribute, co-located with the declaration.
+        # Input:  "  !task Buy milk #priority p1\n"
+        # Output: "  !task #id T-XXXX Buy milk #priority p1\n"
+        m = _BANG_KEYWORD_RE.match(raw)
+        if m:
+            after_kw = raw[m.end():]          # " Buy milk #priority p1\n"
+            # Always insert a space after the keyword, then "#id <ID> ".
+            # after_kw starts with a space or content; strip its leading space
+            # to avoid double-space.
+            after_kw_stripped = after_kw.lstrip(" ")
+            space_after = " " if after_kw_stripped else ""
+            lines[i] = f"{m.group()} #id {new_id}{space_after}{after_kw_stripped}"
+        else:
+            # Fallback (shouldn't happen): append at end.
+            body = raw
+            nl = ""
+            while body.endswith("\n") or body.endswith("\r"):
+                nl = body[-1] + nl
+                body = body[:-1]
+            sep2 = "" if not body or body.endswith(" ") else " "
+            lines[i] = f"{body}{sep2}#id {new_id}{nl}"
     return "".join(lines), added
 
 
@@ -231,28 +246,56 @@ def rewrite_tasks_as_refs(md: str) -> str:
     lines = md.splitlines(keepends=True)
     out: list[str] = []
     for raw in lines:
-        m = _TASK_LINE_FULL.match(raw)
-        if not m:
+        # Identify the line as a !task/!AR declaration first.
+        m_kw = _BANG_KEYWORD_RE.match(raw)
+        if not m_kw:
             out.append(raw)
             continue
         tid = _extract_task_id(raw)
         if tid is None:
             out.append(raw)
             continue
+
+        # Preserve trailing newline.
         body = raw
         nl = ""
         while body.endswith("\n") or body.endswith("\r"):
             nl = body[-1] + nl
             body = body[:-1]
-        lead = m.group("lead")
-        bang = m.group("bang").upper()   # "TASK" or "AR"
+
+        # Determine bang keyword from the match (group captures up to !TASK/!AR).
+        kw_str = m_kw.group()  # e.g. "  - !task" or "!AR"
+        bang = "AR" if kw_str.upper().endswith("!AR") else "TASK"
         ref_keyword = "#AR" if bang == "AR" else "#task"
-        title = m.group("title").strip()
-        rest = m.group("rest") or ""
-        # Strip the `#id <ID>` token (lives only on the source line).
+
+        # Reconstruct lead from _TASK_LINE_FULL if available, else derive.
+        m_full = _TASK_LINE_FULL.match(raw)
+        if m_full:
+            lead = m_full.group("lead")
+            title = m_full.group("title").strip()
+            rest = (m_full.group("rest") or "").strip()
+        else:
+            # With new placement (#id right after !task), _TASK_LINE_FULL fails
+            # because title=[^#]* can't match past the #id token.
+            # Derive lead as everything up to and including the !keyword,
+            # then treat everything after the keyword as raw_rest.
+            lead_m = re.match(r"^(\s*(?:[-*+]\s+|\d+[.)]\s+)?)", raw)
+            lead = lead_m.group(1) if lead_m else ""
+            # raw_rest is everything after the !task/!AR keyword.
+            raw_rest = raw[m_kw.end():]  # may start with space + #id ...
+            title = ""
+            rest = raw_rest.strip()
+
+        # Strip the `#id <ID>` token from rest/title (it goes into ref_keyword).
         rest_clean = _ID_TOKEN_RE.sub("", rest).strip()
+        # Also clean from title in case it got there.
+        title_clean = _ID_TOKEN_RE.sub("", title).strip()
         rest_clean = re.sub(r"\s{2,}", " ", rest_clean).strip()
-        pieces = [f"{lead}{ref_keyword} {tid}", title]
+
+        # Build: "LEAD #task|#AR TID TITLE ATTRS"
+        pieces = [f"{lead}{ref_keyword} {tid}"]
+        if title_clean:
+            pieces.append(title_clean)
         if rest_clean:
             pieces.append(rest_clean)
         out.append(" ".join(p for p in pieces if p) + nl)

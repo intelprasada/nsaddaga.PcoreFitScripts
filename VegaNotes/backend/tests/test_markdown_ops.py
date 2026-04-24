@@ -131,8 +131,9 @@ def test_roll_emits_refs_and_patches_source():
     assert "!task Carry over" not in new_md  # rewritten as ref row
     assert "#task T-" in new_md  # ref row emitted
     assert "Carry over" in new_md  # title preserved
-    # Source carries IDs but no #task ref rows
-    assert "!task Carry over" in patched
+    # Source carries IDs right after the !task keyword; title follows the ID
+    assert "!task #id T-" in patched
+    assert "Carry over" in patched
     assert "#task T-" not in patched
 
 

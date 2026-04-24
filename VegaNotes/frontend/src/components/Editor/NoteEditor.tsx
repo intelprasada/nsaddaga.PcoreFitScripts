@@ -142,6 +142,8 @@ export function NoteEditor({ value, onChange }: Props) {
 const HEADING_LINE_RE = /^(\s*)(#{1,6})(\s+)(.*)$/;
 const TASK_RE      = /!task\b/g;
 const AR_RE        = /!AR\b/g;
+// Task ID token: #id T-XXXXXXXX  (must run before ATTR_RE and REF_* so it isn't split)
+const ID_TOKEN_RE  = /#id\s+(T-[A-Z0-9]+)/gi;
 // Ref-row keywords: must run before ATTR_RE so they aren't re-wrapped as vega-attr.
 const REF_TASK_RE  = /#task\b/gi;
 const REF_AR_RE    = /#AR\b/gi;
@@ -162,6 +164,9 @@ function highlightLine(line: string): string {
   }
   s = s.replace(TASK_RE, '<span class="vega-task">!task</span>');
   s = s.replace(AR_RE, '<span class="vega-ar">!AR</span>');
+  // #id T-XXXXXX: highlight entire token (keyword + UUID) as a monospace chip.
+  // Must run before REF_* and ATTR_RE so '#id' is not re-wrapped as vega-attr.
+  s = s.replace(ID_TOKEN_RE, '<span class="vega-id">#id $1</span>');
   // Ref-row keywords: #task → emerald, #AR → amber.  Run before ATTR_RE so the
   // already-wrapped span text isn't re-matched (ATTR_RE guard also checks for >).
   s = s.replace(REF_TASK_RE, '<span class="vega-task">#task</span>');
