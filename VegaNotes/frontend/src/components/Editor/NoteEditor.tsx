@@ -140,10 +140,13 @@ export function NoteEditor({ value, onChange }: Props) {
 /* ---------- highlighter (per-line, cached) -------------------------------- */
 
 const HEADING_LINE_RE = /^(\s*)(#{1,6})(\s+)(.*)$/;
-const TASK_RE = /!task\b/g;
-const AR_RE   = /!AR\b/g;
-const USER_RE = /(^|[\s([])@([a-zA-Z][\w.-]*)/g;
-const ATTR_RE = /#([a-zA-Z][\w-]*)/g;
+const TASK_RE      = /!task\b/g;
+const AR_RE        = /!AR\b/g;
+// Ref-row keywords: must run before ATTR_RE so they aren't re-wrapped as vega-attr.
+const REF_TASK_RE  = /#task\b/gi;
+const REF_AR_RE    = /#AR\b/gi;
+const USER_RE      = /(^|[\s([])@([a-zA-Z][\w.-]*)/g;
+const ATTR_RE      = /#([a-zA-Z][\w-]*)/g;
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
@@ -159,11 +162,16 @@ function highlightLine(line: string): string {
   }
   s = s.replace(TASK_RE, '<span class="vega-task">!task</span>');
   s = s.replace(AR_RE, '<span class="vega-ar">!AR</span>');
+  // Ref-row keywords: #task → emerald, #AR → amber.  Run before ATTR_RE so the
+  // already-wrapped span text isn't re-matched (ATTR_RE guard also checks for >).
+  s = s.replace(REF_TASK_RE, '<span class="vega-task">#task</span>');
+  s = s.replace(REF_AR_RE, '<span class="vega-ar">#AR</span>');
   s = s.replace(USER_RE, (_m, lead, name) =>
     `${lead}<span class="vega-user">@${name}</span>`);
   s = s.replace(ATTR_RE, (m2, name, off, full) => {
     const prev = full[off - 1];
-    if (prev && /[A-Za-z0-9_-]/.test(prev)) return m2;
+    // Skip if preceded by an alphanumeric (mid-word) or by '>' (already inside a span).
+    if (prev && /[A-Za-z0-9_>-]/.test(prev)) return m2;
     return `<span class="vega-attr">#${name}</span>`;
   });
   return s;
