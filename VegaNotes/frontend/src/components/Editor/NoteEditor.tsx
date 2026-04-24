@@ -3,6 +3,7 @@ import { useDeferredValue, useEffect, useRef, useState } from "react";
 interface Props {
   value: string;
   onChange: (v: string) => void;
+  readOnly?: boolean;
 }
 
 /**
@@ -19,7 +20,7 @@ interface Props {
  *     for why the per-line <div> mirror was reverted);
  *   - scroll sync is rAF-throttled to avoid layout thrash on long notes (#52).
  */
-export function NoteEditor({ value, onChange }: Props) {
+export function NoteEditor({ value, onChange, readOnly = false }: Props) {
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const preRef = useRef<HTMLPreElement | null>(null);
 
@@ -117,7 +118,7 @@ export function NoteEditor({ value, onChange }: Props) {
   }
 
   return (
-    <div className="vega-editor-wrap relative w-full h-[28rem] rounded border bg-white">
+    <div className={`vega-editor-wrap relative w-full h-[28rem] rounded border bg-white ${readOnly ? "opacity-80 cursor-not-allowed" : ""}`}>
       <pre
         ref={preRef}
         aria-hidden="true"
@@ -126,12 +127,13 @@ export function NoteEditor({ value, onChange }: Props) {
       <textarea
         ref={taRef}
         value={local}
-        onChange={(e) => update(e.target.value)}
-        onKeyDown={onKeyDown}
+        onChange={(e) => { if (!readOnly) update(e.target.value); }}
+        onKeyDown={(e) => { if (!readOnly) onKeyDown(e); }}
         onScroll={onScroll}
-        onBlur={(e) => flushNow(e.currentTarget.value)}
+        onBlur={(e) => { if (!readOnly) flushNow(e.currentTarget.value); }}
+        readOnly={readOnly}
         spellCheck={false}
-        className="vega-editor-ta absolute inset-0 w-full h-full m-0 p-3 bg-transparent text-transparent caret-slate-900 resize-none outline-none whitespace-pre-wrap break-words"
+        className={`vega-editor-ta absolute inset-0 w-full h-full m-0 p-3 bg-transparent text-transparent caret-slate-900 resize-none outline-none whitespace-pre-wrap break-words ${readOnly ? "cursor-not-allowed select-text" : ""}`}
       />
     </div>
   );
