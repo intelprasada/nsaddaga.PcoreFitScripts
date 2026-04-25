@@ -859,6 +859,17 @@ class TaskPatch(BaseModel):
     notes: Optional[str] = None
 
 
+@router.get("/tasks/{task_ref}")
+def get_task(
+    task_ref: str,
+    s: Session = Depends(get_session),
+    include_children: bool = False,
+) -> dict[str, Any]:
+    """Fetch a single task by integer PK or `T-XXXXXX` uuid ref."""
+    t = _resolve_task(task_ref, s)
+    return _task_to_dict(s, t, include_children=include_children)
+
+
 @router.patch("/tasks/{task_ref}")
 def patch_task(
     task_ref: str,
