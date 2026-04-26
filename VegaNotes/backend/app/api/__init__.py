@@ -1480,12 +1480,29 @@ def admin_delete_user(
 
 @router.get("/search")
 def search(q: str, s: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    # FTS5 treats characters like '-', ':', '"', '*', '^', '(' / ')' and
+    # '.' as operators; passing a raw user string (e.g. 'fit-val') would
+    # raise sqlite3.OperationalError -> 500. Convert the input into a
+    # safe AND-of-tokens query: split on whitespace, drop FTS5-special
+    # punctuation from each token, and quote each surviving token as a
+    # phrase. Empty result -> return [] without hitting the DB.
+    raw_tokens = q.split() if q else []
+    safe_tokens: list[str] = []
+    for tok in raw_tokens:
+        cleaned = _re.sub(r'[\"\*\^\(\)\:\.\-]', " ", tok).strip()
+        for piece in cleaned.split():
+            # Wrap in double quotes so SQLite treats it as a phrase token
+            # (escape any embedded quote, though we just stripped them).
+            safe_tokens.append('"' + piece.replace('"', '') + '"')
+    if not safe_tokens:
+        return []
+    fts_query = " AND ".join(safe_tokens)
     rows = s.exec(text("""
         SELECT n.id, n.path, n.title
         FROM notes_fts f JOIN note n ON n.id = f.rowid
         WHERE notes_fts MATCH :q
         LIMIT 50
-    """).bindparams(q=q)).all()
+    """).bindparams(q=fts_query)).all()
     return [{"id": r[0], "path": r[1], "title": r[2]} for r in rows]
 
 

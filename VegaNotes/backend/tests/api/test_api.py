@@ -316,3 +316,19 @@ def test_patch_propagates_to_ref_rows(client):
     assert ref_body.count("#eta 2026-W20") == 2
     # Old status gone.
     assert "#status todo" not in ref_body
+
+
+def test_search_handles_fts5_special_chars(client):
+    """Regression: queries containing FTS5 operators (-, :, ", *, etc.)
+    used to bubble sqlite3.OperationalError -> 500.  They must be
+    sanitised into a phrase-AND query and return 200 (possibly empty)."""
+    for q in ["fit-val", "foo:bar", 'has"quote', "wild*", "a.b", "(paren)"]:
+        r = client.get(f"/api/search?q={q}", headers={"Authorization": AUTH})
+        assert r.status_code == 200, f"q={q!r} -> {r.status_code}: {r.text}"
+        assert isinstance(r.json(), list)
+
+
+def test_search_empty_query_returns_empty_list(client):
+    r = client.get("/api/search?q=%20%20", headers={"Authorization": AUTH})
+    assert r.status_code == 200
+    assert r.json() == []
