@@ -125,6 +125,42 @@ Outputs an aligned text table by default; pick another shape with
 Pick + reorder columns with `--columns id,priority,eta,title`; bucket
 the table by any field with `--group-by area`.
 
+#### Tasks, subtasks and ARs
+
+Every row carries a `kind` (`task` or `ar`) and a `parent_task_id`. By
+default `vn list` shows only top-level tasks (`kind=task`,
+`parent_task_id IS NULL`). Three knobs surface the rest:
+
+| flag              | what it does                                                               |
+| ----------------- | -------------------------------------------------------------------------- |
+| `--columns …,type,…` | render a `type` column showing `task`, `subtask`, or `ar`              |
+| `--tree`          | include subtasks as `include_children=true`, widen `--kind` to `task,ar`, indent children under their parent in the title column with `├─` / `└─` |
+| `--with-children` | only set `include_children=true` (no rendering change) — for JSON consumers that want nested `children` arrays |
+
+```bash
+# See the kind of each row at a glance:
+vn list --columns id,type,status,priority,title
+
+# Hierarchical view (tasks + ARs, subtasks indented):
+vn list --tree --project ww18
+
+# Same data, but as nested JSON for a downstream script:
+vn list --tree --format json
+# or, without the rendering, just the raw nesting:
+vn list --with-children --format json
+```
+
+Sample tree output:
+
+```
+ID    TYPE     STATUS  PRIORITY  ETA   OWNERS  TITLE
+----  -------  ------  --------  ----  ------  -----------------
+T-1   task     wip     P1        ww18  alice   Refactor parser
+T-1a  subtask  todo                            ├─ add token
+T-1b  subtask  done                            └─ fix lexer
+T-2   ar       open    P2              bob     PR review pending
+```
+
 #### Query language (`-w` / `--where`)
 
 `vn list` (and the `vn query` alias) accept repeatable `--where`

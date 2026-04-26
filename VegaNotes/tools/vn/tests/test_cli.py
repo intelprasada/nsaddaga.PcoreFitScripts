@@ -243,6 +243,107 @@ def test_list_json_output(fake_client, capsys):
     assert json.loads(out) == {"tasks": [{"id": 1}]}
 
 
+# ---------- task / subtask / AR relationships -----------------------------
+
+def test_type_column_classifies_task_subtask_ar(fake_client, capsys):
+    fake_client.responses[("GET", "/api/tasks")] = {"tasks": [
+        {"id": 1, "task_uuid": "T-1", "title": "top", "status": "todo",
+         "kind": "task", "parent_task_id": None, "owners": [], "attrs": {}},
+        {"id": 2, "task_uuid": "T-2", "title": "child", "status": "todo",
+         "kind": "task", "parent_task_id": 1, "owners": [], "attrs": {}},
+        {"id": 3, "task_uuid": "T-3", "title": "ar1", "status": "open",
+         "kind": "ar", "parent_task_id": None, "owners": [], "attrs": {}},
+    ]}
+    cli.main(["list", "--columns", "id,type,title"])
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    # Header + separator + 3 data rows
+    assert lines[0].split() == ["ID", "TYPE", "TITLE"]
+    body = "\n".join(lines[2:])
+    assert "T-1" in body and " task " in body
+    assert "T-2" in body and " subtask " in body
+    assert "T-3" in body and " ar " in body
+
+
+def test_tree_flag_sets_include_children_and_kind(fake_client, capsys):
+    fake_client.responses[("GET", "/api/tasks")] = {"tasks": []}
+    cli.main(["list", "--tree"])
+    method, path, params, _ = fake_client.calls[0]
+    assert method == "GET" and path == "/api/tasks"
+    assert params.get("include_children") is True
+    # --tree widens kind to task,ar when caller did not pass --kind.
+    assert params.get("kind") == "task,ar"
+
+
+def test_tree_flag_respects_explicit_kind(fake_client, capsys):
+    fake_client.responses[("GET", "/api/tasks")] = {"tasks": []}
+    cli.main(["list", "--tree", "--kind", "task"])
+    _, _, params, _ = fake_client.calls[0]
+    assert params.get("kind") == "task"
+    assert params.get("include_children") is True
+
+
+def test_tree_renders_subtasks_indented_under_parents(fake_client, capsys):
+    fake_client.responses[("GET", "/api/tasks")] = {"tasks": [
+        {"id": 1, "task_uuid": "T-1", "title": "Parent A", "status": "wip",
+         "kind": "task", "parent_task_id": None, "owners": [], "attrs": {},
+         "children": [
+             {"id": 11, "task_uuid": "T-1a", "title": "child one",
+              "status": "todo", "kind": "task"},
+             {"id": 12, "task_uuid": "T-1b", "title": "child two",
+              "status": "done", "kind": "task"},
+         ]},
+        {"id": 2, "task_uuid": "T-2", "title": "Lone AR",
+         "status": "open", "kind": "ar", "parent_task_id": None,
+         "owners": [], "attrs": {}, "children": []},
+    ]}
+    cli.main(["list", "--tree", "--columns", "id,type,title"])
+    out = capsys.readouterr().out
+    # Parent A row, two indented children, then the AR.
+    assert "Parent A" in out
+    assert "├─ child one" in out
+    assert "└─ child two" in out
+    assert "Lone AR" in out
+    # Children classify as subtask, AR row classifies as ar.
+    parent_idx = out.index("Parent A")
+    child_idx = out.index("child one")
+    ar_idx = out.index("Lone AR")
+    assert parent_idx < child_idx < ar_idx
+    assert "subtask" in out[child_idx - 30: child_idx]
+    assert "ar" in out[ar_idx - 30: ar_idx]
+
+
+def test_with_children_passes_param_without_flattening(fake_client, capsys):
+    payload = {"tasks": [
+        {"id": 1, "task_uuid": "T-1", "title": "p", "status": "wip",
+         "kind": "task", "parent_task_id": None, "owners": [], "attrs": {},
+         "children": [{"id": 11, "task_uuid": "T-1a", "title": "c",
+                       "status": "todo", "kind": "task"}]},
+    ]}
+    fake_client.responses[("GET", "/api/tasks")] = payload
+    cli.main(["--json", "list", "--with-children"])
+    _, _, params, _ = fake_client.calls[0]
+    assert params.get("include_children") is True
+    out = capsys.readouterr().out
+    parsed = json.loads(out)
+    # JSON keeps the nested children intact (no flattening for json fmt).
+    assert parsed["tasks"][0]["children"][0]["task_uuid"] == "T-1a"
+
+
+def test_tree_json_keeps_nested_children(fake_client, capsys):
+    payload = {"tasks": [
+        {"id": 1, "task_uuid": "T-1", "title": "p", "status": "wip",
+         "kind": "task", "parent_task_id": None, "owners": [], "attrs": {},
+         "children": [{"id": 11, "task_uuid": "T-1a", "title": "c",
+                       "status": "todo", "kind": "task"}]},
+    ]}
+    fake_client.responses[("GET", "/api/tasks")] = payload
+    cli.main(["list", "--tree", "--format", "json"])
+    out = capsys.readouterr().out
+    parsed = json.loads(out)
+    assert parsed["tasks"][0]["children"][0]["task_uuid"] == "T-1a"
+
+
 # ---------- note new -------------------------------------------------------
 
 def test_note_new_default_path(fake_client, capsys):

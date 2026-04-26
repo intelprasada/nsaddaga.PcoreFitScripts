@@ -73,6 +73,18 @@ def _print_json(data: Any) -> None:
 
 
 _DEFAULT_COLUMNS = ("id", "status", "priority", "eta", "owners", "title")
+_TREE_DEFAULT_COLUMNS = ("id", "type", "status", "priority", "eta", "owners", "title")
+
+
+def _task_type(task: dict[str, Any]) -> str:
+    """Classify a task row as 'task', 'subtask' or 'ar'.
+
+    A row with parent_task_id set is always a subtask (regardless of kind);
+    otherwise the value of `kind` (default 'task') is returned.
+    """
+    if task.get("parent_task_id"):
+        return "subtask"
+    return str(task.get("kind") or "task")
 
 
 def _task_field(task: dict[str, Any], col: str) -> str:
@@ -80,8 +92,12 @@ def _task_field(task: dict[str, Any], col: str) -> str:
     col = col.lower()
     if col == "id":
         return str(task.get("task_uuid") or task.get("ref") or task.get("id") or "")
+    if col == "type":
+        return _task_type(task)
     if col == "title":
-        return (task.get("title") or "").strip()
+        title = (task.get("title") or "").strip()
+        prefix = task.get("_indent_prefix")
+        return f"{prefix}{title}" if prefix else title
     if col == "status":
         return str(task.get("status") or "")
     if col == "owners":
@@ -186,6 +202,29 @@ def cmd_task(client: Client, args: argparse.Namespace) -> int:
     return 0
 
 
+def _flatten_tree(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Flatten parents + their `children` into one row list, tagging each
+    child with an `_indent_prefix` so the title column shows the hierarchy.
+
+    Children come straight from the API's `include_children=true` response
+    (a shallow `children` array per parent).  Parents that have no children
+    are returned as-is.
+    """
+    out: list[dict[str, Any]] = []
+    for parent in tasks:
+        parent_copy = dict(parent)
+        parent_copy.pop("_indent_prefix", None)
+        out.append(parent_copy)
+        kids = parent.get("children") or []
+        last = len(kids) - 1
+        for i, c in enumerate(kids):
+            child = dict(c)
+            child["_indent_prefix"] = ("└─ " if i == last else "├─ ")
+            child.setdefault("parent_task_id", parent.get("id"))
+            out.append(child)
+    return out
+
+
 def cmd_list(client: Client, args: argparse.Namespace) -> int:
     # Start with the explicit fixed-column flags; these win when both a
     # flag and a `--where` clause set the same key (last-write semantics
@@ -211,6 +250,14 @@ def cmd_list(client: Client, args: argparse.Namespace) -> int:
         "limit": args.limit,
         "offset": args.offset,
     }
+    tree_mode = bool(getattr(args, "tree", False))
+    with_children = tree_mode or bool(getattr(args, "with_children", False))
+    if with_children:
+        fixed["include_children"] = True
+    if tree_mode and not args.kind:
+        # Tree view is meant to show task / AR rows side-by-side.  Don't
+        # silently override an explicit --kind the caller passed in.
+        fixed["kind"] = "task,ar"
     for k, v in fixed.items():
         if v is None or v is False:
             continue
@@ -239,21 +286,27 @@ def cmd_list(client: Client, args: argparse.Namespace) -> int:
     tasks = (data or {}).get("tasks") if isinstance(data, dict) else data
 
     fmt = (args.format or ("json" if args.json else "table")).lower()
-    columns = tuple(c.strip().lower() for c in (args.columns or ",".join(_DEFAULT_COLUMNS)).split(",") if c.strip())
+    default_cols = _TREE_DEFAULT_COLUMNS if tree_mode else _DEFAULT_COLUMNS
+    columns = tuple(c.strip().lower() for c in (args.columns or ",".join(default_cols)).split(",") if c.strip())
+
+    # Tree mode flattens parents + their `children` into a single row list
+    # for table/csv output.  JSON/JSONL preserve the nested structure so
+    # downstream consumers see the relationship intact.
+    table_rows = _flatten_tree(tasks or []) if tree_mode and fmt in ("table", "csv", "ids") else (tasks or [])
 
     if fmt == "json":
         _print_json(data)
     elif fmt == "jsonl":
         _print_task_jsonl(tasks or [])
     elif fmt == "csv":
-        _print_task_csv(tasks or [], columns)
+        _print_task_csv(table_rows, columns)
     elif fmt == "ids":
-        _print_task_ids(tasks or [])
+        _print_task_ids(table_rows)
     elif fmt == "table":
         if args.group_by:
-            _print_grouped(tasks or [], args.group_by.lower(), columns)
+            _print_grouped(table_rows, args.group_by.lower(), columns)
         else:
-            _print_task_table(tasks or [], columns)
+            _print_task_table(table_rows, columns)
     else:
         print(f"vn: unknown --format: {fmt}", file=sys.stderr)
         return 2
@@ -354,6 +407,16 @@ def build_parser() -> argparse.ArgumentParser:
         target.add_argument(
             "--group-by", dest="group_by",
             help="bucket the table output by this field (table format only)",
+        )
+        target.add_argument(
+            "--tree", action="store_true",
+            help="show parent tasks with their subtasks indented underneath; "
+                 "implies --kind task,ar and include_children=true",
+        )
+        target.add_argument(
+            "--with-children", action="store_true", dest="with_children",
+            help="ask the API to nest subtasks under each parent in the "
+                 "JSON/JSONL response (no rendering change)",
         )
         target.set_defaults(func=cmd_list)
 
