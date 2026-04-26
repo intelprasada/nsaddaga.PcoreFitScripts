@@ -396,6 +396,365 @@ def cmd_whoami(client: Client, args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# `vn show <resource>` — read-only inspector for the rest of the API.
+# ---------------------------------------------------------------------------
+#
+# Goal: every endpoint the GUI calls should be reachable from the terminal
+# without resorting to raw curl, so debugging "what's actually in the DB?"
+# stops requiring a SQLite shell.  Each resource maps to one (or two) of
+# the existing GET endpoints; rendering goes through one generic table
+# helper plus the existing `_print_json` / CSV / JSONL helpers.
+#
+# All `vn show` subcommands are read-only.
+
+def _print_records_table(
+    records: list[dict[str, Any]],
+    columns: tuple[str, ...],
+) -> None:
+    """Render a list of arbitrary dicts as an aligned text table.
+
+    Unknown columns render as an empty string.  Lists are joined with
+    commas; everything else is stringified.  Mirrors `_print_task_table`
+    but is task-agnostic so `vn show projects/users/...` can reuse it.
+    """
+    if not records:
+        print("(empty)")
+        return
+
+    def _val(rec: dict[str, Any], col: str) -> str:
+        v = rec.get(col)
+        if v is None:
+            return ""
+        if isinstance(v, list):
+            return ",".join(str(x) for x in v)
+        if isinstance(v, dict):
+            return json.dumps(v, default=str, sort_keys=True)
+        return str(v)
+
+    rows = [tuple(_val(r, c) for c in columns) for r in records]
+    headers = tuple(c.upper() for c in columns)
+    widths = [
+        max(len(h), max((len(r[i]) for r in rows), default=0))
+        for i, h in enumerate(headers)
+    ]
+    fmt = "  ".join("{:<" + str(w) + "}" for w in widths)
+    print(fmt.format(*headers))
+    print(fmt.format(*("-" * w for w in widths)))
+    for r in rows:
+        print(fmt.format(*r))
+
+
+def _print_records_csv(
+    records: list[dict[str, Any]],
+    columns: tuple[str, ...],
+) -> None:
+    import csv
+    w = csv.writer(sys.stdout)
+    w.writerow([c.lower() for c in columns])
+    for r in records:
+        w.writerow([
+            ",".join(str(x) for x in v) if isinstance(v, list)
+            else "" if v is None else str(v)
+            for v in (r.get(c) for c in columns)
+        ])
+
+
+def _emit_records(
+    args: argparse.Namespace,
+    records: list[dict[str, Any]],
+    default_columns: tuple[str, ...],
+    raw: Any | None = None,
+) -> None:
+    """Render `records` according to --format / --columns / --json.
+
+    `raw` is the API envelope to emit when --format=json (so callers that
+    receive {"foo": [...]} can pass the dict verbatim instead of unwrapped
+    records).  Defaults to `records` when not supplied.
+    """
+    fmt = (getattr(args, "format", None) or ("json" if args.json else "table")).lower()
+    cols = getattr(args, "columns", None)
+    columns = tuple(c.strip().lower() for c in (cols or ",".join(default_columns)).split(",") if c.strip())
+    if fmt == "json":
+        _print_json(raw if raw is not None else records)
+    elif fmt == "jsonl":
+        for r in records:
+            sys.stdout.write(json.dumps(r, default=str, sort_keys=True))
+            sys.stdout.write("\n")
+    elif fmt == "csv":
+        _print_records_csv(records, columns)
+    elif fmt == "ids":
+        for r in records:
+            sys.stdout.write(str(r.get("id") or r.get("name") or r.get("path") or ""))
+            sys.stdout.write("\n")
+    else:
+        _print_records_table(records, columns)
+
+
+def _wrap_string_list(items: list[Any], key: str) -> list[dict[str, Any]]:
+    """Some endpoints return a flat ['name1', 'name2', ...] list; lift it
+    into [{key: 'name1'}, ...] so the generic renderer can show it."""
+    return [{key: x} for x in items]
+
+
+def cmd_show(client: Client, args: argparse.Namespace) -> int:
+    resource = args.resource
+
+    if resource == "projects":
+        if args.target:
+            # Project detail: members + notes for one project.
+            members = client.get(f"/api/projects/{args.target}/members") or []
+            notes = client.get(f"/api/projects/{args.target}/notes") or []
+            envelope = {"project": args.target, "members": members, "notes": notes}
+            if (args.format or ("json" if args.json else "table")).lower() == "json":
+                _print_json(envelope)
+                return 0
+            print(f"== project {args.target} ==")
+            print(f"members ({len(members)}):")
+            _print_records_table(members, ("user_name", "role"))
+            print()
+            print(f"notes ({len(notes)}):")
+            _print_records_table(notes, ("id", "path", "title"))
+            return 0
+        data = client.get("/api/projects") or []
+        _emit_records(args, data, ("name", "role"))
+        return 0
+
+    if resource == "users":
+        data = client.get("/api/users") or []
+        # /api/users returns ['name1', 'name2'] — wrap for table rendering.
+        records = _wrap_string_list(data, "name") if data and isinstance(data[0], str) else data
+        _emit_records(args, records, ("name",), raw=data)
+        return 0
+
+    if resource == "features":
+        if args.target:
+            data = client.get(f"/api/features/{args.target}/tasks") or {}
+            tasks = data.get("tasks", [])
+            fmt = (args.format or ("json" if args.json else "table")).lower()
+            if fmt == "json":
+                _print_json(data)
+                return 0
+            cols = tuple(c.strip().lower() for c in (args.columns or ",".join(_DEFAULT_COLUMNS)).split(",") if c.strip())
+            print(f"== feature {args.target}  ({len(tasks)} tasks) ==")
+            _print_task_table(tasks, cols)
+            aggs = data.get("aggregations") or {}
+            if aggs and fmt == "table":
+                print()
+                print(f"owners:   {','.join(aggs.get('owners') or [])}")
+                print(f"projects: {','.join(aggs.get('projects') or [])}")
+                print(f"status:   {aggs.get('status_breakdown') or {}}")
+            return 0
+        data = client.get("/api/features") or []
+        records = _wrap_string_list(data, "name") if data and isinstance(data[0], str) else data
+        _emit_records(args, records, ("name",), raw=data)
+        return 0
+
+    if resource == "attrs":
+        data = client.get("/api/attrs") or []
+        # Each row: {key, count, sample_values}.  Render samples as joined.
+        _emit_records(args, data, ("key", "count", "sample_values"))
+        return 0
+
+    if resource == "notes":
+        if args.target:
+            # Single note: id (int) or path (string).
+            t = args.target
+            if t.isdigit():
+                data = client.get(f"/api/notes/{t}") or {}
+            else:
+                # /api/notes/{id} only accepts an int; resolve path -> id first.
+                listing = client.get("/api/notes") or []
+                match = next((n for n in listing if n.get("path") == t), None)
+                if not match:
+                    print(f"vn: note not found: {t}", file=sys.stderr)
+                    return 1
+                data = client.get(f"/api/notes/{match['id']}") or {}
+            if args.json or (args.format or "").lower() == "json":
+                _print_json(data)
+                return 0
+            print(f"id:    {data.get('id')}")
+            print(f"path:  {data.get('path')}")
+            print(f"title: {data.get('title')}")
+            print(f"etag:  {data.get('etag')}")
+            body = data.get("body_md") or ""
+            if args.full:
+                print()
+                print(body)
+            else:
+                preview = "\n".join(body.splitlines()[:20])
+                print()
+                print(preview)
+                if body.count("\n") > 20:
+                    print(f"... ({body.count(chr(10)) + 1} lines total — pass --full to see all)")
+            return 0
+        data = client.get("/api/notes") or []
+        _emit_records(args, data, ("id", "path", "title", "updated_at"))
+        return 0
+
+    if resource == "tree":
+        data = client.get("/api/tree") or []
+        if args.json or (args.format or "").lower() == "json":
+            _print_json(data)
+            return 0
+        for proj in data:
+            name = proj.get("project") or "(loose)"
+            role = proj.get("role") or "?"
+            notes = proj.get("notes") or []
+            print(f"{name}  [{role}]  ({len(notes)} notes)")
+            for i, n in enumerate(notes):
+                glyph = "└─" if i == len(notes) - 1 else "├─"
+                print(f"  {glyph} {n.get('path')}  (id={n.get('id')})")
+        return 0
+
+    if resource == "agenda":
+        params: dict[str, Any] = {}
+        if args.owner:
+            params["owner"] = args.owner
+        if args.days is not None:
+            params["days"] = args.days
+        data = client.get("/api/agenda", **params) or {}
+        if args.json or (args.format or "").lower() == "json":
+            _print_json(data)
+            return 0
+        win = data.get("window") or {}
+        print(f"agenda {win.get('start')} → {win.get('end')}  ({win.get('days')} days)")
+        for day in sorted((data.get("by_day") or {}).keys()):
+            tasks = data["by_day"][day]
+            print()
+            print(f"== {day}  ({len(tasks)}) ==")
+            _print_task_table(tasks, _DEFAULT_COLUMNS)
+        return 0
+
+    if resource == "task":
+        if not args.target:
+            print("vn: 'show task' requires a task ref (e.g. T-XXXXXX)", file=sys.stderr)
+            return 2
+        data = client.get(f"/api/tasks/{args.target}") or {}
+        if args.json or (args.format or "").lower() == "json":
+            _print_json(data)
+            return 0
+        _print_task_table([data] if data else [], _DEFAULT_COLUMNS)
+        return 0
+
+    if resource == "links":
+        if not args.target:
+            print("vn: 'show links' requires a task ref", file=sys.stderr)
+            return 2
+        data = client.get(f"/api/cards/{args.target}/links") or {}
+        links = data.get("links") or []
+        _emit_records(args, links, ("other_slug", "kind", "direction"), raw=data)
+        return 0
+
+    if resource == "me":
+        data = client.get("/api/me") or {}
+        views = client.get("/api/me/views") or {}
+        envelope = {"me": data, "saved_views": views}
+        if args.json or (args.format or "").lower() == "json":
+            _print_json(envelope)
+            return 0
+        tag = " (admin)" if data.get("is_admin") else ""
+        print(f"name: {data.get('name')}{tag}")
+        print(f"saved views: {len(views)}")
+        for name in sorted(views.keys()):
+            print(f"  - {name}")
+        return 0
+
+    if resource == "search":
+        if not args.target:
+            print("vn: 'show search' requires a query string", file=sys.stderr)
+            return 2
+        data = client.get("/api/search", q=args.target) or []
+        _emit_records(args, data, ("id", "path", "title"))
+        return 0
+
+    print(f"vn: unknown resource: {resource}", file=sys.stderr)
+    return 2
+
+
+def cmd_api(client: Client, args: argparse.Namespace) -> int:
+    """Generic HTTP escape hatch — any method, any path.
+
+    Mirrors `curl -u user:pass` semantics but with the auth handled by
+    the Client.  Useful for endpoints `vn show` doesn't cover, prototyping
+    new endpoints, or exercising admin routes.
+
+    Examples:
+      vn api GET  /api/admin/users
+      vn api GET  /api/tasks --query 'project=ww18&kind=ar'
+      vn api POST /api/projects --json-body '{"name":"ww19"}'
+    """
+    method = args.method.upper()
+    path = args.path
+    if not path.startswith("/"):
+        path = "/" + path
+
+    params: dict[str, Any] = {}
+    if args.query:
+        # Accept either repeated --query 'k=v' or a single 'k=v&k2=v2' string.
+        for chunk in args.query:
+            for piece in chunk.split("&"):
+                piece = piece.strip()
+                if not piece:
+                    continue
+                if "=" not in piece:
+                    print(f"vn: bad --query clause (expected key=value): {piece!r}",
+                          file=sys.stderr)
+                    return 2
+                k, v = piece.split("=", 1)
+                k = k.strip()
+                if k in params:
+                    cur = params[k]
+                    params[k] = (cur if isinstance(cur, list) else [cur]) + [v]
+                else:
+                    params[k] = v
+
+    body: Any = None
+    if args.json_body is not None:
+        try:
+            body = json.loads(args.json_body)
+        except json.JSONDecodeError as e:
+            print(f"vn: --json-body is not valid JSON: {e}", file=sys.stderr)
+            return 2
+
+    try:
+        data = client.request(method, path, params=params or None, body=body)
+    except ApiError as e:
+        # Print body to stdout (in case it's machine-readable) and the
+        # status to stderr; map HTTP class to a non-zero exit code so
+        # scripts can branch on it.
+        print(f"vn: HTTP {e.status}: {e.body or '(no body)'}", file=sys.stderr)
+        if e.status >= 500:
+            return 5
+        if e.status >= 400:
+            return 4
+        return 1
+
+    fmt = (args.format or "json").lower()
+    if fmt == "json" or args.json:
+        _print_json(data)
+    elif fmt == "jsonl":
+        if isinstance(data, list):
+            for r in data:
+                sys.stdout.write(json.dumps(r, default=str, sort_keys=True) + "\n")
+        else:
+            sys.stdout.write(json.dumps(data, default=str, sort_keys=True) + "\n")
+    elif fmt == "raw":
+        # Pass through whatever the server sent (already decoded by Client).
+        if isinstance(data, (dict, list)):
+            _print_json(data)
+        elif data is None:
+            pass
+        else:
+            sys.stdout.write(str(data))
+            sys.stdout.write("\n")
+    else:
+        print(f"vn: --format must be json|jsonl|raw for `vn api` (got {fmt!r})",
+              file=sys.stderr)
+        return 2
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # argparse wiring
 # ---------------------------------------------------------------------------
 
@@ -491,6 +850,75 @@ def build_parser() -> argparse.ArgumentParser:
 
     pw = sub.add_parser("whoami", help="show authenticated user")
     pw.set_defaults(func=cmd_whoami)
+
+    # `vn show <resource> [target]` — read-only inspector for the rest of
+    # the API; reuses --format / --columns where it makes sense.
+    show_resources = (
+        "projects", "users", "features", "attrs", "notes", "tree",
+        "agenda", "task", "links", "me", "search",
+    )
+    ps = sub.add_parser(
+        "show",
+        help="inspect a resource (projects, users, features, attrs, notes, tree, agenda, task, links, me, search)",
+        description=(
+            "Read-only inspector for the rest of the API.\n\n"
+            "Examples:\n"
+            "  vn show projects                # list all projects\n"
+            "  vn show projects ww18           # one project's members + notes\n"
+            "  vn show users\n"
+            "  vn show features                # all feature names\n"
+            "  vn show features ic-streamlining # tasks tagged with this feature\n"
+            "  vn show attrs                   # known attribute keys + counts\n"
+            "  vn show notes                   # all notes (id, path, title)\n"
+            "  vn show notes ww18/standup.md   # one note (header + 20-line preview)\n"
+            "  vn show notes 42 --full         # full body of note id=42\n"
+            "  vn show tree                    # project -> notes hierarchy\n"
+            "  vn show agenda --owner alice\n"
+            "  vn show task T-ABC123\n"
+            "  vn show links T-ABC123\n"
+            "  vn show me                      # self info + saved views\n"
+            "  vn show search 'carveout'       # FTS across notes\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ps.add_argument("resource", choices=show_resources)
+    ps.add_argument("target", nargs="?",
+                    help="optional resource id/name (project name, feature name, note id/path, task ref, search query)")
+    ps.add_argument("--owner", help="(agenda only) filter to one owner")
+    ps.add_argument("--days", type=int, help="(agenda only) days of look-ahead")
+    ps.add_argument("--full", action="store_true",
+                    help="(notes <id|path>) dump the full markdown body instead of a 20-line preview")
+    ps.add_argument(
+        "--format", choices=("table", "json", "jsonl", "csv", "ids"),
+        help="output format (default: table; 'json' if --json is set)",
+    )
+    ps.add_argument("--columns", help="comma-separated columns for table/csv")
+    ps.set_defaults(func=cmd_show)
+
+    pa = sub.add_parser(
+        "api",
+        help="generic HTTP escape hatch — vn api METHOD /api/path [--query …] [--json-body …]",
+        description=(
+            "Call any backend endpoint by URL.  Use this for endpoints `vn show` "
+            "doesn't cover or for prototyping.\n\n"
+            "Examples:\n"
+            "  vn api GET  /api/admin/users\n"
+            "  vn api GET  /api/tasks --query 'project=ww18' --query 'kind=ar'\n"
+            "  vn api POST /api/projects --json-body '{\"name\":\"ww19\"}'\n"
+            "  vn api PATCH /api/tasks/T-ABC123 --json-body '{\"status\":\"done\"}'\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    pa.add_argument("method", choices=("GET", "POST", "PUT", "PATCH", "DELETE"),
+                    type=str.upper)
+    pa.add_argument("path", help="API path, e.g. /api/projects")
+    pa.add_argument("--query", action="append", default=[],
+                    help="repeatable key=value (or 'k=v&k2=v2')")
+    pa.add_argument("--json-body", dest="json_body",
+                    help="request body as a JSON string")
+    pa.add_argument("--format", choices=("json", "jsonl", "raw"),
+                    help="output format (default: json)")
+    pa.set_defaults(func=cmd_api)
 
     return p
 

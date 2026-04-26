@@ -72,7 +72,7 @@ Lookup order (first hit wins):
 `vn` always takes a subcommand first:
 
 ```
-vn [GLOBAL FLAGS] <task|list|query|note|whoami> [...]
+vn [GLOBAL FLAGS] <task|list|query|note|whoami|show|api> [...]
 ```
 
 > **Heads-up:** every operation lives under a subcommand. `vn --project
@@ -220,6 +220,45 @@ The slug uses the same lowercase-kebab rule as the rest of VegaNotes
 ### `vn whoami`
 
 Prints the authenticated user (and `(admin)` if applicable).
+
+### `vn show <resource>` — read-only inspector
+
+Browse the database without curl-ing the API by hand. Every resource maps
+to an existing endpoint and respects `--format {table,json,jsonl,csv,ids}`
+plus `--columns col1,col2,…` where applicable.
+
+```bash
+vn show projects                  # all projects you can see (name, role)
+vn show projects ww18             # members + notes for one project
+vn show users                     # known usernames
+vn show features                  # feature names
+vn show features ic               # task table for feature 'ic'
+vn show attrs                     # attribute keys the DB has ever seen
+vn show notes                     # id / path / etag for every note
+vn show note 42                   # one note (header); add --full for body
+vn show note projects/ww18/foo.md # path also works
+vn show tree                      # indented project → note → task tree
+vn show agenda --owner alice --days 14
+vn show task T-ABC123             # one task as a row
+vn show links T-ABC123            # cards linked to/from this one
+vn show me                        # self info + saved views
+vn show search 'fit-val'          # cross-resource search
+```
+
+### `vn api METHOD /api/path` — generic HTTP escape hatch
+
+For endpoints `vn show` doesn't cover, prototyping new endpoints, or
+exercising admin routes. Auth is reused from your profile.
+
+```bash
+vn api GET  /api/admin/users
+vn api GET  /api/tasks --query 'project=ww18' --query 'kind=ar'
+vn api POST /api/projects --json-body '{"name":"ww19"}'
+vn api PATCH /api/tasks/T-ABC123 --json-body '{"status":"done"}'
+```
+
+Output formats: `--format json` (default), `jsonl`, `raw`. HTTP errors
+print `HTTP <status>: <body>` to stderr and exit `4` (4xx) or `5` (5xx).
 
 ## Global flags
 

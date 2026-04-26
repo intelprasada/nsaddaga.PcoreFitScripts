@@ -488,3 +488,310 @@ def test_credentials_file(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "CREDENTIALS_PATH", cred)
     c = config.load_credentials()
     assert (c.url, c.user, c.password) == ("http://x", "a", "b")
+
+
+# ---------- vn show <resource> --------------------------------------------
+
+def test_show_projects_table(fake_client, capsys):
+    fake_client.responses[("GET", "/api/projects")] = [
+        {"name": "ww17", "role": "manager"},
+        {"name": "ww18", "role": "member"},
+    ]
+    rc = cli.main(["show", "projects"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "ww17" in out and "manager" in out
+    assert "ww18" in out and "member" in out
+
+
+def test_show_projects_detail_combines_members_and_notes(fake_client, capsys):
+    fake_client.responses[("GET", "/api/projects/ww18/members")] = [
+        {"user_name": "alice", "role": "manager"},
+    ]
+    fake_client.responses[("GET", "/api/projects/ww18/notes")] = [
+        {"id": 1, "path": "ww18/standup.md", "title": "Standup"},
+    ]
+    rc = cli.main(["show", "projects", "ww18"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "== project ww18 ==" in out
+    assert "alice" in out and "manager" in out
+    assert "ww18/standup.md" in out
+
+
+def test_show_users_lifts_string_list(fake_client, capsys):
+    fake_client.responses[("GET", "/api/users")] = ["alice", "bob"]
+    cli.main(["show", "users"])
+    out = capsys.readouterr().out
+    assert "NAME" in out and "alice" in out and "bob" in out
+
+
+def test_show_users_json_passes_raw_envelope(fake_client, capsys):
+    fake_client.responses[("GET", "/api/users")] = ["alice", "bob"]
+    cli.main(["--json", "show", "users"])
+    out = capsys.readouterr().out
+    assert json.loads(out) == ["alice", "bob"]
+
+
+def test_show_features_list_then_detail(fake_client, capsys):
+    fake_client.responses[("GET", "/api/features")] = ["ic", "lsq"]
+    cli.main(["show", "features"])
+    out = capsys.readouterr().out
+    assert "ic" in out and "lsq" in out
+
+    fake_client.responses[("GET", "/api/features/ic/tasks")] = {
+        "feature": "ic",
+        "tasks": [{"id": 1, "task_uuid": "T-1", "title": "carveout",
+                   "status": "wip", "owners": ["alice"], "attrs": {}}],
+        "aggregations": {"owners": ["alice"], "projects": ["gfc"],
+                         "status_breakdown": {"wip": 1}, "eta_range": [None, None]},
+    }
+    capsys.readouterr()
+    cli.main(["show", "features", "ic"])
+    out = capsys.readouterr().out
+    assert "== feature ic" in out
+    assert "T-1" in out and "carveout" in out
+    assert "owners:   alice" in out
+
+
+def test_show_attrs_renders_key_count_samples(fake_client, capsys):
+    fake_client.responses[("GET", "/api/attrs")] = [
+        {"key": "eta", "count": 250, "sample_values": ["ww18", "ww19"]},
+        {"key": "priority", "count": 248, "sample_values": ["P0", "P1"]},
+    ]
+    cli.main(["show", "attrs"])
+    out = capsys.readouterr().out
+    assert "eta" in out and "250" in out and "ww18,ww19" in out
+    assert "priority" in out and "P0,P1" in out
+
+
+def test_show_notes_list_and_detail(fake_client, capsys):
+    fake_client.responses[("GET", "/api/notes")] = [
+        {"id": 1, "path": "ww18/standup.md", "title": "Standup", "updated_at": "2026-04-01"},
+    ]
+    cli.main(["show", "notes"])
+    out = capsys.readouterr().out
+    assert "ww18/standup.md" in out and "Standup" in out
+
+    fake_client.responses[("GET", "/api/notes/1")] = {
+        "id": 1, "path": "ww18/standup.md", "title": "Standup",
+        "etag": "abc123", "body_md": "# Standup\n\nline1\nline2\n", "updated_at": "2026-04-01",
+    }
+    capsys.readouterr()
+    cli.main(["show", "notes", "1"])
+    out = capsys.readouterr().out
+    assert "id:    1" in out
+    assert "path:  ww18/standup.md" in out
+    assert "etag:  abc123" in out
+    # Preview shows the body for short notes.
+    assert "# Standup" in out and "line1" in out
+
+
+def test_show_notes_path_resolves_via_listing(fake_client, capsys):
+    fake_client.responses[("GET", "/api/notes")] = [
+        {"id": 7, "path": "ww18/standup.md", "title": "S"},
+    ]
+    fake_client.responses[("GET", "/api/notes/7")] = {
+        "id": 7, "path": "ww18/standup.md", "title": "S",
+        "etag": "x", "body_md": "body\n", "updated_at": "x",
+    }
+    cli.main(["show", "notes", "ww18/standup.md"])
+    out = capsys.readouterr().out
+    assert "id:    7" in out
+    assert "body" in out
+
+
+def test_show_notes_full_dumps_entire_body(fake_client, capsys):
+    big = "\n".join(f"line {i}" for i in range(50))
+    fake_client.responses[("GET", "/api/notes/1")] = {
+        "id": 1, "path": "x.md", "title": "X", "etag": "e",
+        "body_md": big, "updated_at": "x",
+    }
+    cli.main(["show", "notes", "1", "--full"])
+    out = capsys.readouterr().out
+    assert "line 0" in out and "line 49" in out
+    assert "lines total" not in out  # truncation hint suppressed by --full
+
+
+def test_show_tree_indents_notes_under_projects(fake_client, capsys):
+    fake_client.responses[("GET", "/api/tree")] = [
+        {"project": "ww18", "role": "member", "notes": [
+            {"id": 1, "path": "ww18/a.md"},
+            {"id": 2, "path": "ww18/b.md"},
+        ]},
+    ]
+    cli.main(["show", "tree"])
+    out = capsys.readouterr().out
+    assert "ww18  [member]  (2 notes)" in out
+    assert "├─ ww18/a.md" in out
+    assert "└─ ww18/b.md" in out
+
+
+def test_show_agenda_passes_owner_and_days(fake_client, capsys):
+    fake_client.responses[("GET", "/api/agenda")] = {
+        "window": {"start": "2026-04-01", "end": "2026-04-08", "days": 7},
+        "by_day": {
+            "2026-04-02": [{"id": 1, "task_uuid": "T-1", "title": "x",
+                            "status": "todo", "owners": ["alice"], "attrs": {}}],
+        },
+    }
+    cli.main(["show", "agenda", "--owner", "alice", "--days", "7"])
+    _, _, params, _ = fake_client.calls[0]
+    assert params == {"owner": "alice", "days": 7}
+    out = capsys.readouterr().out
+    assert "agenda 2026-04-01 → 2026-04-08" in out
+    assert "== 2026-04-02" in out and "T-1" in out
+
+
+def test_show_task_renders_single_row(fake_client, capsys):
+    fake_client.responses[("GET", "/api/tasks/T-1")] = {
+        "id": 1, "task_uuid": "T-1", "title": "x", "status": "wip",
+        "owners": ["a"], "attrs": {},
+    }
+    cli.main(["show", "task", "T-1"])
+    out = capsys.readouterr().out
+    assert "T-1" in out and "wip" in out
+
+
+def test_show_task_requires_target(fake_client, capsys):
+    rc = cli.main(["show", "task"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "requires a task ref" in err
+
+
+def test_show_links_lists_link_rows(fake_client, capsys):
+    fake_client.responses[("GET", "/api/cards/T-1/links")] = {
+        "task_id": 1, "task_uuid": "T-1", "slug": "x",
+        "links": [
+            {"other_slug": "y", "kind": "blocks", "direction": "out"},
+            {"other_slug": "z", "kind": "task", "direction": "in"},
+        ],
+    }
+    cli.main(["show", "links", "T-1"])
+    out = capsys.readouterr().out
+    assert "y" in out and "blocks" in out and "out" in out
+    assert "z" in out and "in" in out
+
+
+def test_show_me_combines_user_and_views(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me")] = {"name": "alice", "is_admin": True}
+    fake_client.responses[("GET", "/api/me/views")] = {"my-blocked": "status=blocked"}
+    cli.main(["show", "me"])
+    out = capsys.readouterr().out
+    assert "name: alice (admin)" in out
+    assert "saved views: 1" in out
+    assert "- my-blocked" in out
+
+
+def test_show_search_passes_q_param(fake_client, capsys):
+    fake_client.responses[("GET", "/api/search")] = [
+        {"id": 1, "path": "ww18/x.md", "title": "X"},
+    ]
+    cli.main(["show", "search", "carveout"])
+    _, _, params, _ = fake_client.calls[0]
+    assert params == {"q": "carveout"}
+    out = capsys.readouterr().out
+    assert "ww18/x.md" in out and "X" in out
+
+
+# ---------- vn api (escape hatch) -----------------------------------------
+
+def test_api_get_default_format_is_json(fake_client, capsys):
+    fake_client.responses[("GET", "/api/admin/users")] = [
+        {"name": "alice"}, {"name": "bob"},
+    ]
+    rc = cli.main(["api", "GET", "/api/admin/users"])
+    assert rc == 0
+    parsed = json.loads(capsys.readouterr().out)
+    assert parsed == [{"name": "alice"}, {"name": "bob"}]
+
+
+def test_api_path_without_leading_slash_is_normalized(fake_client, capsys):
+    fake_client.responses[("GET", "/api/projects")] = []
+    cli.main(["api", "GET", "api/projects"])
+    method, path, _, _ = fake_client.calls[0]
+    assert method == "GET" and path == "/api/projects"
+
+
+def test_api_query_repeatable_and_amp_separated(fake_client, capsys):
+    fake_client.responses[("GET", "/api/tasks")] = {"tasks": []}
+    cli.main([
+        "api", "GET", "/api/tasks",
+        "--query", "project=ww18",
+        "--query", "kind=ar&owner=alice",
+    ])
+    _, _, params, _ = fake_client.calls[0]
+    assert params == {"project": "ww18", "kind": "ar", "owner": "alice"}
+
+
+def test_api_query_repeated_key_becomes_list(fake_client, capsys):
+    fake_client.responses[("GET", "/api/tasks")] = {"tasks": []}
+    cli.main([
+        "api", "GET", "/api/tasks",
+        "--query", "attr=area:eq:fit-val",
+        "--query", "attr=risk:eq:high",
+    ])
+    _, _, params, _ = fake_client.calls[0]
+    assert params["attr"] == ["area:eq:fit-val", "risk:eq:high"]
+
+
+def test_api_post_with_json_body(fake_client, capsys):
+    fake_client.responses[("POST", "/api/projects")] = {"name": "ww19"}
+    rc = cli.main([
+        "api", "POST", "/api/projects",
+        "--json-body", '{"name": "ww19"}',
+    ])
+    assert rc == 0
+    method, path, params, body = fake_client.calls[0]
+    assert method == "POST" and path == "/api/projects" and body == {"name": "ww19"}
+
+
+def test_api_bad_json_body_returns_2(fake_client, capsys):
+    rc = cli.main(["api", "POST", "/api/x", "--json-body", "{not json"])
+    assert rc == 2
+    assert "not valid JSON" in capsys.readouterr().err
+
+
+def test_api_bad_query_returns_2(fake_client, capsys):
+    rc = cli.main(["api", "GET", "/api/x", "--query", "no_equals"])
+    assert rc == 2
+    assert "key=value" in capsys.readouterr().err
+
+
+def test_api_jsonl_format_for_list_response(fake_client, capsys):
+    fake_client.responses[("GET", "/api/notes")] = [
+        {"id": 1, "path": "a.md"}, {"id": 2, "path": "b.md"},
+    ]
+    cli.main(["api", "GET", "/api/notes", "--format", "jsonl"])
+    out = capsys.readouterr().out.strip().splitlines()
+    assert len(out) == 2
+    assert json.loads(out[0])["id"] == 1
+    assert json.loads(out[1])["id"] == 2
+
+
+def test_api_http_error_maps_to_exit_4(monkeypatch, capsys):
+    from vn.client import ApiError
+
+    class ErrClient:
+        def request(self, *a, **k):
+            raise ApiError(404, '{"detail":"not found"}')
+        def get(self, p, **kw): return self.request("GET", p, params=kw)
+
+    monkeypatch.setattr(cli, "Client", lambda *a, **k: ErrClient())
+    rc = cli.main(["api", "GET", "/api/missing"])
+    assert rc == 4
+    assert "HTTP 404" in capsys.readouterr().err
+
+
+def test_api_http_5xx_maps_to_exit_5(monkeypatch, capsys):
+    from vn.client import ApiError
+
+    class ErrClient:
+        def request(self, *a, **k):
+            raise ApiError(500, "boom")
+        def get(self, p, **kw): return self.request("GET", p, params=kw)
+
+    monkeypatch.setattr(cli, "Client", lambda *a, **k: ErrClient())
+    rc = cli.main(["api", "GET", "/api/x"])
+    assert rc == 5
