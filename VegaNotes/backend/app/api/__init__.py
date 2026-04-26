@@ -132,14 +132,41 @@ def _task_to_dict(s: Session, t: Task, *, include_children: bool = False) -> dic
         kids = s.exec(
             select(Task).where(Task.parent_task_id == t.id).order_by(Task.line)
         ).all()
+        kid_ids = [c.id for c in kids]
+        # Batch lookups so a parent with N children still costs O(1)
+        # joined queries, not O(N) per related collection.
+        eta_by_kid: dict[int, TaskAttr] = {}
+        owners_by_kid: dict[int, list[str]] = {kid: [] for kid in kid_ids}
+        projects_by_kid: dict[int, list[str]] = {kid: [] for kid in kid_ids}
+        features_by_kid: dict[int, list[str]] = {kid: [] for kid in kid_ids}
+        if kid_ids:
+            for a in s.exec(
+                select(TaskAttr).where(
+                    TaskAttr.task_id.in_(kid_ids), TaskAttr.key == "eta"
+                )
+            ).all():
+                eta_by_kid.setdefault(a.task_id, a)
+            for tid, name in s.exec(
+                select(TaskOwner.task_id, User.name)
+                .join(User, User.id == TaskOwner.user_id)
+                .where(TaskOwner.task_id.in_(kid_ids))
+            ).all():
+                owners_by_kid[tid].append(name)
+            for tid, name in s.exec(
+                select(TaskProject.task_id, Project.name)
+                .join(Project, Project.id == TaskProject.project_id)
+                .where(TaskProject.task_id.in_(kid_ids))
+            ).all():
+                projects_by_kid[tid].append(name)
+            for tid, name in s.exec(
+                select(TaskFeature.task_id, Feature.name)
+                .join(Feature, Feature.id == TaskFeature.feature_id)
+                .where(TaskFeature.task_id.in_(kid_ids))
+            ).all():
+                features_by_kid[tid].append(name)
         out["children"] = []
         for c in kids:
-            eta_attr = next(
-                (a for a in s.exec(
-                    select(TaskAttr).where(TaskAttr.task_id == c.id, TaskAttr.key == "eta")
-                ).all()),
-                None,
-            )
+            eta_attr = eta_by_kid.get(c.id)
             out["children"].append({
                 "id": c.id,
                 "task_uuid": c.task_uuid,
@@ -154,6 +181,9 @@ def _task_to_dict(s: Session, t: Task, *, include_children: bool = False) -> dic
                 # --tree) can render parents and children consistently.
                 "eta": eta_attr.value_norm if eta_attr else None,
                 "eta_raw": eta_attr.value if eta_attr else None,
+                "owners": owners_by_kid.get(c.id, []),
+                "projects": projects_by_kid.get(c.id, []),
+                "features": features_by_kid.get(c.id, []),
             })
     return out
 
