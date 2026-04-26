@@ -6,6 +6,7 @@ import { AgendaView } from "./components/Agenda/AgendaView";
 import { TimelineView } from "./components/Timeline/TimelineView";
 import { CalendarView } from "./components/Calendar/CalendarView";
 import { GraphView } from "./components/Graph/GraphView";
+import { MyTasksView } from "./components/Tasks/MyTasksView";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { NoteEditor } from "./components/Editor/NoteEditor";
 import { Sidebar } from "./components/Sidebar/Sidebar";
@@ -22,13 +23,14 @@ function ViewSwitcher({ selectedPath, setSelectedPath, draft, setDraft }: {
 }) {
   const view = useUI((s) => s.view);
   switch (view) {
-    case "kanban":   return <KanbanBoard />;
-    case "agenda":   return <AgendaView />;
-    case "timeline": return <TimelineView />;
-    case "calendar": return <CalendarView />;
-    case "graph":    return <GraphView />;
-    case "admin":    return <AdminPanel />;
-    case "editor":   return <EditorPane selectedPath={selectedPath} setSelectedPath={setSelectedPath} draft={draft} setDraft={setDraft} />;
+    case "kanban":    return <KanbanBoard />;
+    case "agenda":    return <AgendaView />;
+    case "timeline":  return <TimelineView />;
+    case "calendar":  return <CalendarView />;
+    case "graph":     return <GraphView />;
+    case "admin":     return <AdminPanel />;
+    case "my-tasks":  return <MyTasksView />;
+    case "editor":    return <EditorPane selectedPath={selectedPath} setSelectedPath={setSelectedPath} draft={draft} setDraft={setDraft} />;
   }
 }
 
@@ -469,8 +471,8 @@ function NavBar() {
   const { view, set } = useUI();
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => api.me() });
   const [changingPw, setChangingPw] = useState(false);
-  const tabs: ("editor" | "kanban" | "agenda" | "timeline" | "calendar" | "graph" | "admin")[] = [
-    "editor", "kanban", "agenda", "timeline", "calendar", "graph",
+  const tabs: ("editor" | "kanban" | "agenda" | "timeline" | "calendar" | "graph" | "admin" | "my-tasks")[] = [
+    "my-tasks", "editor", "kanban", "agenda", "timeline", "calendar", "graph",
   ];
   if (me?.is_admin) tabs.push("admin");
 

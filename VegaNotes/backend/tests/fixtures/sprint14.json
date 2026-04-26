@@ -15,7 +15,7 @@
   "tasks": [
     {
       "attrs": {
-        "eta": "2026-04-24",
+        "eta": "2027-04-24",
         "owner": [
           "alice"
         ],
@@ -25,7 +25,7 @@
         ]
       },
       "attrs_norm": {
-        "eta": "2026-04-24",
+        "eta": "2027-04-24",
         "priority": 1
       },
       "indent": 0,
@@ -39,7 +39,7 @@
     },
     {
       "attrs": {
-        "eta": "2026-04-23",
+        "eta": "2027-04-23",
         "owner": [
           "bob",
           "alice"
@@ -49,7 +49,7 @@
         ]
       },
       "attrs_norm": {
-        "eta": "2026-04-23"
+        "eta": "2027-04-23"
       },
       "indent": 1,
       "kind": "task",
@@ -62,7 +62,7 @@
     },
     {
       "attrs": {
-        "eta": "2026-04-24",
+        "eta": "2027-04-24",
         "owner": [
           "alice"
         ],
@@ -72,7 +72,7 @@
         "status": "in-progress"
       },
       "attrs_norm": {
-        "eta": "2026-04-24",
+        "eta": "2027-04-24",
         "status": "in-progress"
       },
       "indent": 1,

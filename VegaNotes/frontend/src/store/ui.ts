@@ -15,7 +15,7 @@ export interface FilterState {
 
 interface UIState {
   filters: FilterState;
-  view: "editor" | "kanban" | "agenda" | "timeline" | "calendar" | "graph" | "admin";
+  view: "editor" | "kanban" | "agenda" | "timeline" | "calendar" | "graph" | "admin" | "my-tasks";
   set: (patch: Partial<UIState>) => void;
   patchFilters: (patch: Partial<FilterState>) => void;
   clearFilters: () => void;
@@ -26,7 +26,7 @@ interface UIState {
 
 export const useUI = create<UIState>((set) => ({
   filters: { hide_done: true, where: [] },
-  view: "kanban",
+  view: "my-tasks",
   set: (patch) => set(patch),
   patchFilters: (patch) => set((s) => ({ filters: { ...s.filters, ...patch } })),
   clearFilters: () => set({ filters: { hide_done: true, where: [] } }),
