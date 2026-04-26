@@ -76,6 +76,48 @@ _DEFAULT_COLUMNS = ("id", "status", "priority", "eta", "owners", "title")
 _TREE_DEFAULT_COLUMNS = ("id", "type", "status", "priority", "eta", "owners", "title")
 
 
+def _resolve_columns(spec: Optional[str], defaults: tuple[str, ...]) -> tuple[str, ...]:
+    """Parse a --columns string against `defaults`.
+
+    Two modes:
+      * **replace** (default): plain comma list overrides defaults entirely.
+        e.g. ``--columns id,title`` -> ``(id, title)``.
+      * **delta**: when *every* token starts with ``+`` or ``-``, treat the
+        list as edits against `defaults`.  ``+col`` appends (no-op if
+        already present), ``-col`` removes.  Order: defaults -> removals
+        -> additions (additions land at the end in the listed order).
+        e.g. with defaults ``(id,status,priority,eta,owners,title)``,
+        ``--columns +kind,-status`` -> ``(id,priority,eta,owners,title,kind)``.
+
+    A leading sign on *some but not all* tokens is rejected as ambiguous.
+    """
+    if not spec:
+        return defaults
+    raw = [c.strip() for c in spec.split(",") if c.strip()]
+    if not raw:
+        return defaults
+    signed = [t for t in raw if t[:1] in ("+", "-")]
+    if signed and len(signed) != len(raw):
+        raise ValueError(
+            "vn: --columns cannot mix delta (+col/-col) and replace tokens; "
+            "use either all-signed or all-bare names"
+        )
+    if not signed:
+        return tuple(c.lower() for c in raw)
+    out = [c.lower() for c in defaults]
+    add: list[str] = []
+    for tok in raw:
+        sign, name = tok[0], tok[1:].strip().lower()
+        if not name:
+            raise ValueError(f"vn: --columns has empty name in {tok!r}")
+        if sign == "-":
+            out = [c for c in out if c != name]
+        else:  # '+'
+            if name not in out and name not in add:
+                add.append(name)
+    return tuple(out + add)
+
+
 def _task_type(task: dict[str, Any]) -> str:
     """Classify a task row as 'TASK', 'SUBTASK' or 'AR'.
 
@@ -334,7 +376,11 @@ def cmd_list(client: Client, args: argparse.Namespace) -> int:
 
     fmt = (args.format or ("json" if args.json else "table")).lower()
     default_cols = _TREE_DEFAULT_COLUMNS if tree_mode else _DEFAULT_COLUMNS
-    columns = tuple(c.strip().lower() for c in (args.columns or ",".join(default_cols)).split(",") if c.strip())
+    try:
+        columns = _resolve_columns(args.columns, default_cols)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
 
     # Tree mode flattens parents + their `children` into a single row list
     # for table/csv output.  JSON/JSONL preserve the nested structure so
@@ -472,8 +518,11 @@ def _emit_records(
     records).  Defaults to `records` when not supplied.
     """
     fmt = (getattr(args, "format", None) or ("json" if args.json else "table")).lower()
-    cols = getattr(args, "columns", None)
-    columns = tuple(c.strip().lower() for c in (cols or ",".join(default_columns)).split(",") if c.strip())
+    try:
+        columns = _resolve_columns(getattr(args, "columns", None), default_columns)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(2)
     if fmt == "json":
         _print_json(raw if raw is not None else records)
     elif fmt == "jsonl":
@@ -534,7 +583,11 @@ def cmd_show(client: Client, args: argparse.Namespace) -> int:
             if fmt == "json":
                 _print_json(data)
                 return 0
-            cols = tuple(c.strip().lower() for c in (args.columns or ",".join(_DEFAULT_COLUMNS)).split(",") if c.strip())
+            try:
+                cols = _resolve_columns(args.columns, _DEFAULT_COLUMNS)
+            except ValueError as e:
+                print(str(e), file=sys.stderr)
+                return 2
             print(f"== feature {args.target}  ({len(tasks)} tasks) ==")
             _print_task_table(tasks, cols)
             aggs = data.get("aggregations") or {}
@@ -633,7 +686,12 @@ def cmd_show(client: Client, args: argparse.Namespace) -> int:
         if args.json or (args.format or "").lower() == "json":
             _print_json(data)
             return 0
-        _print_task_table([data] if data else [], _DEFAULT_COLUMNS)
+        try:
+            cols = _resolve_columns(args.columns, _DEFAULT_COLUMNS)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        _print_task_table([data] if data else [], cols)
         return 0
 
     if resource == "links":
@@ -807,8 +865,10 @@ def build_parser() -> argparse.ArgumentParser:
         )
         target.add_argument(
             "--columns",
-            help="comma-separated columns for table/csv "
-                 f"(default: {','.join(_DEFAULT_COLUMNS)})",
+            help=("comma-separated columns for table/csv "
+                  f"(default: {','.join(_DEFAULT_COLUMNS)}). "
+                  "Delta syntax: prefix every token with '+' or '-' to add/remove "
+                  "from defaults, e.g. '--columns +kind,-status'."),
         )
         target.add_argument(
             "--group-by", dest="group_by",
@@ -892,7 +952,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--format", choices=("table", "json", "jsonl", "csv", "ids"),
         help="output format (default: table; 'json' if --json is set)",
     )
-    ps.add_argument("--columns", help="comma-separated columns for table/csv")
+    ps.add_argument("--columns", help=(
+        "comma-separated columns for table/csv. "
+        "Delta syntax: prefix every token with '+' or '-' to add/remove "
+        "from defaults, e.g. '--columns +kind,-status'."))
     ps.set_defaults(func=cmd_show)
 
     pa = sub.add_parser(

@@ -125,6 +125,17 @@ Outputs an aligned text table by default; pick another shape with
 Pick + reorder columns with `--columns id,priority,eta,title`; bucket
 the table by any field with `--group-by area`.
 
+**Delta syntax** — when *every* token is prefixed with `+` or `-`,
+`--columns` edits the defaults instead of replacing them:
+
+```bash
+vn list --columns +kind          # add 'kind' to the default set
+vn list --columns -status        # drop 'status'
+vn list --columns +kind,-status  # both at once
+```
+
+(Mixing bare and signed names — e.g. `id,+kind` — is rejected.)
+
 #### Tasks, subtasks and ARs
 
 Every row carries a `kind` (`task` or `ar`) and a `parent_task_id`. By

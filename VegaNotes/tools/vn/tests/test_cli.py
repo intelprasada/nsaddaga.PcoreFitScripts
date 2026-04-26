@@ -795,3 +795,82 @@ def test_api_http_5xx_maps_to_exit_5(monkeypatch, capsys):
     monkeypatch.setattr(cli, "Client", lambda *a, **k: ErrClient())
     rc = cli.main(["api", "GET", "/api/x"])
     assert rc == 5
+
+
+# ---------- --columns delta syntax (+col / -col) -------------------------
+
+from vn.cli import _resolve_columns, _DEFAULT_COLUMNS
+
+
+def test_resolve_columns_replace_mode_unchanged():
+    assert _resolve_columns("id,title", _DEFAULT_COLUMNS) == ("id", "title")
+
+
+def test_resolve_columns_none_returns_defaults():
+    assert _resolve_columns(None, _DEFAULT_COLUMNS) == _DEFAULT_COLUMNS
+    assert _resolve_columns("", _DEFAULT_COLUMNS) == _DEFAULT_COLUMNS
+
+
+def test_resolve_columns_delta_add_one():
+    out = _resolve_columns("+kind", _DEFAULT_COLUMNS)
+    assert out == _DEFAULT_COLUMNS + ("kind",)
+
+
+def test_resolve_columns_delta_remove_one():
+    out = _resolve_columns("-status", _DEFAULT_COLUMNS)
+    assert out == ("id", "priority", "eta", "owners", "title")
+
+
+def test_resolve_columns_delta_add_and_remove_combined():
+    out = _resolve_columns("+kind,-status", _DEFAULT_COLUMNS)
+    assert out == ("id", "priority", "eta", "owners", "title", "kind")
+
+
+def test_resolve_columns_delta_add_idempotent():
+    # Adding a column that's already in defaults is a no-op (no duplicates).
+    out = _resolve_columns("+id,+kind", _DEFAULT_COLUMNS)
+    assert out.count("id") == 1 and out[-1] == "kind"
+
+
+def test_resolve_columns_delta_remove_unknown_is_noop():
+    out = _resolve_columns("-doesnotexist", _DEFAULT_COLUMNS)
+    assert out == _DEFAULT_COLUMNS
+
+
+def test_resolve_columns_mixed_modes_rejected():
+    import pytest as _pt
+    with _pt.raises(ValueError, match="cannot mix"):
+        _resolve_columns("id,+kind", _DEFAULT_COLUMNS)
+
+
+def test_resolve_columns_lowercases_names():
+    assert _resolve_columns("ID,Title", _DEFAULT_COLUMNS) == ("id", "title")
+    out = _resolve_columns("+KIND,-STATUS", _DEFAULT_COLUMNS)
+    assert "kind" in out and "status" not in out
+
+
+def test_list_delta_columns_end_to_end(fake_client, capsys):
+    fake_client.responses[("GET", "/api/tasks")] = {"tasks": [
+        {"id": "T-1", "status": "wip", "priority": "P1", "eta": None,
+         "owners": ["alice"], "title": "demo", "kind": "task"},
+    ]}
+    cli.main(["list", "--columns", "+kind,-status"])
+    out = capsys.readouterr().out
+    headers = out.splitlines()[0].split()
+    assert headers == ["ID", "PRIORITY", "ETA", "OWNERS", "TITLE", "KIND"]
+
+
+def test_show_task_delta_columns_end_to_end(fake_client, capsys):
+    fake_client.responses[("GET", "/api/tasks/T-1")] = {
+        "id": "T-1", "status": "wip", "priority": "P2", "eta": None,
+        "owners": ["bob"], "title": "thing", "kind": "ar",
+    }
+    cli.main(["show", "task", "T-1", "--columns", "+kind"])
+    headers = capsys.readouterr().out.splitlines()[0].split()
+    assert headers[-1] == "KIND" and "STATUS" in headers
+
+
+def test_list_mixed_columns_returns_2(fake_client, capsys):
+    rc = cli.main(["list", "--columns", "id,+kind"])
+    assert rc == 2
+    assert "cannot mix" in capsys.readouterr().err
