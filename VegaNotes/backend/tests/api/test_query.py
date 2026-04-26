@@ -352,3 +352,55 @@ def test_existing_aggregations_envelope_still_emitted(client, seeded):
     assert set(aggs["owners"]) == {"alice", "bob"}
     assert "qry" in aggs["projects"]
     assert aggs["status_breakdown"].get("done", 0) >= 1
+
+
+# ── include_children: child shape carries owners/projects/features/eta_raw ──
+# Issue #104: subtask owners rendered blank in `vn list --tree`.
+
+@pytest.fixture(scope="module")
+def seeded_with_subtasks(client):
+    """Separate project so the parent/child topology doesn't perturb the
+    `seeded` fixture's totals.  One parent + one subtask is enough to
+    verify the child-shape bug fix (#104)."""
+    client.post("/api/projects", json={"name": "kids"}, headers={"Authorization": ADMIN})
+    md = (
+        "# kids seed\n"
+        "- !task Parent task @alice #priority P1 #eta ww18.2 #area fit-val #id T-PRNT01\n"
+        "  - !task Child task @bob #eta ww19 #id T-CHLD01\n"
+    )
+    r = client.put(
+        "/api/notes",
+        json={"path": "kids/seed.md", "body_md": md},
+        headers={"Authorization": ADMIN},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_include_children_carries_owners_projects_features(client, seeded_with_subtasks):
+    body = client.get(
+        "/api/tasks?project=kids&include_children=true&top_level_only=true",
+        headers={"Authorization": ADMIN},
+    ).json()
+    parents = [t for t in body["tasks"] if t["title"] == "Parent task"]
+    assert len(parents) == 1, body
+    children = parents[0]["children"]
+    assert len(children) >= 1, children
+    child = children[0]
+
+    # The original bug: child carried no `owners` key at all → vn list
+    # rendered the OWNERS column blank.  After the fix, the field is
+    # present and populated (parent's @alice inherits onto subtasks).
+    assert "owners" in child
+    assert isinstance(child["owners"], list)
+    assert "alice" in child["owners"] or "bob" in child["owners"], child
+    # parent's project propagates onto the child via inheritance.
+    assert "projects" in child and "kids" in child["projects"]
+    # features field is present (may be empty if no #area on the child).
+    assert "features" in child and isinstance(child["features"], list)
+    # eta_raw carries the user-typed ww-format alongside normalized eta.
+    assert child.get("eta_raw")
+    assert child["eta_raw"].startswith("ww")
+    assert child["eta"]  # value_norm still present for back-compat
+    # parent_task_id is present on the child (used by vn for dedup).
+    assert child["parent_task_id"] == parents[0]["id"]

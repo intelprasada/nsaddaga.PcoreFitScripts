@@ -357,6 +357,26 @@ def test_tree_keeps_orphan_subtasks_at_top_level(fake_client, capsys):
     assert "Orphan sub" in out
 
 
+def test_tree_renders_child_owners_from_api_payload(fake_client, capsys):
+    """Issue #104: subtask owners used to render blank because the API
+    child shape lacked an owners field. With #104, owners arrives on the
+    child and _task_field renders it normally."""
+    fake_client.responses[("GET", "/api/tasks")] = {"tasks": [
+        {"id": 1, "task_uuid": "T-1", "title": "Parent", "status": "wip",
+         "kind": "task", "parent_task_id": None, "owners": ["alice"],
+         "attrs": {}, "children": [
+             {"id": 11, "task_uuid": "T-1a", "title": "Sub", "status": "todo",
+              "kind": "task", "parent_task_id": 1, "owners": ["bob"],
+              "projects": ["proj"], "features": [],
+              "eta": "2026-05-04", "eta_raw": "ww18.2"},
+         ]},
+    ]}
+    cli.main(["list", "--tree", "--columns", "id,owners,title"])
+    out = capsys.readouterr().out
+    sub_line = next(ln for ln in out.splitlines() if "T-1a" in ln)
+    assert "bob" in sub_line, f"expected bob in subtask row: {sub_line!r}"
+
+
 def test_tree_child_eta_renders_raw_value_like_parent(fake_client, capsys):
     """Issue #100 case 2: child rows used to render normalized
     (yyyy-mm-dd) eta while parents rendered raw (wwNN); flatten now
