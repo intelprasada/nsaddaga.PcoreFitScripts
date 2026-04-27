@@ -28,6 +28,18 @@ export function AdminPanel() {
   const refresh = () => qc.invalidateQueries({ queryKey: ["admin", "users"] });
   const reportError = (e: any) => alert(`${e?.message ?? e}`);
 
+  const [reindexResult, setReindexResult] = useState<string | null>(null);
+  const reindex = useMutation({
+    mutationFn: () => api.adminReindex(),
+    onSuccess: (r) => {
+      setReindexResult(`✓ Reindexed ${r.files_indexed} files`);
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      qc.invalidateQueries({ queryKey: ["my-tasks"] });
+      qc.invalidateQueries({ queryKey: ["tree"] });
+    },
+    onError: reportError,
+  });
+
   const createUser = useMutation({
     mutationFn: (v: { name: string; password: string; is_admin: boolean }) =>
       api.adminCreateUser(v.name, v.password, v.is_admin),
@@ -52,14 +64,28 @@ export function AdminPanel() {
 
   return (
     <div className="p-6 max-w-4xl space-y-6">
-      <div>
-        <h2 className="text-xl font-semibold">Users</h2>
-        <p className="text-sm text-slate-500">
-          Logged in as <code>{me?.name ?? "…"}</code>{me?.is_admin ? " (admin)" : ""}.
-          New users get a password here, then can be added to projects by
-          right-clicking a project in the Sidebar and choosing
-          <em> Manage members…</em> (managers/admin only).
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-semibold">Users</h2>
+          <p className="text-sm text-slate-500">
+            Logged in as <code>{me?.name ?? "…"}</code>{me?.is_admin ? " (admin)" : ""}.
+            New users get a password here, then can be added to projects by
+            right-clicking a project in the Sidebar and choosing
+            <em> Manage members…</em> (managers/admin only).
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <button
+            onClick={() => { setReindexResult(null); reindex.mutate(); }}
+            disabled={reindex.isPending}
+            className="rounded bg-slate-700 text-white px-3 py-1.5 text-sm disabled:opacity-50 whitespace-nowrap"
+          >
+            {reindex.isPending ? "Refreshing…" : "⟳ Refresh DB"}
+          </button>
+          {reindexResult && (
+            <span className="text-xs text-emerald-700">{reindexResult}</span>
+          )}
+        </div>
       </div>
 
       <CreateUserForm

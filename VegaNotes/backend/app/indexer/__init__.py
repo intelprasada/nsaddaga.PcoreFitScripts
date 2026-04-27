@@ -283,14 +283,21 @@ def _incremental_reindex(
             _upsert_task_attrs(session, t.id, pt, folder_project)
 
     # Second pass: resolve parent_task_id.
+    # Also clears stale parent when a task has been dedented to root level.
     for pt in new_tasks:
-        if not pt["parent_slug"]:
-            continue
         tid = slug_to_id.get(pt["slug"])
-        parent_id = slug_to_id.get(pt["parent_slug"])
-        if tid and parent_id:
-            t = session.get(Task, tid)
-            if t and t.parent_task_id != parent_id:
+        if not tid:
+            continue
+        t = session.get(Task, tid)
+        if t is None:
+            continue
+        if not pt["parent_slug"]:
+            # Task is now root-level — clear any stale parent from a previous indent.
+            if t.parent_task_id is not None:
+                t.parent_task_id = None
+        else:
+            parent_id = slug_to_id.get(pt["parent_slug"])
+            if parent_id and t.parent_task_id != parent_id:
                 t.parent_task_id = parent_id
 
 

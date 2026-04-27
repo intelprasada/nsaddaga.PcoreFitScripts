@@ -332,3 +332,55 @@ def test_search_empty_query_returns_empty_list(client):
     r = client.get("/api/search?q=%20%20", headers={"Authorization": AUTH})
     assert r.status_code == 200
     assert r.json() == []
+
+
+def test_dedent_clears_parent_task_id(client):
+    """Regression: dedenting a subtask to root level must clear parent_task_id.
+
+    Previously _incremental_reindex's second pass skipped tasks with no
+    parent_slug, so a stale parent_task_id persisted in the DB after the task
+    was dedented.  The task was then invisible in top_level_only queries
+    (Kanban, My Tasks) because parent_task_id IS NULL was false.
+    """
+    notes_dir = DATA / "notes"
+    notes_dir.mkdir(exist_ok=True)
+
+    # Step 1: create a note where T-NEST01 is a subtask of T-ROOT01.
+    md_nested = (
+        "# Nesting test\n"
+        "!task #id T-ROOT01 parent task @alice\n"
+        "    !task #id T-NEST01 child task @alice\n"
+    )
+    note_path = notes_dir / "nest_test.md"
+    note_path.write_text(md_nested)
+    r = client.put("/api/notes", json={"path": "nest_test.md", "body_md": md_nested},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200
+
+    # Confirm T-NEST01 is a child (parent_task_id set).
+    r = client.get("/api/tasks/T-NEST01", headers={"Authorization": AUTH})
+    assert r.status_code == 200
+    assert r.json()["parent_task_id"] is not None, "T-NEST01 should have a parent"
+
+    # Step 2: edit the note so T-NEST01 is now at root indent.
+    md_flat = (
+        "# Nesting test\n"
+        "!task #id T-ROOT01 parent task @alice\n"
+        "!task #id T-NEST01 child task @alice\n"
+    )
+    note_path.write_text(md_flat)
+    r = client.put("/api/notes", json={"path": "nest_test.md", "body_md": md_flat},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200
+
+    # T-NEST01 must now have parent_task_id cleared.
+    r = client.get("/api/tasks/T-NEST01", headers={"Authorization": AUTH})
+    assert r.status_code == 200
+    assert r.json()["parent_task_id"] is None, "parent_task_id must be cleared after dedent"
+
+    # And it must appear in a top_level_only query for its owner.
+    r = client.get("/api/tasks?owner=alice&top_level_only=true",
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200
+    uuids = [t["task_uuid"] for t in r.json()["tasks"]]
+    assert "T-NEST01" in uuids, "Dedented task must appear in top_level_only owner query"

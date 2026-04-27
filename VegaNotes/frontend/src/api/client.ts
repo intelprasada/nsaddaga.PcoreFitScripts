@@ -215,6 +215,9 @@ export const api = {
   adminDeleteUser: (name: string) =>
     req(`/admin/users/${encodeURIComponent(name)}`, { method: "DELETE" }),
 
+  adminReindex: () =>
+    req<{ status: string; files_indexed: number }>("/admin/reindex", { method: "POST" }),
+
   search: (q: string) => req<{ id: number; path: string; title: string }[]>(`/search?q=${encodeURIComponent(q)}`),
 
   // Generic attribute autocomplete (issue #38 follow-up).
