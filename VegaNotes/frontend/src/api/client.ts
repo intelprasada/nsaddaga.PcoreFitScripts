@@ -26,8 +26,6 @@ export interface Task {
   eta: string | null;
   priority_rank: number;
   parent_task_id: number | null;
-  parent_title: string | null;
-  parent_uuid: string | null;
   note_id: number;
   notes?: string;
   note_history?: string[];
