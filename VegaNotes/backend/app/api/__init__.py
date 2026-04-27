@@ -128,6 +128,15 @@ def _task_to_dict(s: Session, t: Task, *, include_children: bool = False) -> dic
         "notes": "\n".join(a.value for a in attrs if a.key == "note"),
         "note_history": [a.value for a in attrs if a.key == "note"],
     }
+    # Parent breadcrumb — resolved lazily; single extra lookup only when task
+    # has a parent (AR items / subtasks).  Used by My Tasks to show context.
+    if t.parent_task_id is not None:
+        parent = s.get(Task, t.parent_task_id)
+        out["parent_title"] = parent.title if parent else None
+        out["parent_uuid"]  = parent.task_uuid if parent else None
+    else:
+        out["parent_title"] = None
+        out["parent_uuid"]  = None
     if include_children:
         kids = s.exec(
             select(Task).where(Task.parent_task_id == t.id).order_by(Task.line)
