@@ -30,15 +30,88 @@ _ID_TOKEN_RE = re.compile(r"#id\s+(\S+)", re.IGNORECASE)
 # Crockford-style base32 alphabet (no I, L, O, U for unambiguity).
 _ID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
+# Indentation policy: tabs only, one tab == 4 spaces visually.
+# Parent/child relationships across the tool are indent-based, so all on-disk
+# writes are normalized to tabs in :func:`normalize_indent_to_tabs` (called
+# from ``safe_io._normalize_for_disk`` for every ``.md`` save).
+_TAB_WIDTH = 4
+_FENCE_RE = re.compile(r"^[ \t]*(```+|~~~+)")
+
 
 def _line_indent(line: str) -> int:
-    n = 0
+    """Return the **visual column count** of leading whitespace.
+
+    A tab advances to the next tab-stop at a multiple of :data:`_TAB_WIDTH`.
+    Used by all indent comparisons (parent/child detection, continuation pad
+    computation) so 1 tab == 4 spaces consistently regardless of the actual
+    characters on disk.
+    """
+    cols = 0
     for ch in line:
-        if ch == "\t" or ch == " ":
-            n += 1
+        if ch == "\t":
+            cols = ((cols // _TAB_WIDTH) + 1) * _TAB_WIDTH
+        elif ch == " ":
+            cols += 1
         else:
             break
-    return n
+    return cols
+
+
+def normalize_indent_to_tabs(md: str) -> str:
+    r"""Rewrite the leading whitespace of every line to **tabs only**, where
+    one tab represents one indent level (== :data:`_TAB_WIDTH` spaces).
+
+    Mapping visual columns → tabs:
+
+      * 0 cols       → 0 tabs (root level)
+      * 1-3 cols     → 1 tab  (any non-zero indent counts as ≥ 1 level —
+                                preserves common 2-space-per-level Markdown
+                                conventions)
+      * N >= 4 cols  → ``N // 4`` tabs (drops residual 0-3 spaces)
+
+    Lines inside fenced code blocks (triple backticks or tildes) are
+    preserved verbatim — code shouldn't be reflowed. Blank lines are
+    unchanged. Idempotent on already-tab-indented content.
+    """
+    lines = md.splitlines(keepends=True)
+    out: list[str] = []
+    in_fence = False
+    fence_marker: Optional[str] = None
+    for raw in lines:
+        body = raw
+        nl = ""
+        while body.endswith("\n") or body.endswith("\r"):
+            nl = body[-1] + nl
+            body = body[:-1]
+        m = _FENCE_RE.match(body)
+        if m:
+            mark = m.group(1)
+            if not in_fence:
+                in_fence, fence_marker = True, mark
+            elif fence_marker == mark:
+                in_fence, fence_marker = False, None
+            out.append(raw)
+            continue
+        if in_fence or not body.strip():
+            out.append(raw)
+            continue
+        cols = 0
+        i = 0
+        while i < len(body) and body[i] in (" ", "\t"):
+            if body[i] == "\t":
+                cols = ((cols // _TAB_WIDTH) + 1) * _TAB_WIDTH
+            else:
+                cols += 1
+            i += 1
+        rest = body[i:]
+        if cols == 0:
+            tabs = 0
+        elif cols < _TAB_WIDTH:
+            tabs = 1
+        else:
+            tabs = cols // _TAB_WIDTH
+        out.append("\t" * tabs + rest + nl)
+    return "".join(out)
 
 
 def _is_done_task_line(line: str) -> bool:

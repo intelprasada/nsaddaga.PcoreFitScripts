@@ -492,3 +492,55 @@ def test_patch_ref_rows_multiple_lines():
     assert changed
     assert new_md.count("#status in-progress") == 2
     assert "#status todo" not in new_md
+
+
+# ---------- normalize_indent_to_tabs ----------
+from app.markdown_ops import normalize_indent_to_tabs
+
+
+def test_normalize_two_space_indent_becomes_one_tab():
+    md = "- !task Parent\n  - !task Child\n    - !task Grandchild\n"
+    out = normalize_indent_to_tabs(md)
+    assert out == "- !task Parent\n\t- !task Child\n\t- !task Grandchild\n"
+
+
+def test_normalize_four_space_indent_becomes_one_tab():
+    md = "- a\n    - b\n        - c\n"
+    out = normalize_indent_to_tabs(md)
+    assert out == "- a\n\t- b\n\t\t- c\n"
+
+
+def test_normalize_idempotent_on_tab_input():
+    md = "- a\n\t- b\n\t\t- c\n"
+    assert normalize_indent_to_tabs(md) == md
+
+
+def test_normalize_preserves_fenced_code_blocks():
+    md = "para\n```python\n  indented_in_code = 1\n    deeper = 2\n```\n  - !task tabbed\n"
+    out = normalize_indent_to_tabs(md)
+    assert "  indented_in_code = 1\n    deeper = 2\n" in out
+    assert "\t- !task tabbed\n" in out
+
+
+def test_normalize_drops_residual_spaces():
+    md = "- a\n     - b\n"  # 5 spaces -> 1 tab (4//4=1)
+    assert normalize_indent_to_tabs(md) == "- a\n\t- b\n"
+
+
+def test_normalize_preserves_blank_lines():
+    md = "- a\n\n  - b\n"
+    assert normalize_indent_to_tabs(md) == "- a\n\n\t- b\n"
+
+
+def test_safe_write_normalizes_md_on_disk(tmp_path):
+    from app.safe_io import safe_write
+    p = tmp_path / "x.md"
+    safe_write(p, "- a\n  - b\n", notes_dir=tmp_path)
+    assert p.read_text() == "- a\n\t- b\n"
+
+
+def test_safe_write_skips_non_md(tmp_path):
+    from app.safe_io import safe_write
+    p = tmp_path / "x.txt"
+    safe_write(p, "  preserved\n", notes_dir=tmp_path)
+    assert p.read_text() == "  preserved\n"

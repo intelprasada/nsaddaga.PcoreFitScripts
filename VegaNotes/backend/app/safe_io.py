@@ -93,6 +93,24 @@ def _backup_path(notes_dir: Path, target: Path) -> Path:
     return notes_dir / ".trash" / f"{rel}.{ts}.bak"
 
 
+def _normalize_for_disk(path: Path, content: str) -> str:
+    """Apply on-write content normalization for note files.
+
+    Currently: enforce tabs-only indentation (1 tab == 4 spaces) for ``.md``
+    files. Indent levels drive parent/child relationships throughout the
+    tool, so a single canonical indent style on disk avoids subtle bugs
+    where mixed tab/space indents misaligned. Non-``.md`` files pass
+    through unchanged.
+
+    Lazy-imports the markdown_ops helper to avoid a top-level circular
+    dependency (markdown_ops -> parser -> safe_io in some call paths).
+    """
+    if path.suffix.lower() != ".md":
+        return content
+    from .markdown_ops import normalize_indent_to_tabs
+    return normalize_indent_to_tabs(content)
+
+
 def safe_write(
     path: Path,
     content: str,
@@ -112,6 +130,7 @@ def safe_write(
 
     Raises :class:`StaleWriteError` on a mismatch.
     """
+    content = _normalize_for_disk(path, content)
     lock = _lock_for(path)
     with lock:
         if expected_etag is not None:
@@ -191,6 +210,7 @@ def _safe_write_unlocked(
     holds the per-file lock (via :class:`with_file_lock`). Used by handlers
     that do read-modify-write in one critical section.
     """
+    content = _normalize_for_disk(path, content)
     if expected_etag is not None:
         cur_etag = etag_for(path)
         if cur_etag != expected_etag:
