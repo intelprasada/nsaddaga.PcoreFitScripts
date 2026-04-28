@@ -14,6 +14,7 @@ import { AdminPanel } from "./components/Admin/AdminPanel";
 import { ChangePasswordModal } from "./components/Auth/ChangePasswordModal";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api/client";
+import { copyToClipboard } from "./lib/clipboard";
 
 const qc = new QueryClient();
 
@@ -418,11 +419,14 @@ function EditInVimButton({ selectedPath, entry, flushSave }: {
 
   const copyCmd = async () => {
     if (!info) return;
-    try {
-      await navigator.clipboard.writeText(info.vim_cmd);
+    const ok = await copyToClipboard(info.vim_cmd);
+    if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {}
+    } else {
+      setErr("Could not copy — select the command above and copy manually.");
+      setTimeout(() => setErr(null), 3000);
+    }
   };
 
   return (

@@ -5,6 +5,7 @@ import { api, type ChildTask, type Task } from "../../api/client";
 import { formatIntelWw } from "@veganotes/parser";
 import { useFontScale, FONT_SCALE_MAP } from "../../store/fontScale";
 import { QuickChips } from "../Tasks/QuickChips";
+import { copyToClipboard } from "../../lib/clipboard";
 
 interface Props { task: Task; onOpen?: (t: Task) => void; canWrite?: boolean; }
 
@@ -29,20 +30,27 @@ function etaLabel(eta: string | null | undefined): string {
 }
 
 function UuidChip({ uuid }: { uuid: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = (e: React.MouseEvent) => {
+  const [state, setState] = useState<"idle" | "ok" | "fail">("idle");
+  const copy = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const write = navigator.clipboard?.writeText(uuid);
-    const finish = () => { setCopied(true); setTimeout(() => setCopied(false), 1500); };
-    if (write) write.then(finish).catch(finish); else finish();
+    const ok = await copyToClipboard(uuid);
+    setState(ok ? "ok" : "fail");
+    setTimeout(() => setState("idle"), 1500);
   };
+  const label =
+    state === "ok" ? "Copied!"
+    : state === "fail" ? "Copy failed — select & ⌘C"
+    : "Click to copy task ID";
   return (
     <button
+      type="button"
       onClick={copy}
-      title={copied ? "Copied!" : "Click to copy task ID"}
+      title={label}
       className="chip font-mono text-[10px] bg-slate-50 border border-slate-200 text-slate-400 hover:text-slate-600 hover:border-slate-400 transition-colors px-1.5 py-0.5"
     >
-      {copied ? <span className="text-emerald-500 not-italic">✓</span> : uuid}
+      {state === "ok" ? <span className="text-emerald-500 not-italic">✓</span>
+       : state === "fail" ? <span className="text-rose-500 not-italic">✕ {uuid}</span>
+       : uuid}
     </button>
   );
 }
