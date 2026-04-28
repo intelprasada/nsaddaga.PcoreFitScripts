@@ -1562,6 +1562,13 @@ def patch_task(
             ref_patch["owners"] = [o.strip().lstrip("@") for o in body.owners if o and o.strip()]
         if body.features is not None:
             ref_patch["features"] = [f.strip() for f in body.features if f and f.strip()]
+        # Notes are journal entries — propagate them too so cross-file
+        # ref rows (e.g. a weekly note's `#task T-XXX` reference) carry
+        # the same audit trail as the canonical declaration. See user
+        # follow-up to issue #92: notes added in the popover should be
+        # visible in every md file that references the task.
+        if body.add_note is not None and body.add_note.strip():
+            ref_patch["add_note"] = body.add_note
 
         if ref_patch:
             # Pre-filter: only notes whose cached body contains the ref_id text.

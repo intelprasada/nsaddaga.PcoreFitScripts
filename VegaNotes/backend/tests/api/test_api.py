@@ -684,3 +684,54 @@ def test_add_ar_strips_redundant_ar_prefix(client):
     assert "!AR #id" in md
     assert "!AR my action item" not in md, "redundant prefix should have been stripped"
     assert "my action item" in md
+
+
+def test_patch_add_note_propagates_to_ref_row_files(client):
+    """Notes added via PATCH /api/tasks/{id} must also be appended under any
+    `#task T-XXX` ref-row in other md files that reference the same task —
+    so the audit trail is consistent across the canonical declaration and
+    every weekly/rolled file that points at it.  Follow-up to issue #92."""
+    notes_dir = DATA / "notes" / "noteprop"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    canonical = (
+        "# Sprint canonical\n"
+        "@admin\n"
+        "\t!task #id T-NOTEPRP1 propagation parent\n"
+    )
+    weekly = (
+        "# WW17\n"
+        "\t#task T-NOTEPRP1 propagation parent #status todo\n"
+    )
+    r = client.put("/api/notes",
+                   json={"path": "noteprop/canonical.md", "body_md": canonical},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+    r = client.put("/api/notes",
+                   json={"path": "noteprop/ww17.md", "body_md": weekly},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    # Add a note via the standard PATCH path.
+    r = client.patch("/api/tasks/T-NOTEPRP1",
+                     json={"add_note": "first follow-up note"},
+                     headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    canon_after = (DATA / "notes" / "noteprop" / "canonical.md").read_text(encoding="utf-8")
+    weekly_after = (DATA / "notes" / "noteprop" / "ww17.md").read_text(encoding="utf-8")
+    assert "first follow-up note" in canon_after, "note must land in canonical file"
+    assert "first follow-up note" in weekly_after, (
+        "note must also propagate to ref-row file. Got:\n" + weekly_after
+    )
+    # And it should be a real `#note` continuation, not free text.
+    assert "#note" in weekly_after.split("first follow-up note")[0].splitlines()[-1]
+
+    # A second note should append (not overwrite) in both files.
+    r = client.patch("/api/tasks/T-NOTEPRP1",
+                     json={"add_note": "second follow-up note"},
+                     headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+    canon2 = (DATA / "notes" / "noteprop" / "canonical.md").read_text(encoding="utf-8")
+    weekly2 = (DATA / "notes" / "noteprop" / "ww17.md").read_text(encoding="utf-8")
+    for body in (canon2, weekly2):
+        assert "first follow-up note" in body and "second follow-up note" in body
