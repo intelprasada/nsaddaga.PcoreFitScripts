@@ -66,7 +66,36 @@ export class ApiError extends Error {
   }
 }
 
+/** Listeners registered via {@link onAwardedBadges}. Fired once per write
+ * response that carries a non-empty `awarded_badges` array. */
+type BadgeListener = (badges: string[]) => void;
+const _badgeListeners = new Set<BadgeListener>();
+
+/** Subscribe to "badge unlocked" events emitted by any write request.
+ *
+ * Returns an unsubscribe function. Used by the `<UnlockToast>` component
+ * to surface server-awarded badges immediately after the action that
+ * earned them, with no per-call-site wiring.
+ */
+export function onAwardedBadges(fn: BadgeListener): () => void {
+  _badgeListeners.add(fn);
+  return () => _badgeListeners.delete(fn);
+}
+
+function _maybeFireBadges(method: string, body: unknown) {
+  if (method === "GET") return;
+  if (!body || typeof body !== "object") return;
+  const arr = (body as { awarded_badges?: unknown }).awarded_badges;
+  if (!Array.isArray(arr) || arr.length === 0) return;
+  const keys = arr.filter((k): k is string => typeof k === "string");
+  if (keys.length === 0) return;
+  for (const fn of _badgeListeners) {
+    try { fn(keys); } catch { /* listener errors must not break the request */ }
+  }
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
   const r = await fetch(BASE + path, {
     credentials: "include",
     ...init,
@@ -86,7 +115,9 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiError(r.status, r.statusText, path, detail, body);
   }
-  return r.json() as Promise<T>;
+  const parsed = (await r.json()) as T;
+  _maybeFireBadges(method, parsed);
+  return parsed;
 }
 
 export interface ProjectInfo {
@@ -214,7 +245,7 @@ export const api = {
     }),
 
   users: () => req<string[]>("/users"),
-  me: () => req<{ name: string; is_admin: boolean }>("/me"),
+  me: () => req<{ name: string; is_admin: boolean; tz?: string }>("/me"),
   changeMyPassword: (current_password: string, new_password: string) =>
     req<{ status: string }>("/me/password", {
       method: "PATCH",
@@ -251,4 +282,82 @@ export const api = {
   savedViews: () => req<Record<string, string[]>>("/me/views"),
   saveViews: (views: Record<string, string[]>) =>
     req<Record<string, string[]>>("/me/views", { method: "PUT", body: JSON.stringify(views) }),
+
+  // ----- gamification (issue #137) ----------------------------------------
+  meStats: () => req<MeStats>("/me/stats"),
+  meStreak: () => req<MeStreak>("/me/streak"),
+  meHistory: (days: number) => req<MeHistoryDay[]>(`/me/history?days=${days}`),
+  meBadges: () => req<MeBadges>("/me/badges"),
+  meActivity: (params: { kind?: string; since?: string; until?: string; limit?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.kind) qs.set("kind", params.kind);
+    if (params.since) qs.set("since", params.since);
+    if (params.until) qs.set("until", params.until);
+    if (params.limit != null) qs.set("limit", String(params.limit));
+    const tail = qs.toString();
+    return req<MeActivityEvent[]>(`/me/activity${tail ? "?" + tail : ""}`);
+  },
+  setMyTz: (tz: string) =>
+    req<{ status: string; tz: string }>("/me/tz", {
+      method: "PATCH",
+      body: JSON.stringify({ tz }),
+    }),
 };
+
+// ----- gamification response shapes (issue #137) --------------------------
+
+export interface MeStats {
+  as_of: string;
+  tz: string;
+  tasks_closed: { today: number; week: number; month: number; lifetime: number };
+  notes_touched: { week: number; month: number };
+  current_streak_days: number;
+  longest_streak_days: number;
+  rest_tokens_remaining: number;
+  on_time_eta_rate_30d: number | null;
+  on_time_sample_30d: number;
+  favorite_project_30d: string | null;
+  by_kind: Record<string, number>;
+}
+
+export interface MeStreak {
+  current_streak_days: number;
+  longest_streak_days: number;
+  rest_tokens_remaining: number;
+  as_of: string;
+}
+
+export interface MeHistoryDay {
+  date: string;
+  closes: number;
+  edits: number;
+}
+
+export interface EarnedBadge {
+  key: string;
+  title: string;
+  description: string;
+  awarded_at: string;
+}
+
+export interface LockedBadge {
+  key: string;
+  title: string;
+  description: string;
+  progress: number | null;
+}
+
+export interface MeBadges {
+  earned: EarnedBadge[];
+  locked: LockedBadge[];
+  hidden_locked_count: number;
+  total_count: number;
+}
+
+export interface MeActivityEvent {
+  id: number;
+  kind: string;
+  ref: string | null;
+  ts: string;
+  meta: Record<string, unknown>;
+}

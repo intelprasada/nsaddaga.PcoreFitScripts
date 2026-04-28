@@ -15,7 +15,7 @@ export interface FilterState {
 
 interface UIState {
   filters: FilterState;
-  view: "editor" | "kanban" | "agenda" | "timeline" | "calendar" | "graph" | "admin" | "my-tasks";
+  view: "editor" | "kanban" | "agenda" | "timeline" | "calendar" | "graph" | "admin" | "my-tasks" | "me";
   set: (patch: Partial<UIState>) => void;
   patchFilters: (patch: Partial<FilterState>) => void;
   clearFilters: () => void;

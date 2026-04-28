@@ -47,7 +47,12 @@ helm install veganotes deploy/helm/veganotes
 - **Powerful queries** — per-user task lists, "agenda for next week" sorted by
   ETA then priority, filter-by-feature with cross-user aggregation,
   bidirectional link graph. See [docs/queries.md](docs/queries.md).
-- **Multiple views** — Editor, Kanban, Timeline (Gantt), Calendar, Graph, Agenda.
+- **Multiple views** — Editor, Kanban, Timeline (Gantt), Calendar, Graph, Agenda, Me.
+- **Solo gamification** — every user gets a private "Me" page (and `vn me`
+  in the CLI) with stats, streaks, badges, history sparkline, and recent
+  activity. Closing a task that crosses a badge threshold pops a toast in
+  the web UI; opt out per-client with the toggle on the Me page (or
+  `vn config gamify=off`). No leaderboards, no cross-user comparisons.
 
 ## Documentation
 - [Syntax](docs/syntax.md) · [Queries](docs/queries.md) · [Architecture](docs/architecture.md)
