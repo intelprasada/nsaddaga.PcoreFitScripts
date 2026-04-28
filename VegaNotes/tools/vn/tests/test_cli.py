@@ -1077,3 +1077,156 @@ def test_me_tz_set_patches_endpoint(fake_client, capsys):
     assert method == "PATCH" and path == "/api/me/tz"
     assert body == {"tz": "Europe/Berlin"}
     assert "Europe/Berlin" in capsys.readouterr().out
+
+
+# ---------- vn config (Phase 4) -------------------------------------------
+
+import tempfile as _tempfile
+from pathlib import Path as _Path
+
+from vn import settings as _vn_settings
+
+def _force_settings(monkeypatch, **kw):
+    """Pin both the in-process snapshot and the loader so main() can't
+    overwrite our test-supplied settings when it re-reads from disk."""
+    obj = _vn_settings.Settings(**kw)
+    monkeypatch.setattr(cli, "_settings", obj)
+    monkeypatch.setattr(_vn_settings, "load_settings",
+                        lambda profile="default", **_: obj)
+    return obj
+
+
+@pytest.fixture
+def tmp_config(monkeypatch, tmp_path):
+    cfg = tmp_path / "config"
+    monkeypatch.setattr(_vn_settings, "CONFIG_PATH", cfg)
+    # Don't pin load_settings here — these tests want to round-trip
+    # writes through the real loader to verify persistence.
+    monkeypatch.setattr(cli, "_settings", _vn_settings.Settings())
+    return cfg
+
+
+def test_config_list_defaults(tmp_config, fake_client, capsys):
+    rc = cli.main(["config"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "gamify" in out and "on" in out
+    assert "(default)" in out
+
+
+def test_config_set_persists(tmp_config, fake_client, capsys):
+    rc = cli.main(["config", "gamify=off"])
+    assert rc == 0
+    assert "gamify" in capsys.readouterr().out
+    s = _vn_settings.load_settings("default")
+    assert s.gamify_enabled is False
+    assert s.gamify_notify is True
+
+
+def test_config_set_two_token_form(tmp_config, fake_client):
+    rc = cli.main(["config", "gamify.notify", "off"])
+    assert rc == 0
+    s = _vn_settings.load_settings("default")
+    assert s.gamify_notify is False
+
+
+def test_config_get_one_key(tmp_config, fake_client, capsys):
+    _vn_settings.set_setting("gamify", "off", "default")
+    rc = cli.main(["config", "gamify"])
+    assert rc == 0
+    assert "off" in capsys.readouterr().out
+
+
+def test_config_unknown_key_errors(tmp_config, fake_client, capsys):
+    rc = cli.main(["config", "frobnicate=on"])
+    assert rc == 2
+    assert "unknown config key" in capsys.readouterr().err
+
+
+def test_config_invalid_value_errors(tmp_config, fake_client, capsys):
+    rc = cli.main(["config", "gamify=maybe"])
+    assert rc == 2
+    assert "invalid boolean" in capsys.readouterr().err
+
+
+def test_me_stats_blocked_when_gamify_off(monkeypatch, fake_client, capsys):
+    _force_settings(monkeypatch, gamify_enabled=False)
+    rc = cli.main(["me", "stats"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "gamification is off" in err
+    assert not any(c[1] == "/api/me/stats" for c in fake_client.calls)
+
+
+def test_me_badges_blocked_when_gamify_off(monkeypatch, fake_client, capsys):
+    _force_settings(monkeypatch, gamify_enabled=False)
+    rc = cli.main(["me", "badges"])
+    assert rc == 0
+    assert not any(c[1] == "/api/me/badges" for c in fake_client.calls)
+
+
+def test_me_tz_works_when_gamify_off(monkeypatch, fake_client, capsys):
+    _force_settings(monkeypatch, gamify_enabled=False)
+    fake_client.responses[("GET", "/api/me")] = {
+        "name": "alice", "is_admin": False, "tz": "UTC",
+    }
+    rc = cli.main(["me", "tz"])
+    assert rc == 0
+    assert "UTC" in capsys.readouterr().out
+
+
+def test_task_patch_announces_new_badges(monkeypatch, fake_client, capsys):
+    _force_settings(monkeypatch)
+    fake_client.responses[("PATCH", "/api/tasks/T-XYZ")] = {
+        "task_uuid": "T-XYZ", "title": "x", "status": "done",
+        "awarded_badges": ["first_light", "hat_trick"],
+    }
+    rc = cli.main(["task", "T-XYZ", "status=done"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "unlocked: First Light" in out
+    assert "unlocked: Hat Trick" in out
+
+
+def test_celebration_silenced_when_notify_off(monkeypatch, fake_client, capsys):
+    _force_settings(monkeypatch, gamify_notify=False)
+    fake_client.responses[("PATCH", "/api/tasks/T-XYZ")] = {
+        "task_uuid": "T-XYZ", "title": "x",
+        "awarded_badges": ["first_light"],
+    }
+    cli.main(["task", "T-XYZ", "status=done"])
+    out = capsys.readouterr().out
+    assert "unlocked" not in out
+
+
+def test_celebration_silenced_when_gamify_off(monkeypatch, fake_client, capsys):
+    _force_settings(monkeypatch, gamify_enabled=False,
+                                              gamify_notify=True)
+    fake_client.responses[("PATCH", "/api/tasks/T-XYZ")] = {
+        "task_uuid": "T-XYZ", "title": "x",
+        "awarded_badges": ["first_light"],
+    }
+    cli.main(["task", "T-XYZ", "status=done"])
+    out = capsys.readouterr().out
+    assert "unlocked" not in out
+
+
+def test_unknown_badge_key_falls_back_to_raw(monkeypatch, fake_client, capsys):
+    _force_settings(monkeypatch)
+    fake_client.responses[("PATCH", "/api/tasks/T-XYZ")] = {
+        "task_uuid": "T-XYZ", "title": "x",
+        "awarded_badges": ["future_badge_999"],
+    }
+    cli.main(["task", "T-XYZ", "status=done"])
+    out = capsys.readouterr().out
+    assert "unlocked: future_badge_999" in out
+
+
+def test_no_celebration_without_awarded_badges(monkeypatch, fake_client, capsys):
+    _force_settings(monkeypatch)
+    fake_client.responses[("PATCH", "/api/tasks/T-XYZ")] = {
+        "task_uuid": "T-XYZ", "title": "x", "status": "done",
+    }
+    cli.main(["task", "T-XYZ", "status=done"])
+    out = capsys.readouterr().out
+    assert "unlocked" not in out

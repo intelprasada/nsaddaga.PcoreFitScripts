@@ -26,6 +26,60 @@ from . import __version__
 from .client import ApiError, Client
 from .config import CredentialsError, load_credentials
 from .query import DSLError, compile_clauses
+from . import settings as vn_settings
+
+
+# Module-level settings; populated in ``main()`` from the active
+# profile, exposed as a module attribute so tests can monkeypatch it.
+_settings: vn_settings.Settings = vn_settings.Settings()
+
+
+def _announce_badges(data: Any) -> None:
+    """Print one celebration line per badge in ``data['awarded_badges']``.
+
+    No-op if ``data`` doesn't look like a dict, the user has disabled
+    gamify or notifications, or the list is empty. Titles are looked up
+    from a small static table; unknown keys fall back to the raw key so
+    a server adding a new badge doesn't silently break the CLI.
+    """
+    if not (_settings.gamify_enabled and _settings.gamify_notify):
+        return
+    if not isinstance(data, dict):
+        return
+    keys = data.get("awarded_badges") or []
+    if not keys:
+        return
+    for k in keys:
+        title, desc = _BADGE_BLURBS.get(k, (k, ""))
+        suffix = f" — {desc}" if desc else ""
+        print(f"unlocked: {title}{suffix}")
+
+
+# Mirrors VegaNotes/backend/app/badges.py CATALOG. Kept as a static
+# table so the CLI doesn't need a network round-trip to render a one-
+# line celebration; if the server ships a new key the CLI just falls
+# back to printing the raw key.
+_BADGE_BLURBS: dict[str, tuple[str, str]] = {
+    "first_light": ("First Light", "close your first task"),
+    "hat_trick": ("Hat Trick", "close 3 tasks in one day"),
+    "marathoner": ("Marathoner", "10-day activity streak"),
+    "centurion": ("Centurion", "100 tasks closed lifetime"),
+    "on_time": ("On Time", "10 tasks closed on or before ETA"),
+    "curator": ("Curator", "edit the same note 5+ times"),
+    "docs_day": ("Docs Day", "create 3 notes in one day"),
+    "polyglot": ("Polyglot", "5 distinct projects in one week"),
+    "cleanup_crew": ("Cleanup Crew", "5 aged tasks closed in one week"),
+    "weekend_warrior": ("Weekend Warrior", ""),
+    "quiet_hours": ("Quiet Hours", ""),
+    "ghost_writer": ("Ghost Writer", ""),
+    "phoenix": ("Phoenix", ""),
+}
+
+
+def _gamify_disabled_notice() -> int:
+    print("vn: gamification is off for this profile "
+          "(re-enable with `vn config gamify=on`)", file=sys.stderr)
+    return 0
 
 
 # Attribute keys accepted by `vn task ID key=value ...`.
@@ -247,6 +301,7 @@ def cmd_task(client: Client, args: argparse.Namespace) -> int:
         _print_json(data)
     else:
         _print_task_table([data]) if isinstance(data, dict) else _print_json(data)
+    _announce_badges(data)
     return 0
 
 
@@ -427,6 +482,7 @@ def cmd_note_new(client: Client, args: argparse.Namespace) -> int:
     else:
         nid = data.get("id") if isinstance(data, dict) else "?"
         print(f"created note id={nid} path={path}")
+    _announce_badges(data)
     return 0
 
 
@@ -466,6 +522,8 @@ def _sparkline(values: list[int]) -> str:
 
 
 def cmd_me_stats(client: Client, args: argparse.Namespace) -> int:
+    if not _settings.gamify_enabled:
+        return _gamify_disabled_notice()
     data = client.get("/api/me/stats")
     if args.json:
         _print_json(data)
@@ -498,6 +556,8 @@ def cmd_me_stats(client: Client, args: argparse.Namespace) -> int:
 
 
 def cmd_me_streak(client: Client, args: argparse.Namespace) -> int:
+    if not _settings.gamify_enabled:
+        return _gamify_disabled_notice()
     data = client.get("/api/me/streak")
     if args.json:
         _print_json(data)
@@ -511,6 +571,8 @@ def cmd_me_streak(client: Client, args: argparse.Namespace) -> int:
 
 
 def cmd_me_history(client: Client, args: argparse.Namespace) -> int:
+    if not _settings.gamify_enabled:
+        return _gamify_disabled_notice()
     days = max(1, min(365, getattr(args, "days", 30) or 30))
     data = client.get("/api/me/history", days=days)
     if args.json:
@@ -528,6 +590,8 @@ def cmd_me_history(client: Client, args: argparse.Namespace) -> int:
 
 
 def cmd_me_activity(client: Client, args: argparse.Namespace) -> int:
+    if not _settings.gamify_enabled:
+        return _gamify_disabled_notice()
     params: dict[str, Any] = {}
     if getattr(args, "since", None):
         params["since"] = args.since
@@ -552,6 +616,8 @@ def cmd_me_activity(client: Client, args: argparse.Namespace) -> int:
 
 
 def cmd_me_badges(client: Client, args: argparse.Namespace) -> int:
+    if not _settings.gamify_enabled:
+        return _gamify_disabled_notice()
     """List earned badges, plus locked badges with progress hints.
 
     Hidden badges are only shown after they're earned; until then we
@@ -600,6 +666,79 @@ def cmd_me_tz(client: Client, args: argparse.Namespace) -> int:
     res = client.patch("/api/me/tz", body)
     print(f"timezone set to {res.get('tz', zone)}")
     return 0
+
+
+def cmd_config(client: Client, args: argparse.Namespace) -> int:
+    """Get / set / list profile-local CLI settings.
+
+    Forms:
+
+      vn config                   — list every known key + current value
+      vn config gamify            — print one key
+      vn config gamify=off        — set one key
+      vn config gamify off        — same as above (positional)
+
+    These are stored in ``~/.veganotes/config`` per profile and are
+    independent of the server (the kill switch is client-side).
+    """
+    profile = args.profile or "default"
+    if not args.entries:
+        rows = vn_settings.list_settings(profile)
+        if args.json:
+            _print_json({k: v for k, v, _ in rows})
+            return 0
+        for key, val, is_default in rows:
+            tag = " (default)" if is_default else ""
+            print(f"{key:<18}{val}{tag}")
+        return 0
+
+    # Parse the positional words. Accept either:
+    #   key=value
+    #   key value   (two tokens)
+    #   key         (read one)
+    pairs: list[tuple[str, Optional[str]]] = []
+    i = 0
+    while i < len(args.entries):
+        tok = args.entries[i]
+        if "=" in tok:
+            k, _, v = tok.partition("=")
+            pairs.append((k.strip(), v.strip()))
+            i += 1
+            continue
+        # No '=': may be key or key+value across two tokens.
+        nxt = args.entries[i + 1] if i + 1 < len(args.entries) else None
+        if nxt is not None and "=" not in nxt and not _looks_like_key(nxt):
+            pairs.append((tok.strip(), nxt.strip()))
+            i += 2
+        else:
+            pairs.append((tok.strip(), None))
+            i += 1
+
+    rc = 0
+    for key, value in pairs:
+        try:
+            if value is None:
+                print(f"{key:<18}{vn_settings.get_setting(key, profile)}")
+            else:
+                stored = vn_settings.set_setting(key, value, profile)
+                # Refresh the in-process settings so subsequent commands
+                # in the same invocation see the new value.
+                global _settings
+                _settings = vn_settings.load_settings(profile)
+                print(f"{key:<18}{stored}")
+        except KeyError:
+            valid = ", ".join(k for k, _ in vn_settings.KNOWN_BOOL_KEYS)
+            print(f"vn: unknown config key: {key!r} (valid: {valid})",
+                  file=sys.stderr)
+            rc = 2
+        except ValueError as e:
+            print(f"vn: {e}", file=sys.stderr)
+            rc = 2
+    return rc
+
+
+def _looks_like_key(tok: str) -> bool:
+    return tok in {k for k, _ in vn_settings.KNOWN_BOOL_KEYS}
 
 
 # ---------------------------------------------------------------------------
@@ -1118,6 +1257,23 @@ def build_parser() -> argparse.ArgumentParser:
                           "empty string clears (UTC)")
     pmt.set_defaults(func=cmd_me_tz)
 
+    pcfg = sub.add_parser(
+        "config",
+        help="get / set / list profile-local CLI settings",
+        description=(
+            "Read or write profile-local CLI settings (stored in "
+            "~/.veganotes/config). Examples:\n"
+            "  vn config                  # list all settings\n"
+            "  vn config gamify           # read one\n"
+            "  vn config gamify=off       # set one\n"
+            "  vn config gamify.notify=on # set the celebration toggle\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    pcfg.add_argument("entries", nargs="*",
+                      help="key, key=value, or key value tokens; omit to list")
+    pcfg.set_defaults(func=cmd_config)
+
     # `vn show <resource> [target]` — read-only inspector for the rest of
     # the API; reuses --format / --columns where it makes sense.
     show_resources = (
@@ -1196,6 +1352,23 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # Load CLI settings (gamify toggle etc) from the active profile.
+    # Failure here is non-fatal — bad config shouldn't lock the user
+    # out of the rest of the CLI; just fall back to defaults.
+    global _settings
+    try:
+        _settings = vn_settings.load_settings(args.profile or "default")
+    except Exception:
+        _settings = vn_settings.Settings()
+
+    # `vn config` runs locally — no credentials needed.
+    if getattr(args, "func", None) is cmd_config:
+        try:
+            return args.func(None, args)  # type: ignore[arg-type]
+        except Exception as e:
+            print(f"vn: {e}", file=sys.stderr)
+            return 1
 
     try:
         creds = load_credentials(args.profile)

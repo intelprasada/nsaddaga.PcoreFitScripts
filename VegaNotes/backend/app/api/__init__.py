@@ -317,13 +317,17 @@ def upsert_note(
             },
         )
     note = reindex_file(full, s)
+    awarded: list[str] = []
     if not pre_existing:
-        gamify.record_event(s, user, gamify.NOTE_CREATED, ref=body.path)
+        awarded = gamify.record_event(s, user, gamify.NOTE_CREATED, ref=body.path)
     elif pre_body.strip() != body.body_md.strip():
         # Skip whitespace-only / no-op writes so streaks aren't gamed by
         # repeatedly saving an unchanged file.
-        gamify.record_event(s, user, gamify.NOTE_EDITED, ref=body.path)
-    return {"id": note.id, "path": note.path, "etag": new_etag}
+        awarded = gamify.record_event(s, user, gamify.NOTE_EDITED, ref=body.path)
+    out: dict[str, Any] = {"id": note.id, "path": note.path, "etag": new_etag}
+    if awarded:
+        out["awarded_badges"] = awarded
+    return out
 
 
 class RollNextWeekIn(BaseModel):
@@ -588,12 +592,15 @@ def create_task(
         reindex_file(full, s)
         created = s.exec(select(Task).where(Task.task_uuid == new_id)).first()
 
-    gamify.record_event(
+    awarded = gamify.record_event(
         s, user, gamify.TASK_CREATED,
         ref=created.task_uuid or f"task#{created.id}",
         meta={"kind": created.kind, "status": created.status},
     )
-    return _task_to_dict(s, created, include_children=True) | {"note_path": rel}
+    out = _task_to_dict(s, created, include_children=True) | {"note_path": rel}
+    if awarded:
+        out["awarded_badges"] = awarded
+    return out
 
 
 class ArCreate(BaseModel):
@@ -696,12 +703,15 @@ def create_ar_under_task(
     created = s.exec(select(Task).where(Task.task_uuid == new_id)).first()
     if created is None:
         raise HTTPException(500, "AR created but not found in index — please refresh")
-    gamify.record_event(
+    awarded = gamify.record_event(
         s, user, gamify.TASK_CREATED,
         ref=created.task_uuid or f"task#{created.id}",
         meta={"kind": "ar", "parent_task_uuid": parent_uuid},
     )
-    return _task_to_dict(s, created) | {"parent_task_uuid": parent_uuid}
+    out = _task_to_dict(s, created) | {"parent_task_uuid": parent_uuid}
+    if awarded:
+        out["awarded_badges"] = awarded
+    return out
 
 
 @router.post("/parse")
@@ -1577,21 +1587,29 @@ def patch_task(
                     reindex_file(ref_full, s)
 
     refreshed = s.get(Task, task_id)
+    awarded: list[str] = []
     if status_changed and body.status is not None:
         ev_ref = (refreshed.task_uuid if refreshed and refreshed.task_uuid
                   else (t.task_uuid or f"task#{task_id}"))
-        gamify.record_event(
+        awarded += gamify.record_event(
             s, user, gamify.TASK_STATUS_SET,
             ref=ev_ref,
             meta={"from": old_status, "to": body.status},
         )
         if (body.status or "").lower() == "done":
-            gamify.record_event(
+            awarded += gamify.record_event(
                 s, user, gamify.TASK_CLOSED,
                 ref=ev_ref,
                 meta={"from": old_status, "to": body.status},
             )
-    return _task_to_dict(s, refreshed) if refreshed else {"ok": True}
+    out = _task_to_dict(s, refreshed) if refreshed else {"ok": True}
+    if awarded:
+        # De-dupe: status_set + close on the same task can both award
+        # (rare). Preserve order.
+        seen: set[str] = set()
+        deduped = [k for k in awarded if not (k in seen or seen.add(k))]
+        out["awarded_badges"] = deduped
+    return out
 
 
 @router.delete("/tasks/{task_ref}")

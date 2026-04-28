@@ -278,6 +278,33 @@ subcommand:
 vn --json me stats | jq .current_streak_days
 ```
 
+**Celebrations.** When `vn task` or `vn note new` triggers a new badge
+unlock, the CLI prints a single `unlocked: <Name> — <blurb>` line
+right after the normal output. Nothing nag-screen, nothing persistent.
+
+### `vn config` — local CLI settings
+
+Per-profile settings live in `~/.veganotes/config` (INI format, one
+section per profile). Two keys are recognised today, both default
+**on**:
+
+| key | effect when off |
+|---|---|
+| `gamify` | hide all `vn me <subcommand>` output (commands return a one-line notice) and suppress badge celebrations |
+| `gamify.notify` | keep stats/badges working, but suppress the `unlocked:` celebration line |
+
+```bash
+vn config                       # list keys, values, and which are defaults
+vn config gamify                # show one key
+vn config gamify=off            # disable gamification surfacing entirely
+vn config gamify.notify off     # space-separated form also works
+```
+
+This is a **client-side** kill switch — events keep accruing on the
+server, so flipping `gamify=on` later restores your full history.
+`vn me tz` still works with `gamify=off` because timezone is a
+generic preference, not a gamification surface.
+
 ### `vn show <resource>` — read-only inspector
 
 Browse the database without curl-ing the API by hand. Every resource maps
