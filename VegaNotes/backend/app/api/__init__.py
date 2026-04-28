@@ -18,7 +18,7 @@ from ..db import get_session
 from ..indexer import reindex_all, reindex_file, remove_path
 from ..markdown_ops import (
     inject_missing_ids, replace_attr, replace_multi_attr, replace_notes,
-    append_note,
+    append_note, generate_task_id, existing_ids,
     remove_attr, roll_to_next_week, update_task_status,
     find_ref_row_lines, patch_ref_rows,
 )
@@ -420,6 +420,159 @@ def delete_note(
         full.unlink()
     remove_path(rel, s)
     return {"status": "deleted"}
+
+
+# ---------- create task (issue #63) ----------------------------------------
+
+class TaskCreate(BaseModel):
+    title: str
+    status: str = "todo"
+    project: Optional[str] = None       # project (folder) name
+    note_path: Optional[str] = None     # explicit destination (relative to notes_dir)
+    owners: Optional[list[str]] = None  # defaults to [requester]
+    priority: Optional[str] = None
+    eta: Optional[str] = None
+    features: Optional[list[str]] = None
+    kind: str = "task"                  # 'task' or 'ar'
+
+
+_VALID_STATUSES = {"todo", "in-progress", "blocked", "done"}
+_VALID_KINDS = {"task", "ar"}
+
+
+def _resolve_destination_note(
+    s: Session, project: Optional[str], note_path: Optional[str],
+) -> Path:
+    """Pick the markdown file a new task should be appended to.
+
+    Resolution:
+      1. explicit note_path (validated to live under notes_dir, project match if given)
+      2. project given → most recently modified .md under that project folder
+      3. neither → 422
+    """
+    nd = settings.notes_dir
+    if note_path:
+        if ".." in note_path or note_path.startswith("/"):
+            raise HTTPException(400, "invalid note_path")
+        full = nd / note_path
+        if not full.exists() or not full.is_file():
+            raise HTTPException(404, f"note not found: {note_path}")
+        if project is not None and _project_for_path(note_path) != project:
+            raise HTTPException(422, f"note '{note_path}' is not in project '{project}'")
+        return full
+    if project:
+        proj_dir = nd / project
+        if not proj_dir.is_dir():
+            raise HTTPException(404, f"project not found: {project}")
+        candidates = sorted(
+            (p for p in proj_dir.rglob("*.md") if p.is_file()),
+            key=lambda p: p.stat().st_mtime, reverse=True,
+        )
+        if not candidates:
+            raise HTTPException(
+                422, f"no notes in project '{project}'. Create a note first.",
+            )
+        return candidates[0]
+    raise HTTPException(
+        422,
+        "no destination: provide either `project` (uses most recently modified "
+        "note in that project) or an explicit `note_path`",
+    )
+
+
+def _build_task_line(
+    *, kind: str, task_id: str, title: str, owners: list[str],
+    priority: Optional[str], eta: Optional[str], features: list[str],
+) -> str:
+    """Compose a single bullet markdown line for a new task.
+
+    Shape:  `- !task #id T-XXXX <title> @o1 @o2 #priority P1 #eta YYYY-MM-DD #feature x`
+    """
+    keyword = "!AR" if kind == "ar" else "!task"
+    parts = [f"- {keyword} #id {task_id} {title.strip()}"]
+    for o in owners:
+        n = o.strip().lstrip("@")
+        if n:
+            parts.append(f"@{n}")
+    if priority and priority.strip():
+        parts.append(f"#priority {priority.strip()}")
+    if eta and eta.strip():
+        parts.append(f"#eta {eta.strip()}")
+    for f in features:
+        n = f.strip()
+        if n:
+            parts.append(f"#feature {n}")
+    return " ".join(parts) + "\n"
+
+
+@router.post("/tasks", status_code=201)
+def create_task(
+    body: TaskCreate,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    """Create a task by appending a new bullet to a markdown note.
+
+    See issue #63.  Resolves the destination note via project or explicit
+    note_path, applies RBAC against that project, writes the file under the
+    safe_io per-file lock, reindexes, and returns the freshly-indexed task.
+    """
+    title = (body.title or "").strip()
+    if not title:
+        raise HTTPException(400, "title is required")
+    status = body.status or "todo"
+    if status not in _VALID_STATUSES:
+        raise HTTPException(400, f"invalid status: {status!r}")
+    kind = body.kind or "task"
+    if kind not in _VALID_KINDS:
+        raise HTTPException(400, f"invalid kind: {kind!r}")
+
+    full = _resolve_destination_note(s, body.project, body.note_path)
+    rel  = str(full.relative_to(settings.notes_dir))
+    project = _project_for_path(rel)
+
+    role = _user_role_for_project(s, user, project)
+    if role == "none":
+        raise HTTPException(403, f"no access to project '{project}'")
+
+    # Default owner = requester
+    owners = body.owners if body.owners is not None else [user]
+    cleaned_owners = [o.strip().lstrip("@") for o in owners if o and o.strip()]
+
+    # RMW under file lock so the ID we mint can't collide with a parallel writer.
+    with with_file_lock(full):
+        cur_md = full.read_text(encoding="utf-8") if full.exists() else ""
+        ids = existing_ids(cur_md)
+        new_id = generate_task_id(ids)
+        line = _build_task_line(
+            kind=kind, task_id=new_id, title=title,
+            owners=cleaned_owners,
+            priority=body.priority, eta=body.eta,
+            features=body.features or [],
+        )
+        # Append at end-of-file with a separating newline if needed.
+        sep = "" if (not cur_md or cur_md.endswith("\n")) else "\n"
+        new_md = f"{cur_md}{sep}{line}"
+        _safe_write_unlocked(full, new_md, notes_dir=settings.notes_dir)
+    note = reindex_file(full, s)
+
+    # If a non-todo status was requested, apply it as a follow-up edit so the
+    # bullet carries the right `#status` token.  Doing this after the initial
+    # write keeps the appended line shape simple and reuses the same status
+    # update plumbing the editor uses.
+    created = s.exec(select(Task).where(Task.task_uuid == new_id)).first()
+    if created is None:
+        raise HTTPException(500, "task created but not found in index — please refresh")
+    if status != "todo":
+        with with_file_lock(full):
+            disk_md = full.read_text(encoding="utf-8")
+            patched = update_task_status(disk_md, created.line, status)
+            if patched != disk_md:
+                _safe_write_unlocked(full, patched, notes_dir=settings.notes_dir)
+        reindex_file(full, s)
+        created = s.exec(select(Task).where(Task.task_uuid == new_id)).first()
+
+    return _task_to_dict(s, created, include_children=True) | {"note_path": rel}
 
 
 # ---------- parse preview ---------------------------------------------------

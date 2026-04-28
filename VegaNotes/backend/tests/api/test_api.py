@@ -433,3 +433,56 @@ def test_ref_row_owner_syncs_taskowner(client):
     r = client.get("/api/tasks/T-REFOWN1", headers={"Authorization": AUTH})
     assert r.status_code == 200
     assert "bob" in r.json()["owners"], "bob must appear in task owners after ref-row override"
+
+
+def test_create_task_appends_to_project_note(client):
+    """Issue #63 — POST /api/tasks creates a task in the most recently
+    modified note of the given project, with the requester as default owner.
+    """
+    notes_dir = DATA / "notes" / "issue63proj"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    seed = notes_dir / "wk01.md"
+    seed.write_text("# Weekly\n", encoding="utf-8")
+    r = client.put("/api/notes", json={"path": "issue63proj/wk01.md", "body_md": "# Weekly\n"},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    r = client.post(
+        "/api/tasks",
+        json={"title": "Triage build break", "status": "in-progress",
+              "project": "issue63proj", "priority": "P1"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 201, r.text
+    created = r.json()
+    assert created["title"] == "Triage build break"
+    assert created["status"] == "in-progress"
+    assert "admin" in created["owners"]
+    assert created["task_uuid"] and created["task_uuid"].startswith("T-")
+    assert created["note_path"] == "issue63proj/wk01.md"
+
+    # The bullet should now exist in the markdown file.
+    md = (DATA / "notes" / "issue63proj" / "wk01.md").read_text(encoding="utf-8")
+    assert "Triage build break" in md
+    assert created["task_uuid"] in md
+
+
+def test_create_task_no_destination_returns_422(client):
+    r = client.post(
+        "/api/tasks",
+        json={"title": "no destination"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 422
+
+
+def test_create_task_empty_project_returns_422(client):
+    notes_dir = DATA / "notes" / "issue63empty"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    r = client.post(
+        "/api/tasks",
+        json={"title": "x", "project": "issue63empty"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 422
+    assert "no notes" in r.json()["detail"].lower()

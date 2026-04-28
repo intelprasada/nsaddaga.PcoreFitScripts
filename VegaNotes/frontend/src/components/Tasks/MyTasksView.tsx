@@ -16,7 +16,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import { api, type ChildTask, type Task } from "../../api/client";
 import { formatIntelWw } from "@veganotes/parser";
 import { TaskEditPopover } from "./TaskEditPopover";
+import { NewTaskComposer } from "./NewTaskComposer";
 import { StatusChip, PriorityChip, EtaChip, OwnersChips } from "./QuickChips";
+import { useUI } from "../../store/ui";
 
 // ── grouping helpers ──────────────────────────────────────────────────────────
 
@@ -40,7 +42,11 @@ const PRIO_HEADER: Record<string, string> = {
   "": "bg-slate-50   border-slate-200   text-slate-500",
 };
 
-interface Group { key: string; label: string; headerCls: string; tasks: Task[] }
+interface Group {
+  key: string; label: string; headerCls: string; tasks: Task[];
+  /** Defaults for the per-group "+" composer based on grouping axis. */
+  composerDefaults: { status?: string; priority?: string; project?: string };
+}
 
 function groupTasks(tasks: Task[], by: GroupBy): Group[] {
   if (by === "status") {
@@ -49,6 +55,7 @@ function groupTasks(tasks: Task[], by: GroupBy): Group[] {
         key: s, label: s,
         headerCls: STATUS_HEADER[s] ?? "bg-slate-50 border-slate-200 text-slate-600",
         tasks: tasks.filter((t) => t.status === s),
+        composerDefaults: { status: s },
       }))
       .filter((g) => g.tasks.length > 0);
   }
@@ -59,6 +66,7 @@ function groupTasks(tasks: Task[], by: GroupBy): Group[] {
         key: p || "none", label: p || "(no priority)",
         headerCls: PRIO_HEADER[p] ?? "bg-slate-50 border-slate-200 text-slate-500",
         tasks: tasks.filter((t) => ((t.attrs.priority as string) ?? "") === p),
+        composerDefaults: { priority: p || undefined },
       }))
       .filter((g) => g.tasks.length > 0);
   }
@@ -76,6 +84,7 @@ function groupTasks(tasks: Task[], by: GroupBy): Group[] {
       key: label, label,
       headerCls: "bg-violet-50 border-violet-200 text-violet-800",
       tasks,
+      composerDefaults: { project: label === "(no project)" ? undefined : label },
     }));
 }
 
@@ -225,20 +234,49 @@ function TaskRow({ task, onOpen }: { task: Task; onOpen: (t: Task) => void }) {
 
 // ── GroupSection ──────────────────────────────────────────────────────────────
 
-function GroupSection({ group, onOpen }: { group: Group; onOpen: (t: Task) => void }) {
+function GroupSection({
+  group, onOpen, project, composerOpen, onComposerToggle,
+}: {
+  group: Group;
+  onOpen: (t: Task) => void;
+  project?: string;
+  composerOpen: boolean;
+  onComposerToggle: () => void;
+}) {
   const [collapsed, setCollapsed] = useState(false);
 
   return (
     <div className="rounded-lg border border-slate-200 overflow-hidden shadow-sm">
       {/* Group header */}
-      <button
-        onClick={() => setCollapsed((c) => !c)}
-        className={`w-full flex items-center gap-2 px-4 py-2 border-b text-left ${group.headerCls} hover:opacity-90 transition-opacity`}
-      >
-        <span className="text-xs font-bold uppercase tracking-wider">{group.label}</span>
-        <span className="text-xs opacity-60">{group.tasks.length} task{group.tasks.length === 1 ? "" : "s"}</span>
-        <span className="ml-auto text-xs opacity-50">{collapsed ? "▸" : "▾"}</span>
-      </button>
+      <div className={`w-full flex items-center gap-2 px-4 py-2 border-b ${group.headerCls}`}>
+        <button
+          onClick={() => setCollapsed((c) => !c)}
+          className="flex items-center gap-2 flex-1 text-left hover:opacity-90 transition-opacity"
+        >
+          <span className="text-xs font-bold uppercase tracking-wider">{group.label}</span>
+          <span className="text-xs opacity-60">{group.tasks.length} task{group.tasks.length === 1 ? "" : "s"}</span>
+          <span className="ml-auto text-xs opacity-50">{collapsed ? "▸" : "▾"}</span>
+        </button>
+        <button
+          onClick={onComposerToggle}
+          title={`Add task to ${group.label}`}
+          className="w-5 h-5 rounded text-current opacity-50 hover:opacity-100 hover:bg-white/60 flex items-center justify-center text-base leading-none"
+        >
+          +
+        </button>
+      </div>
+
+      {composerOpen && (
+        <div className="p-2 bg-slate-50 border-b border-slate-200">
+          <NewTaskComposer
+            defaultStatus={group.composerDefaults.status ?? "todo"}
+            defaultProject={group.composerDefaults.project ?? project}
+            defaultPriority={group.composerDefaults.priority}
+            onClose={onComposerToggle}
+            compact
+          />
+        </div>
+      )}
 
       {/* Table */}
       {!collapsed && (
@@ -274,6 +312,9 @@ export function MyTasksView() {
   const [groupBy,  setGroupBy]  = useState<GroupBy>("status");
   const [hideDone, setHideDone] = useState(true);
   const [editing,  setEditing]  = useState<Task | null>(null);
+  // Single-active composer: either a group key (per-group "+") or "__top".
+  const [composerOpen, setComposerOpen] = useState<string | null>(null);
+  const { filters } = useUI();
 
   const { data, isLoading } = useQuery({
     queryKey: ["my-tasks", me?.name, hideDone],
@@ -316,6 +357,15 @@ export function MyTasksView() {
           </div>
 
           <div className="ml-auto flex flex-wrap items-center gap-2">
+            {/* Global "+ New task" — always available, prefills status=todo */}
+            <button
+              onClick={() => setComposerOpen(composerOpen === "__top" ? null : "__top")}
+              className="text-xs rounded bg-sky-600 text-white px-2.5 py-1 hover:bg-sky-700 font-medium"
+              title="Add a new task"
+            >
+              + New task
+            </button>
+
             {/* Group-by selector */}
             <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5">
               <span className="text-xs text-slate-400 px-1.5">Group</span>
@@ -346,6 +396,14 @@ export function MyTasksView() {
           </div>
         </div>
 
+        {composerOpen === "__top" && (
+          <NewTaskComposer
+            defaultStatus="todo"
+            defaultProject={filters.project}
+            onClose={() => setComposerOpen(null)}
+          />
+        )}
+
         {/* ── Empty state ── */}
         {tasks.length === 0 && (
           <div className="rounded-xl border-2 border-dashed border-slate-200 p-12 text-center">
@@ -361,7 +419,16 @@ export function MyTasksView() {
 
         {/* ── Groups ── */}
         {groups.map((group) => (
-          <GroupSection key={group.key} group={group} onOpen={setEditing} />
+          <GroupSection
+            key={group.key}
+            group={group}
+            onOpen={setEditing}
+            project={filters.project}
+            composerOpen={composerOpen === group.key}
+            onComposerToggle={() =>
+              setComposerOpen(composerOpen === group.key ? null : group.key)
+            }
+          />
         ))}
       </div>
 

@@ -154,6 +154,18 @@ export const api = {
   }) =>
     req<Task>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 
+  createTask: (body: {
+    title: string;
+    status?: string;
+    project?: string;
+    note_path?: string;
+    owners?: string[];
+    priority?: string;
+    eta?: string;
+    features?: string[];
+    kind?: "task" | "ar";
+  }) => req<Task & { note_path: string }>("/tasks", { method: "POST", body: JSON.stringify(body) }),
+
   agenda: (owner?: string, days?: number, start?: string, end?: string) => {
     const qs = new URLSearchParams();
     if (days != null) qs.set("days", String(days));
