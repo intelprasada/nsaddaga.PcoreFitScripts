@@ -15,7 +15,7 @@ import { Sidebar } from "./components/Sidebar/Sidebar";
 import { AdminPanel } from "./components/Admin/AdminPanel";
 import { ChangePasswordModal } from "./components/Auth/ChangePasswordModal";
 import { useEffect, useRef, useState } from "react";
-import { api } from "./api/client";
+import { api, ApiError } from "./api/client";
 import { copyToClipboard } from "./lib/clipboard";
 
 const qc = new QueryClient();
@@ -38,7 +38,7 @@ function ViewSwitcher({ selectedPath, setSelectedPath, draft, setDraft }: {
   }
 }
 
-type DraftEntry = { body: string; saved: string; savedAt: number };
+type DraftEntry = { body: string; saved: string; savedAt: number; etag: string };
 type DraftMap = Record<string, DraftEntry>;
 
 function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
@@ -79,22 +79,49 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
     if (!selectedPath && notes[0]) setSelectedPath(notes[0].path);
   }, [notes, selectedPath, setSelectedPath]);
 
-  // Load body from server only if we don't already have a draft cached for this path.
+  const noteId = selectedPath ? notes.find((n) => n.path === selectedPath)?.id : undefined;
+
+  // Live note query: drives both initial body load and "disk changed under
+  // us" recovery. When AdminPanel/Refresh/watcher signals invalidate this
+  // key, the query refetches; the sync effect below pushes the new body
+  // into the draft IFF there are no unsaved local edits, so a typing user
+  // is never surprised by a silent overwrite.
+  const noteQuery = useQuery({
+    queryKey: ["note", noteId],
+    queryFn: () => api.note(noteId!),
+    enabled: noteId != null,
+  });
+
+  // Sync server body into draft when:
+  //   - no draft entry yet (first open), OR
+  //   - draft is clean (body === saved) — picks up out-of-band disk edits.
+  // Dirty drafts are left alone; the optimistic-concurrency etag will
+  // catch any collision at save time and surface the conflict dialog.
   useEffect(() => {
-    let cancelled = false;
-    if (!selectedPath) return;
-    if (draft[selectedPath]) return;
-    const meta = notes.find((n) => n.path === selectedPath);
-    if (!meta) return;
-    (async () => {
-      const n = await api.note(meta.id);
-      if (cancelled) return;
-      setDraft((prev) => prev[selectedPath]
-        ? prev
-        : { ...prev, [selectedPath]: { body: n.body_md, saved: n.body_md, savedAt: Date.now() } });
-    })();
-    return () => { cancelled = true; };
-  }, [selectedPath, notes, draft, setDraft]);
+    if (!selectedPath || !noteQuery.data) return;
+    const fresh = noteQuery.data;
+    setDraft((prev) => {
+      const cur = prev[selectedPath];
+      if (!cur) {
+        return { ...prev, [selectedPath]: {
+          body: fresh.body_md, saved: fresh.body_md,
+          savedAt: Date.now(), etag: fresh.etag,
+        }};
+      }
+      if (cur.body === cur.saved && cur.body !== fresh.body_md) {
+        return { ...prev, [selectedPath]: {
+          body: fresh.body_md, saved: fresh.body_md,
+          savedAt: Date.now(), etag: fresh.etag,
+        }};
+      }
+      // Clean draft, body already matches — just refresh the etag in case
+      // a no-op write (e.g. whitespace normalization) bumped it server-side.
+      if (cur.body === cur.saved && cur.etag !== fresh.etag) {
+        return { ...prev, [selectedPath]: { ...cur, etag: fresh.etag } };
+      }
+      return prev;
+    });
+  }, [selectedPath, noteQuery.data, setDraft]);
 
   const entry = selectedPath ? draft[selectedPath] : undefined;
   const body = entry?.body ?? "";
@@ -117,14 +144,48 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
 
   const flushSave = async (path: string, text: string) => {
     setStatus("saving");
+    const expected = draft[path]?.etag;
     try {
-      await api.saveNote(path, text);
+      const r = await api.saveNote(path, text, expected);
       setDraft((prev) => prev[path]
-        ? { ...prev, [path]: { ...prev[path], saved: text, savedAt: Date.now() } }
+        ? { ...prev, [path]: { ...prev[path], saved: text, savedAt: Date.now(), etag: r.etag } }
         : prev);
       invalidateAfterSave(path);
       setStatus("saved");
-    } catch {
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        // Optimistic-concurrency conflict: disk moved since we read it.
+        // Surface a user-controlled recovery rather than letting the next
+        // autosave silently clobber whichever side won the race.
+        const detail = (e.body as { detail?: { error?: string;
+          current_content?: string; current_etag?: string } } | null)?.detail;
+        if (detail?.error === "stale_write" && typeof detail.current_etag === "string") {
+          const reload = window.confirm(
+            `${path} changed on disk since you opened it.\n\n` +
+            `OK = reload disk content (your unsaved edits will be lost).\n` +
+            `Cancel = keep your edits and overwrite disk on next save.`);
+          if (reload) {
+            const fresh = detail.current_content ?? "";
+            setDraft((prev) => ({
+              ...prev,
+              [path]: {
+                body: fresh, saved: fresh,
+                savedAt: Date.now(), etag: detail.current_etag!,
+              },
+            }));
+            qcLocal.invalidateQueries({ queryKey: ["note", noteId] });
+            setStatus("saved");
+            return;
+          }
+          // User chose to overwrite — adopt the disk etag so the next save
+          // will succeed. Their current `body` is preserved as-is.
+          setDraft((prev) => prev[path]
+            ? { ...prev, [path]: { ...prev[path], etag: detail.current_etag! } }
+            : prev);
+          setStatus("idle");
+          return;
+        }
+      }
       setStatus("error");
     }
   };
@@ -155,9 +216,12 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
         for (const [path, e] of Object.entries(prev)) {
           if (e.body !== e.saved
               && (e.savedAt === 0 || knownPathsRef.current.has(path))) {
-            api.saveNote(path, e.body).then(() => {
+            // Send the etag too — if disk has moved we'd rather lose this
+            // background save (return 409) than silently clobber the new
+            // disk content. There's no UI on unmount to surface a conflict.
+            api.saveNote(path, e.body, e.etag).then((r) => {
               setDraft((p2) => p2[path]
-                ? { ...p2, [path]: { ...p2[path], saved: e.body, savedAt: Date.now() } }
+                ? { ...p2, [path]: { ...p2[path], saved: e.body, savedAt: Date.now(), etag: r.etag } }
                 : p2);
               // Force a final global refresh on unmount (no throttle).
               qcLocal.invalidateQueries({ queryKey: ["notes"] });
@@ -178,8 +242,10 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
       for (const [path, e] of Object.entries(draft)) {
         if (e.body !== e.saved
             && (e.savedAt === 0 || knownPathsRef.current.has(path))) {
-          // Best-effort sync POST via sendBeacon if available.
-          try { api.saveNote(path, e.body); } catch {}
+          // Best-effort save with the cached etag — same rationale as the
+          // unmount path: if disk has moved, prefer 409 (lost write) over
+          // a silent overwrite of someone else's changes.
+          try { api.saveNote(path, e.body, e.etag); } catch {}
         }
       }
     };
@@ -195,6 +261,7 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
         body: v,
         saved: prev[selectedPath]?.saved ?? v,
         savedAt: prev[selectedPath]?.savedAt ?? 0,
+        etag: prev[selectedPath]?.etag ?? "",
       },
     }));
   };
@@ -213,12 +280,21 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
     setStatus("saving");
     try {
       const r = await api.stampTaskIds(selectedPath);
+      // stamp-ids doesn't return an etag in its response, so refetch the
+      // note to pick up the post-write digest. Without this the next save
+      // would carry the pre-stamp etag and trigger a spurious 409.
+      const fresh = noteId != null ? await api.note(noteId) : null;
       setDraft((prev) => ({
         ...prev,
-        [selectedPath]: { body: r.body_md, saved: r.body_md, savedAt: Date.now() },
+        [selectedPath]: {
+          body: r.body_md, saved: r.body_md,
+          savedAt: Date.now(),
+          etag: fresh?.etag ?? "",
+        },
       }));
       qcLocal.invalidateQueries({ queryKey: ["notes"] });
       qcLocal.invalidateQueries({ queryKey: ["tasks"] });
+      qcLocal.invalidateQueries({ queryKey: ["note", noteId] });
       setStatus("saved");
       if (r.injected === 0) {
         alert("All tasks already have IDs.");
@@ -244,8 +320,9 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
       const n = await api.note(meta.id);
       setDraft((prev) => ({
         ...prev,
-        [selectedPath]: { body: n.body_md, saved: n.body_md, savedAt: Date.now() },
+        [selectedPath]: { body: n.body_md, saved: n.body_md, savedAt: Date.now(), etag: n.etag },
       }));
+      qcLocal.invalidateQueries({ queryKey: ["note", meta.id] });
       qcLocal.invalidateQueries({ queryKey: ["notes"] });
       qcLocal.invalidateQueries({ queryKey: ["tree"] });
       qcLocal.invalidateQueries({ queryKey: ["tasks"] });
@@ -320,7 +397,7 @@ function NewNoteButton({ selectedPath, onCreated }: {
       e.preventDefault();
       if (!name.trim()) return;
       const path = (project ? `${project}/` : "") + name.replace(/\.md$/, "") + ".md";
-      await api.saveNote(path, `# ${name}\n`);
+      await api.saveNote(path, `# ${name}\n`, "");
       qcLocal.invalidateQueries({ queryKey: ["notes"] });
       qcLocal.invalidateQueries({ queryKey: ["tree"] });
       onCreated(path);
@@ -372,6 +449,11 @@ function NextWeekButton({ selectedPath, entry, flushSave, onCreated }: {
       qcLocal.invalidateQueries({ queryKey: ["notes"] });
       qcLocal.invalidateQueries({ queryKey: ["tree"] });
       qcLocal.invalidateQueries({ queryKey: ["tasks"] });
+      // roll_to_next_week stamps #id into the source note's !task lines
+      // and writes a brand-new wwN+1 note. Both files' bytes (and etags)
+      // change on disk, so refresh the editor's per-note cache before
+      // the user is navigated to the new file.
+      qcLocal.invalidateQueries({ queryKey: ["note"] });
       onCreated(res!.path);
     } catch (e: any) {
       setErr(String(e?.message ?? e));

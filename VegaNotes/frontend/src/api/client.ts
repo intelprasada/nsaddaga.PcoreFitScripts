@@ -144,9 +144,16 @@ export interface ProjectMember {
 
 export const api = {
   notes: () => req<{ id: number; path: string; title: string }[]>("/notes"),
-  note:  (id: number) => req<{ id: number; path: string; title: string; body_md: string }>(`/notes/${id}`),
-  saveNote: (path: string, body_md: string) =>
-    req<{ id: number; path: string }>("/notes", { method: "PUT", body: JSON.stringify({ path, body_md }) }),
+  note:  (id: number) => req<{ id: number; path: string; title: string; body_md: string; etag: string }>(`/notes/${id}`),
+  saveNote: (path: string, body_md: string, ifMatch?: string) =>
+    req<{ id: number; path: string; etag: string }>("/notes", {
+      method: "PUT",
+      body: JSON.stringify({ path, body_md }),
+      // Optimistic concurrency: backend safe_write compares this against the
+      // file's current sha256 etag and returns 409 stale_write on mismatch.
+      // `""` means "I expect this path to be new" (the create case).
+      headers: ifMatch !== undefined ? { "If-Match": ifMatch } : {},
+    }),
   deleteNote: (id: number) => req(`/notes/${id}`, { method: "DELETE" }),
   rollNoteNextWeek: (path: string, overwrite = false) =>
     req<{ id: number; path: string; from_ww: number; to_ww: number }>("/notes/next-week", {

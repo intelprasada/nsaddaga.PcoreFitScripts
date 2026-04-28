@@ -101,7 +101,7 @@ export function Sidebar({ selectedPath, onSelect, onAfterDelete }: Props) {
       if (!n.endsWith(".md")) n += ".md";
       const path = `${project}/${n}`;
       const seed = `# ${n.replace(/\.md$/, "")}\n\n`;
-      return api.saveNote(path, seed).then(() => path);
+      return api.saveNote(path, seed, "").then(() => path);
     },
     onSuccess: (path) => {
       setNewNoteFor(null);
