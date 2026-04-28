@@ -749,9 +749,9 @@ def patch_ref_rows(md: str, ref_id: str, patch: dict) -> tuple[str, bool]:
     * ``eta``      — new ETA string; empty string clears the token
     * ``owners``   — list of owner names (full replacement)
     * ``features`` — list of feature names (full replacement)
-    * ``add_note`` — text to append as one or more ``#note`` continuation
-      lines under each ref row (mirrors :func:`append_note` semantics).
-      The same text is appended once per ref row found.
+
+    ``add_note`` is intentionally **not** supported here — notes are
+    journal entries that belong only in the canonical declaration file.
 
     Returns ``(new_md, changed)`` where ``changed`` is ``True`` if *md*
     was actually modified.
@@ -761,10 +761,7 @@ def patch_ref_rows(md: str, ref_id: str, patch: dict) -> tuple[str, bool]:
         return md, False
 
     changed = False
-    # Walk the ref rows in **reverse** so that any line-shifting mutation
-    # (notably append_note inserting lines below the ref row) doesn't
-    # invalidate the line numbers of earlier-found rows.
-    for line_no in sorted(line_nos, reverse=True):
+    for line_no in line_nos:
         if "status" in patch:
             md = update_task_status(md, line_no, patch["status"])
             changed = True
@@ -785,9 +782,6 @@ def patch_ref_rows(md: str, ref_id: str, patch: dict) -> tuple[str, bool]:
         if "features" in patch:
             cleaned = [f.strip() for f in patch["features"] if f and f.strip()]
             md = replace_multi_attr(md, line_no, "feature", cleaned)
-            changed = True
-        if "add_note" in patch and patch["add_note"]:
-            md = append_note(md, line_no, patch["add_note"])
             changed = True
 
     return md, changed
