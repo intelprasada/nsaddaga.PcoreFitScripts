@@ -874,3 +874,206 @@ def test_list_mixed_columns_returns_2(fake_client, capsys):
     rc = cli.main(["list", "--columns", "id,+kind"])
     assert rc == 2
     assert "cannot mix" in capsys.readouterr().err
+
+
+# ---------- vn me <subcommand> ---------------------------------------------
+
+_FAKE_STATS = {
+    "as_of": "2026-04-27",
+    "tasks_closed": {"today": 3, "week": 11, "month": 28, "lifetime": 142},
+    "notes_touched": {"week": 6, "month": 19},
+    "current_streak_days": 7,
+    "longest_streak_days": 23,
+    "rest_tokens_remaining": 1,
+    "on_time_eta_rate_30d": 0.81,
+    "on_time_sample_30d": 26,
+    "favorite_project_30d": "ww18",
+    "by_kind": {"task": 26, "ar": 2},
+}
+
+
+def test_me_stats_renders_card(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/stats")] = _FAKE_STATS
+    rc = cli.main(["me", "stats"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "as of 2026-04-27" in out
+    assert "closed today      3" in out
+    assert "current streak    7 day(s)" in out
+    assert "favorite project  ww18" in out
+    assert "on-time ETA (30d) 81%" in out
+
+
+def test_me_stats_json_passthrough(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/stats")] = _FAKE_STATS
+    rc = cli.main(["--json", "me", "stats"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["current_streak_days"] == 7
+
+
+def test_me_streak_compact(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/streak")] = {
+        "current_streak_days": 5, "longest_streak_days": 11,
+        "rest_tokens_remaining": 2, "as_of": "2026-04-27",
+    }
+    rc = cli.main(["me", "streak"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "5 day(s)" in out
+    assert "longest: 11" in out
+    assert "rest tokens: 2" in out
+
+
+def test_me_streak_zero_no_flame(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/streak")] = {
+        "current_streak_days": 0, "longest_streak_days": 4,
+        "rest_tokens_remaining": 2, "as_of": "2026-04-27",
+    }
+    cli.main(["me", "streak"])
+    out = capsys.readouterr().out
+    # No flame when current == 0
+    assert "🔥" not in out
+
+
+def test_me_history_sparkline(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/history")] = [
+        {"date": "2026-04-21", "closes": 0, "edits": 1},
+        {"date": "2026-04-22", "closes": 2, "edits": 3},
+        {"date": "2026-04-23", "closes": 1, "edits": 0},
+    ]
+    rc = cli.main(["me", "history", "--days", "3"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "closes" in out and "edits" in out
+    assert "total 3" in out  # 0+2+1
+    assert "total 4" in out  # 1+3+0
+    # The history endpoint was called with the requested days param.
+    call = [c for c in fake_client.calls if c[1] == "/api/me/history"][0]
+    assert call[2] == {"days": 3}
+
+
+def test_me_history_empty(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/history")] = []
+    cli.main(["me", "history"])
+    assert "no activity" in capsys.readouterr().out
+
+
+def test_me_activity_filters(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/activity")] = [
+        {"id": 1, "kind": "task.closed", "ref": "T-X", "ts": "2026-04-27T10:00:00",
+         "meta": {"from": "todo", "to": "done"}},
+    ]
+    rc = cli.main(["me", "activity", "--kind", "task.closed", "--limit", "5"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "task.closed" in out and "T-X" in out
+    call = [c for c in fake_client.calls if c[1] == "/api/me/activity"][0]
+    assert call[2] == {"kind": "task.closed", "limit": 5}
+
+
+def test_me_activity_empty(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/activity")] = []
+    cli.main(["me", "activity"])
+    assert "no events" in capsys.readouterr().out
+
+
+def test_me_subcommand_required(fake_client, capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["me"])
+
+
+# ---------- vn me badges / vn me tz (Phase 3) ------------------------------
+
+def test_me_badges_earned_only(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/badges")] = {
+        "earned": [
+            {"key": "first_light", "title": "First Light",
+             "description": "Close your first task.",
+             "awarded_at": "2026-04-20T10:00:00"},
+            {"key": "hat_trick", "title": "Hat Trick",
+             "description": "Close 3 tasks in a single day.",
+             "awarded_at": "2026-04-22T18:00:00"},
+        ],
+        "locked": [
+            {"key": "marathoner", "title": "Marathoner",
+             "description": "Maintain a 10-day activity streak.",
+             "progress": "7/10 day(s)"},
+        ],
+        "hidden_locked_count": 4,
+        "total_count": 13,
+    }
+    rc = cli.main(["me", "badges"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "earned (2/13)" in out
+    assert "First Light" in out and "Hat Trick" in out
+    # default view does NOT spoil locked-badge titles
+    assert "Marathoner" not in out
+    assert "more to unlock" in out
+
+
+def test_me_badges_all_shows_locked_and_hidden_count(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/badges")] = {
+        "earned": [],
+        "locked": [
+            {"key": "marathoner", "title": "Marathoner",
+             "description": "Maintain a 10-day activity streak.",
+             "progress": "3/10 day(s)"},
+        ],
+        "hidden_locked_count": 2,
+        "total_count": 13,
+    }
+    rc = cli.main(["me", "badges", "--all"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Marathoner" in out
+    assert "[3/10 day(s)]" in out
+    assert "2 hidden badges" in out
+
+
+def test_me_badges_empty_state(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/badges")] = {
+        "earned": [], "locked": [], "hidden_locked_count": 0,
+        "total_count": 13,
+    }
+    cli.main(["me", "badges"])
+    assert "no badges yet" in capsys.readouterr().out
+
+
+def test_me_badges_json_passthrough(fake_client, capsys):
+    payload = {"earned": [], "locked": [], "hidden_locked_count": 0,
+               "total_count": 13}
+    fake_client.responses[("GET", "/api/me/badges")] = payload
+    rc = cli.main(["--json", "me", "badges"])
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out) == payload
+
+
+def test_me_tz_get_prints_current(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me")] = {
+        "name": "alice", "is_admin": False, "tz": "America/Los_Angeles",
+    }
+    rc = cli.main(["me", "tz"])
+    assert rc == 0
+    assert "America/Los_Angeles" in capsys.readouterr().out
+
+
+def test_me_tz_get_defaults_to_utc(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me")] = {
+        "name": "alice", "is_admin": False, "tz": "",
+    }
+    cli.main(["me", "tz"])
+    assert capsys.readouterr().out.strip() == "UTC"
+
+
+def test_me_tz_set_patches_endpoint(fake_client, capsys):
+    fake_client.responses[("PATCH", "/api/me/tz")] = {
+        "status": "ok", "tz": "Europe/Berlin",
+    }
+    rc = cli.main(["me", "tz", "Europe/Berlin"])
+    assert rc == 0
+    method, path, _, body = fake_client.calls[-1]
+    assert method == "PATCH" and path == "/api/me/tz"
+    assert body == {"tz": "Europe/Berlin"}
+    assert "Europe/Berlin" in capsys.readouterr().out

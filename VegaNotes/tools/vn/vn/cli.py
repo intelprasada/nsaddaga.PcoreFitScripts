@@ -444,6 +444,165 @@ def cmd_whoami(client: Client, args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# `vn me <subcommand>` — gamification surface (Phase 2: stats/streak/history)
+# ---------------------------------------------------------------------------
+#
+# Every endpoint under /api/me/... is hard-scoped to the authenticated user
+# server-side. The CLI just renders.
+
+_SPARK_BARS = "▁▂▃▄▅▆▇█"
+
+
+def _sparkline(values: list[int]) -> str:
+    if not values:
+        return ""
+    peak = max(values)
+    if peak == 0:
+        return _SPARK_BARS[0] * len(values)
+    return "".join(
+        _SPARK_BARS[min(len(_SPARK_BARS) - 1, (v * (len(_SPARK_BARS) - 1)) // peak)]
+        for v in values
+    )
+
+
+def cmd_me_stats(client: Client, args: argparse.Namespace) -> int:
+    data = client.get("/api/me/stats")
+    if args.json:
+        _print_json(data)
+        return 0
+    tc = data.get("tasks_closed", {})
+    nt = data.get("notes_touched", {})
+    rate = data.get("on_time_eta_rate_30d")
+    rate_str = f"{rate * 100:.0f}% (n={data.get('on_time_sample_30d', 0)})" if rate is not None else "—"
+    print(f"as of {data.get('as_of', '?')} (UTC)")
+    print()
+    print(f"  closed today      {tc.get('today', 0)}")
+    print(f"  closed last 7d    {tc.get('week', 0)}")
+    print(f"  closed last 30d   {tc.get('month', 0)}")
+    print(f"  closed lifetime   {tc.get('lifetime', 0)}")
+    print()
+    print(f"  notes touched 7d  {nt.get('week', 0)}")
+    print(f"  notes touched 30d {nt.get('month', 0)}")
+    print()
+    print(f"  current streak    {data.get('current_streak_days', 0)} day(s) "
+          f"[rest tokens: {data.get('rest_tokens_remaining', 0)}]")
+    print(f"  longest streak    {data.get('longest_streak_days', 0)} day(s)")
+    print(f"  on-time ETA (30d) {rate_str}")
+    fav = data.get("favorite_project_30d") or "—"
+    print(f"  favorite project  {fav}")
+    by_kind = data.get("by_kind") or {}
+    if by_kind:
+        parts = ", ".join(f"{k}: {v}" for k, v in sorted(by_kind.items()))
+        print(f"  by kind           {parts}")
+    return 0
+
+
+def cmd_me_streak(client: Client, args: argparse.Namespace) -> int:
+    data = client.get("/api/me/streak")
+    if args.json:
+        _print_json(data)
+        return 0
+    cur = data.get("current_streak_days", 0)
+    longest = data.get("longest_streak_days", 0)
+    tokens = data.get("rest_tokens_remaining", 0)
+    flame = "🔥" if cur > 0 else "·"
+    print(f"{flame} {cur} day(s)  (longest: {longest}, rest tokens: {tokens})")
+    return 0
+
+
+def cmd_me_history(client: Client, args: argparse.Namespace) -> int:
+    days = max(1, min(365, getattr(args, "days", 30) or 30))
+    data = client.get("/api/me/history", days=days)
+    if args.json:
+        _print_json(data)
+        return 0
+    closes = [int(d.get("closes", 0)) for d in data]
+    edits = [int(d.get("edits", 0)) for d in data]
+    if not closes:
+        print("(no activity)")
+        return 0
+    print(f"closes  {_sparkline(closes)}  total {sum(closes)}")
+    print(f"edits   {_sparkline(edits)}  total {sum(edits)}")
+    print(f"        {data[0]['date']} … {data[-1]['date']}  ({len(data)}d)")
+    return 0
+
+
+def cmd_me_activity(client: Client, args: argparse.Namespace) -> int:
+    params: dict[str, Any] = {}
+    if getattr(args, "since", None):
+        params["since"] = args.since
+    if getattr(args, "until", None):
+        params["until"] = args.until
+    if getattr(args, "kind", None):
+        params["kind"] = args.kind
+    if getattr(args, "limit", None):
+        params["limit"] = args.limit
+    data = client.get("/api/me/activity", **params)
+    if args.json:
+        _print_json(data)
+        return 0
+    if not data:
+        print("(no events)")
+        return 0
+    for ev in data:
+        meta = ev.get("meta") or {}
+        meta_str = " " + json.dumps(meta, sort_keys=True) if meta else ""
+        print(f"{ev.get('ts', '')}  {ev.get('kind', ''):<18}  {ev.get('ref', '')}{meta_str}")
+    return 0
+
+
+def cmd_me_badges(client: Client, args: argparse.Namespace) -> int:
+    """List earned badges, plus locked badges with progress hints.
+
+    Hidden badges are only shown after they're earned; until then we
+    just print a single "+N hidden" line so users know more exist
+    without spoiling the catalog.
+    """
+    data = client.get("/api/me/badges")
+    if args.json:
+        _print_json(data)
+        return 0
+    earned = data.get("earned", [])
+    locked = data.get("locked", [])
+    hidden = int(data.get("hidden_locked_count", 0))
+    if not earned and not locked and not hidden:
+        print("(no badges yet — close some tasks!)")
+        return 0
+    if earned:
+        print(f"earned ({len(earned)}/{data.get('total_count', '?')}):")
+        for b in earned:
+            print(f"  ★ {b['title']:<18}  {b['description']}")
+    if args.all and locked:
+        print("\nlocked:")
+        for b in locked:
+            prog = f"  [{b['progress']}]" if b.get("progress") else ""
+            print(f"  · {b['title']:<18}  {b['description']}{prog}")
+    if args.all and hidden:
+        print(f"\n+ {hidden} hidden badge{'s' if hidden != 1 else ''} (earn to reveal)")
+    elif not args.all and (locked or hidden):
+        rem = len(locked) + hidden
+        print(f"\n({rem} more to unlock — `vn me badges --all` for hints)")
+    return 0
+
+
+def cmd_me_tz(client: Client, args: argparse.Namespace) -> int:
+    """Get or set the calling user's IANA timezone.
+
+    No argument → print current. With argument → PATCH and confirm.
+    Empty string clears (UTC). Validation happens server-side.
+    """
+    zone = getattr(args, "zone", None)
+    if zone is None:
+        me = client.get("/api/me")
+        print(me.get("tz") or "UTC")
+        return 0
+    body = {"tz": zone}
+    res = client.patch("/api/me/tz", body)
+    print(f"timezone set to {res.get('tz', zone)}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # `vn show <resource>` — read-only inspector for the rest of the API.
 # ---------------------------------------------------------------------------
 #
@@ -912,6 +1071,52 @@ def build_parser() -> argparse.ArgumentParser:
 
     pw = sub.add_parser("whoami", help="show authenticated user")
     pw.set_defaults(func=cmd_whoami)
+
+    # `vn me <subcommand>` — gamification surface (Phase 2: read-only).
+    pme = sub.add_parser(
+        "me",
+        help="personal stats / streak / activity (gamification)",
+        description=(
+            "Solo / self-progress mode: stats are visible only to you.\n\n"
+            "Examples:\n"
+            "  vn me stats                  # full stats card\n"
+            "  vn me streak                 # current + longest streak\n"
+            "  vn me history --days 30      # ANSI sparkline of closes/edits\n"
+            "  vn me activity --kind task.closed --limit 20\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    me_sub = pme.add_subparsers(dest="me_command", required=True)
+
+    pms = me_sub.add_parser("stats", help="full personal stats card")
+    pms.set_defaults(func=cmd_me_stats)
+
+    pmr = me_sub.add_parser("streak", help="current + longest streak")
+    pmr.set_defaults(func=cmd_me_streak)
+
+    pmh = me_sub.add_parser("history", help="per-day close/edit sparkline")
+    pmh.add_argument("--days", type=int, default=30,
+                     help="trailing window in days (1..365, default 30)")
+    pmh.set_defaults(func=cmd_me_history)
+
+    pma = me_sub.add_parser("activity", help="recent activity event log")
+    pma.add_argument("--since", help="ISO date (YYYY-MM-DD); inclusive")
+    pma.add_argument("--until", help="ISO date (YYYY-MM-DD); exclusive")
+    pma.add_argument("--kind", help="filter by event kind (e.g. task.closed)")
+    pma.add_argument("--limit", type=int, default=50,
+                     help="cap on rows returned (1..1000, default 50)")
+    pma.set_defaults(func=cmd_me_activity)
+
+    pmb = me_sub.add_parser("badges", help="earned badges + locked progress")
+    pmb.add_argument("--all", action="store_true",
+                     help="also list locked badges with progress hints")
+    pmb.set_defaults(func=cmd_me_badges)
+
+    pmt = me_sub.add_parser("tz", help="get or set your IANA timezone")
+    pmt.add_argument("zone", nargs="?",
+                     help="IANA name (e.g. America/Los_Angeles); omit to read; "
+                          "empty string clears (UTC)")
+    pmt.set_defaults(func=cmd_me_tz)
 
     # `vn show <resource> [target]` — read-only inspector for the rest of
     # the API; reuses --format / --columns where it makes sense.

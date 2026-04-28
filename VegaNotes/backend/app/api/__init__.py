@@ -24,13 +24,14 @@ from ..markdown_ops import (
     find_ref_row_lines, patch_ref_rows,
 )
 from ..models import (
-    Feature, Link, Note, Project, ProjectMember, Task, TaskAttr, TaskFeature,
-    TaskOwner, TaskProject, User,
+    ActivityEvent, Feature, Link, Note, Project, ProjectMember, Task, TaskAttr,
+    TaskFeature, TaskOwner, TaskProject, User,
 )
 from ..parser import parse
 from ..safe_io import (
     StaleWriteError, _safe_write_unlocked, etag_for, etag_for_bytes, safe_write, with_file_lock,
 )
+from .. import gamify
 
 router = APIRouter(dependencies=[Depends(require_user)])
 
@@ -296,6 +297,8 @@ def upsert_note(
         raise HTTPException(403, "manager role required to write notes")
     full = settings.notes_dir / body.path
     expected = body.if_match if body.if_match is not None else if_match
+    pre_existing = full.exists()
+    pre_body = full.read_text(encoding="utf-8") if pre_existing else ""
     try:
         new_etag = safe_write(
             full, body.body_md,
@@ -314,6 +317,12 @@ def upsert_note(
             },
         )
     note = reindex_file(full, s)
+    if not pre_existing:
+        gamify.record_event(s, user, gamify.NOTE_CREATED, ref=body.path)
+    elif pre_body.strip() != body.body_md.strip():
+        # Skip whitespace-only / no-op writes so streaks aren't gamed by
+        # repeatedly saving an unchanged file.
+        gamify.record_event(s, user, gamify.NOTE_EDITED, ref=body.path)
     return {"id": note.id, "path": note.path, "etag": new_etag}
 
 
@@ -579,6 +588,11 @@ def create_task(
         reindex_file(full, s)
         created = s.exec(select(Task).where(Task.task_uuid == new_id)).first()
 
+    gamify.record_event(
+        s, user, gamify.TASK_CREATED,
+        ref=created.task_uuid or f"task#{created.id}",
+        meta={"kind": created.kind, "status": created.status},
+    )
     return _task_to_dict(s, created, include_children=True) | {"note_path": rel}
 
 
@@ -682,6 +696,11 @@ def create_ar_under_task(
     created = s.exec(select(Task).where(Task.task_uuid == new_id)).first()
     if created is None:
         raise HTTPException(500, "AR created but not found in index — please refresh")
+    gamify.record_event(
+        s, user, gamify.TASK_CREATED,
+        ref=created.task_uuid or f"task#{created.id}",
+        meta={"kind": "ar", "parent_task_uuid": parent_uuid},
+    )
     return _task_to_dict(s, created) | {"parent_task_uuid": parent_uuid}
 
 
@@ -1444,8 +1463,11 @@ def patch_task(
 
     md = note.body_md
     changed = False
+    old_status = t.status
+    status_changed = False
     if body.status is not None:
         md = update_task_status(md, t.line, body.status)
+        status_changed = (body.status != old_status)
         changed = True
     if body.priority is not None:
         md = (replace_attr(md, t.line, "priority", body.priority.strip())
@@ -1555,6 +1577,20 @@ def patch_task(
                     reindex_file(ref_full, s)
 
     refreshed = s.get(Task, task_id)
+    if status_changed and body.status is not None:
+        ev_ref = (refreshed.task_uuid if refreshed and refreshed.task_uuid
+                  else (t.task_uuid or f"task#{task_id}"))
+        gamify.record_event(
+            s, user, gamify.TASK_STATUS_SET,
+            ref=ev_ref,
+            meta={"from": old_status, "to": body.status},
+        )
+        if (body.status or "").lower() == "done":
+            gamify.record_event(
+                s, user, gamify.TASK_CLOSED,
+                ref=ev_ref,
+                meta={"from": old_status, "to": body.status},
+            )
     return _task_to_dict(s, refreshed) if refreshed else {"ok": True}
 
 
@@ -1625,7 +1661,42 @@ def whoami(
     user: str = Depends(require_user),
 ) -> dict[str, Any]:
     u = s.exec(select(User).where(User.name == user)).first()
-    return {"name": user, "is_admin": bool(u and u.is_admin)}
+    return {
+        "name": user,
+        "is_admin": bool(u and u.is_admin),
+        "tz": (u.tz if u else "") or "UTC",
+    }
+
+
+class SetTzIn(BaseModel):
+    tz: str
+
+
+@router.patch("/me/tz")
+def set_my_tz(
+    body: SetTzIn,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, str]:
+    """Set this user's IANA timezone (e.g. 'America/Los_Angeles').
+
+    Used by gamification stats so streaks roll over at local midnight.
+    Empty string ≡ UTC. Unknown zones are rejected.
+    """
+    name = (body.tz or "").strip()
+    if name:
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(name)
+        except Exception:
+            raise HTTPException(400, f"unknown timezone: {name!r}")
+    u = s.exec(select(User).where(User.name == user)).first()
+    if u is None:
+        raise HTTPException(404, "user not found")
+    u.tz = name
+    s.add(u)
+    s.commit()
+    return {"status": "ok", "tz": name or "UTC"}
 
 
 class ChangePasswordIn(BaseModel):
@@ -1708,6 +1779,147 @@ def replace_my_views(
     s.add(u)
     s.commit()
     return {"status": "ok", "count": len(cleaned)}
+
+
+# ---------- gamification: per-user activity log ---------------------------
+
+@router.get("/me/activity")
+def list_my_activity(
+    since: Optional[str] = Query(None, description="ISO date (YYYY-MM-DD); inclusive"),
+    until: Optional[str] = Query(None, description="ISO date (YYYY-MM-DD); exclusive"),
+    kind: Optional[str] = Query(None, description="Filter by event kind"),
+    limit: int = Query(200, ge=1, le=1000),
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> list[dict[str, Any]]:
+    """Return the calling user's recent activity events.
+
+    Privacy: this endpoint is hard-scoped to the authenticated user. There
+    is intentionally no ``user`` query param; admins cannot view other
+    users' streams here.
+    """
+    u = s.exec(select(User).where(User.name == user)).first()
+    if u is None or u.id is None:
+        raise HTTPException(404, "user not found")
+    q = select(ActivityEvent).where(ActivityEvent.user_id == u.id)
+    if since:
+        try:
+            q = q.where(ActivityEvent.ts >= datetime.fromisoformat(since))
+        except ValueError:
+            raise HTTPException(400, "since must be ISO date/datetime")
+    if until:
+        try:
+            q = q.where(ActivityEvent.ts < datetime.fromisoformat(until))
+        except ValueError:
+            raise HTTPException(400, "until must be ISO date/datetime")
+    if kind:
+        q = q.where(ActivityEvent.kind == kind)
+    q = q.order_by(ActivityEvent.ts.desc()).limit(limit)
+    rows = s.exec(q).all()
+    out: list[dict[str, Any]] = []
+    for ev in rows:
+        try:
+            meta = json.loads(ev.meta_json) if ev.meta_json else {}
+        except json.JSONDecodeError:
+            meta = {}
+        out.append({
+            "id": ev.id,
+            "kind": ev.kind,
+            "ref": ev.ref,
+            "ts": ev.ts.isoformat(),
+            "meta": meta,
+        })
+    return out
+
+
+@router.post("/admin/gamify/backfill")
+def admin_gamify_backfill(
+    s: Session = Depends(get_session),
+    _: str = Depends(require_admin),
+) -> dict[str, Any]:
+    """One-shot reconstruction of historical events from existing tasks.
+
+    Idempotent — re-running deletes prior backfill rows first. See
+    ``app.gamify.backfill`` for the strategy.
+    """
+    counts = gamify.backfill(s)
+    s.commit()
+    return {"status": "ok", **counts}
+
+
+# ---------- gamification: per-user stats (read-only) ---------------------
+
+from .. import gamify_stats as _gstats  # noqa: E402  (after admin endpoint above)
+
+
+@router.get("/me/stats")
+def my_stats(
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    """Return the calling user's lifetime + windowed activity stats.
+
+    Privacy: hard-scoped to the caller; no ``user`` parameter. UTC dates
+    everywhere (per-user TZ is a future enhancement).
+    """
+    u = s.exec(select(User).where(User.name == user)).first()
+    if u is None or u.id is None:
+        raise HTTPException(404, "user not found")
+    return _gstats.compute_stats(s, u.id)
+
+
+@router.get("/me/streak")
+def my_streak(
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    """Compact streak summary — the same numbers ``/me/stats`` returns,
+    pulled out for callers (e.g. the CLI) that only want the headline.
+    """
+    u = s.exec(select(User).where(User.name == user)).first()
+    if u is None or u.id is None:
+        raise HTTPException(404, "user not found")
+    full = _gstats.compute_stats(s, u.id)
+    return {
+        "current_streak_days": full["current_streak_days"],
+        "longest_streak_days": full["longest_streak_days"],
+        "rest_tokens_remaining": full["rest_tokens_remaining"],
+        "as_of": full["as_of"],
+    }
+
+
+@router.get("/me/history")
+def my_history(
+    days: int = Query(30, ge=1, le=365),
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> list[dict[str, Any]]:
+    """Per-day close + note-edit counts for the trailing ``days`` window.
+
+    Powers the ANSI sparkline in ``vn me history``.
+    """
+    u = s.exec(select(User).where(User.name == user)).first()
+    if u is None or u.id is None:
+        raise HTTPException(404, "user not found")
+    return _gstats.compute_history(s, u.id, days=days)
+
+
+@router.get("/me/badges")
+def my_badges(
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    """Earned + locked badges for the calling user.
+
+    Hidden badges are surfaced only after they're earned; until then
+    they're rolled into ``hidden_locked_count`` so users can see *that*
+    there's more without spoiling the catalog.
+    """
+    from .. import badges as _badges
+    u = s.exec(select(User).where(User.name == user)).first()
+    if u is None or u.id is None:
+        raise HTTPException(404, "user not found")
+    return _badges.list_badges(s, u.id)
 
 
 # ---------- admin: user management ----------------------------------------

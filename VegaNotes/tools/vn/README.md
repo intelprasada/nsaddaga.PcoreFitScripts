@@ -233,6 +233,51 @@ The slug uses the same lowercase-kebab rule as the rest of VegaNotes
 
 Prints the authenticated user (and `(admin)` if applicable).
 
+### `vn me <subcommand>` — personal stats (gamification)
+
+Solo / self-progress mode: every stat is private to you. Reads only;
+nothing here changes data.
+
+```bash
+vn me stats                  # full stats card
+vn me streak                 # current + longest streak (with rest tokens)
+vn me history --days 30      # ANSI sparkline of closes/edits per day
+vn me activity               # recent event log
+vn me activity --kind task.closed --limit 20
+vn me activity --since 2026-04-01 --until 2026-04-15
+vn me badges                 # earned achievements
+vn me badges --all           # also list locked badges with progress
+vn me tz                     # show your IANA timezone (default UTC)
+vn me tz America/Los_Angeles # set timezone (streaks roll over locally)
+```
+
+`vn me stats` shows tasks closed (today / 7d / 30d / lifetime), notes
+touched (7d / 30d), current and longest streak, on-time-ETA rate over
+the last 30 days, your favorite project, and a per-kind breakdown.
+Streaks are forgiving: you have **2 rest tokens per rolling 14-day
+window**, so a single off day doesn't kill a long run.
+
+**Per-user timezone.** All day-bucketing (streaks, history, "today")
+uses the timezone you set with `vn me tz <IANA-name>`. Empty / unset
+≡ UTC. Set it once and a task closed at 23:30 your time stays on
+*your* calendar day instead of leaking into the next one.
+
+**Badges.** A small curated catalog of achievements you discover by
+using the tool — close your first task (First Light), three in a day
+(Hat Trick), maintain a 10-day streak (Marathoner), close 10 tasks on
+or before their ETA (On Time), and so on. A handful are hidden — the
+default `vn me badges` view rolls them into a "+N hidden" footer so
+you can find them naturally. Badges are personal: there's no
+leaderboard, no comparison, and admins cannot see another user's
+progress.
+
+Pass the global `--json` flag (before `me`) to get raw JSON for any
+subcommand:
+
+```bash
+vn --json me stats | jq .current_streak_days
+```
+
 ### `vn show <resource>` — read-only inspector
 
 Browse the database without curl-ing the API by hand. Every resource maps
