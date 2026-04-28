@@ -302,7 +302,16 @@ def _incremental_reindex(
 
 
 def _apply_ref_rows(session: Session, ref_rows: list[dict]) -> None:
-    """Apply agenda reference-row write-through overrides."""
+    """Apply agenda reference-row write-through overrides.
+
+    Ref-rows can override status, owners, priority, eta, and features.
+    Scalar overrides (status, priority, eta) replace the existing value.
+    List overrides (owner, feature) are additive — they upsert into both
+    the taskattr table AND the corresponding join table (taskowner,
+    taskfeature) so that the owner= / feature= filters in list_tasks work
+    correctly.  Previously only taskattr was updated, causing owner-filter
+    mismatches for tasks whose ownership came from a ref-row.
+    """
     for rr in ref_rows:
         ref_id = rr.get("ref_id")
         overrides = rr.get("attrs") or {}
@@ -335,6 +344,27 @@ def _apply_ref_rows(session: Session, ref_rows: list[dict]) -> None:
             if isinstance(val, list):
                 for v in val:
                     session.add(TaskAttr(task_id=tgt_id, key=key, value=str(v), value_norm=str(v).lower()))
+                    # Also sync join tables so filter queries work correctly.
+                    if key == "owner":
+                        u = _get_or_create(session, User, name=str(v))
+                        existing_to = session.exec(
+                            select(TaskOwner).where(
+                                TaskOwner.task_id == tgt_id,
+                                TaskOwner.user_id == u.id,
+                            )
+                        ).first()
+                        if not existing_to:
+                            session.add(TaskOwner(task_id=tgt_id, user_id=u.id))
+                    elif key == "feature":
+                        feat = _get_or_create(session, Feature, name=str(v))
+                        existing_tf = session.exec(
+                            select(TaskFeature).where(
+                                TaskFeature.task_id == tgt_id,
+                                TaskFeature.feature_id == feat.id,
+                            )
+                        ).first()
+                        if not existing_tf:
+                            session.add(TaskFeature(task_id=tgt_id, feature_id=feat.id))
             else:
                 session.exec(
                     text("DELETE FROM taskattr WHERE task_id = :tid AND key = :k")

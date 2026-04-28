@@ -384,3 +384,52 @@ def test_dedent_clears_parent_task_id(client):
     assert r.status_code == 200
     uuids = [t["task_uuid"] for t in r.json()["tasks"]]
     assert "T-NEST01" in uuids, "Dedented task must appear in top_level_only owner query"
+
+
+def test_ref_row_owner_syncs_taskowner(client):
+    """Regression: owner override in a ref-row must write to taskowner (not
+    just taskattr) so that the owner= filter in list_tasks matches the task.
+
+    Previously _apply_ref_rows only added to taskattr, causing tasks whose
+    ownership came exclusively from a ref-row to be invisible in any
+    owner= query.
+    """
+    notes_dir = DATA / "notes"
+    notes_dir.mkdir(exist_ok=True)
+
+    # Canonical task owned by alice only.
+    canonical = (
+        "# Canonical\n"
+        "!task #id T-REFOWN1 ref row owner test @alice\n"
+    )
+    canonical_path = notes_dir / "canonical_refown.md"
+    canonical_path.write_text(canonical)
+    r = client.put("/api/notes", json={"path": "canonical_refown.md", "body_md": canonical},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200
+
+    # bob is NOT an owner yet.
+    r = client.get("/api/tasks?owner=bob", headers={"Authorization": AUTH})
+    assert "T-REFOWN1" not in [t["task_uuid"] for t in r.json()["tasks"]]
+
+    # Weekly note with a ref-row that adds bob as owner override.
+    weekly = (
+        "# Weekly\n"
+        "#task T-REFOWN1 @bob\n"
+    )
+    weekly_path = notes_dir / "weekly_refown.md"
+    weekly_path.write_text(weekly)
+    r = client.put("/api/notes", json={"path": "weekly_refown.md", "body_md": weekly},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200
+
+    # bob must now appear in the owner= filter result.
+    r = client.get("/api/tasks?owner=bob", headers={"Authorization": AUTH})
+    assert r.status_code == 200
+    uuids = [t["task_uuid"] for t in r.json()["tasks"]]
+    assert "T-REFOWN1" in uuids, "Ref-row owner override must be visible via owner= filter"
+
+    # The task's owners list must contain bob.
+    r = client.get("/api/tasks/T-REFOWN1", headers={"Authorization": AUTH})
+    assert r.status_code == 200
+    assert "bob" in r.json()["owners"], "bob must appear in task owners after ref-row override"
