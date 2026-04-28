@@ -15,7 +15,13 @@ from sqlmodel import Session, select
 from ..auth import hash_password, verify_password, require_admin, require_user
 from ..config import settings
 from ..db import get_session
-from ..indexer import reindex_all, reindex_file, remove_path
+from ..indexer import (
+    apply_single_task_patch_to_index,
+    delete_single_task_from_index,
+    insert_single_task_into_index,
+    reindex_all, reindex_file, remove_path,
+    update_note_body_only,
+)
 from ..markdown_ops import (
     inject_missing_ids, replace_attr, replace_multi_attr, replace_notes,
     append_note, generate_task_id, existing_ids, delete_task_block,
@@ -574,7 +580,24 @@ def create_task(
             sep = "" if cur_md.endswith("\n") else "\n"
             new_md = f"{cur_md}{sep}\n{line}"
         _safe_write_unlocked(full, new_md, notes_dir=settings.notes_dir)
-    note = reindex_file(full, s)
+        disk_after = full.read_text(encoding="utf-8")
+        new_mtime = full.stat().st_mtime
+    note_row = s.exec(select(Note).where(Note.path == rel)).first()
+    if note_row is None:
+        # First-ever write to this file: fall back to reindex_file so the
+        # Note row is created.
+        note_row = reindex_file(full, s)
+    else:
+        lines_inserted = len(disk_after.splitlines()) - len(cur_md.splitlines())
+        insert_single_task_into_index(
+            s,
+            note_id=note_row.id,
+            new_body_md=disk_after,
+            new_mtime=new_mtime,
+            new_task_uuid=new_id,
+            lines_inserted=max(lines_inserted, 1),
+            folder_project=project,
+        )
 
     # If a non-todo status was requested, apply it as a follow-up edit so the
     # bullet carries the right `#status` token.  Doing this after the initial
@@ -589,7 +612,16 @@ def create_task(
             patched = update_task_status(disk_md, created.line, status)
             if patched != disk_md:
                 _safe_write_unlocked(full, patched, notes_dir=settings.notes_dir)
-        reindex_file(full, s)
+                patched_disk = full.read_text(encoding="utf-8")
+                patched_mtime = full.stat().st_mtime
+                apply_single_task_patch_to_index(
+                    s,
+                    note_id=note_row.id,
+                    task_id=created.id,
+                    new_body_md=patched_disk,
+                    new_mtime=patched_mtime,
+                    status=status,
+                )
         created = s.exec(select(Task).where(Task.task_uuid == new_id)).first()
 
     awarded = gamify.record_event(
@@ -698,7 +730,23 @@ def create_ar_under_task(
         if new_md == disk_md:
             raise HTTPException(500, "AR insert produced no change")
         _safe_write_unlocked(full, new_md, notes_dir=settings.notes_dir)
-    reindex_file(full, s)
+        # Read post-write content + mtime to keep the index aligned with
+        # what's actually on disk (safe-write may normalize whitespace).
+        disk_after = full.read_text(encoding="utf-8")
+        new_mtime = full.stat().st_mtime
+    rel = note.path
+    parts = Path(rel).parts
+    folder_project: str | None = parts[0] if len(parts) >= 2 else None
+    lines_inserted = len(disk_after.splitlines()) - len(disk_md.splitlines())
+    insert_single_task_into_index(
+        s,
+        note_id=note.id,
+        new_body_md=disk_after,
+        new_mtime=new_mtime,
+        new_task_uuid=new_id,
+        lines_inserted=max(lines_inserted, 1),
+        folder_project=folder_project,
+    )
 
     created = s.exec(select(Task).where(Task.task_uuid == new_id)).first()
     if created is None:
@@ -1541,7 +1589,35 @@ def patch_task(
                     },
                 )
         _safe_write_unlocked(full, md, notes_dir=settings.notes_dir)
-    reindex_file(full, s)
+
+    # ── Fast index update (issue #140): only this single task changed ────
+    # The popover never mutates more than one task at a time, so a full
+    # reindex_file (which re-parses every line and re-fingerprints every
+    # task) is wasteful. Apply the same mutations directly to the index
+    # rows for `task_id`, plus a single line-shift UPDATE for any tasks
+    # below the insertion point if append_note added rows.
+    new_disk = (settings.notes_dir / note.path).read_text(encoding="utf-8")
+    new_mtime = (settings.notes_dir / note.path).stat().st_mtime
+    line_shift = 0
+    line_shift_pivot = -1
+    if body.add_note is not None and body.add_note.strip():
+        line_shift = sum(1 for ln in body.add_note.split("\n") if ln.strip())
+        line_shift_pivot = t.line
+    apply_single_task_patch_to_index(
+        s,
+        note_id=note.id,
+        task_id=task_id,
+        new_body_md=new_disk,
+        new_mtime=new_mtime,
+        line_shift=line_shift,
+        line_shift_pivot=line_shift_pivot,
+        status=body.status,
+        priority=body.priority,
+        eta=body.eta,
+        owners=body.owners,
+        features=body.features,
+        add_note=body.add_note,
+    )
 
     # ── Propagate to all ref-row files ────────────────────────────────────
     # Any .md file that references this task via `#task T-XXXX` / `#AR T-XXXX`
@@ -1590,8 +1666,21 @@ def patch_task(
                         new_ref_md, ref_changed = patch_ref_rows(ref_disk_md, ref_id, ref_patch)
                         if ref_changed:
                             _safe_write_unlocked(ref_full, new_ref_md, notes_dir=settings.notes_dir)
+                            ref_disk_after = ref_full.read_text(encoding="utf-8")
+                            ref_mtime_after = ref_full.stat().st_mtime
                 if ref_changed:
-                    reindex_file(ref_full, s)
+                    # Body-only refresh: the canonical task's index rows
+                    # (including the ref-row override TaskAttr / TaskOwner
+                    # entries) were already updated by the canonical fast
+                    # path above. The ref file itself owns no Task rows
+                    # for this ref_id, so a full reindex_file would just
+                    # re-derive identical state at O(file × tasks) cost.
+                    update_note_body_only(
+                        s,
+                        note_id=ref_note.id,
+                        new_body_md=ref_disk_after,
+                        new_mtime=ref_mtime_after,
+                    )
 
     refreshed = s.get(Task, task_id)
     awarded: list[str] = []
@@ -1670,7 +1759,18 @@ def delete_task(
         if new_md == disk_md:
             raise HTTPException(409, "task line not found in current file content")
         _safe_write_unlocked(full, new_md, notes_dir=settings.notes_dir)
-    reindex_file(full, s)
+        disk_after = full.read_text(encoding="utf-8")
+        new_mtime = full.stat().st_mtime
+    lines_removed = len(disk_md.splitlines()) - len(disk_after.splitlines())
+    delete_single_task_from_index(
+        s,
+        note_id=note.id,
+        task_id=t.id,
+        new_body_md=disk_after,
+        new_mtime=new_mtime,
+        line_shift_pivot=line_to_remove,
+        line_shift=-max(lines_removed, 1),
+    )
     return {"status": "deleted", "task_uuid": task_uuid, "title": task_title}
 
 
