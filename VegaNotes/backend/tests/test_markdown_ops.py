@@ -151,7 +151,55 @@ def test_parser_ref_rows():
     assert rr["attrs"].get("status") == "in-progress"
 
 
-# --- replace_notes indent style (#54) ---------------------------------------
+def test_update_task_status_strips_continuation_status():
+    """#146: status change must remove a stale #status from a continuation
+    line, otherwise the parser's last-wins behaviour silently undoes the
+    user's edit and the markdown carries two contradictory tags."""
+    md = "- !task Foo\n  #status wip\n"
+    out = update_task_status(md, 0, "done")
+    assert out.count("#status") == 1
+    assert "#status done" in out
+    assert "#status wip" not in out
+
+
+def test_update_task_status_drops_continuation_line_when_only_status():
+    md = "- !task Foo\n\t#status wip\n\t#note keep me\n"
+    out = update_task_status(md, 0, "done")
+    lines = out.splitlines()
+    assert lines == ["- !task Foo #status done", "\t#note keep me"]
+
+
+def test_update_task_status_preserves_other_tokens_on_continuation():
+    md = "- !task Foo\n\t#status wip #priority P1\n"
+    out = update_task_status(md, 0, "done")
+    lines = out.splitlines()
+    assert lines == ["- !task Foo #status done", "\t#priority P1"]
+
+
+def test_update_task_status_does_not_cross_sibling_boundary():
+    md = "- !task A\n\t#status wip\n- !task B\n\t#status wip\n"
+    out = update_task_status(md, 0, "done")
+    # Only A's continuation should be touched; B's remains.
+    assert out == "- !task A #status done\n- !task B\n\t#status wip\n"
+
+
+def test_replace_attr_strips_continuation_priority():
+    md = "- !task Foo\n\t#priority P0\n"
+    out = replace_attr(md, 0, "priority", "P1")
+    assert out.count("#priority") == 1
+    assert "#priority P1" in out
+
+
+def test_remove_attr_strips_continuation_priority():
+    from app.markdown_ops import remove_attr
+    md = "- !task Foo #priority P1\n\t#priority P0\n"
+    out = remove_attr(md, 0, "priority")
+    assert "#priority" not in out
+
+
+# ---------------------------------------------------------------------------
+# replace_notes indent style (#54)
+# ---------------------------------------------------------------------------
 
 from app.markdown_ops import replace_notes
 

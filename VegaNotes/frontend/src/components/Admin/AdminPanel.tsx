@@ -36,6 +36,13 @@ export function AdminPanel() {
       qc.invalidateQueries({ queryKey: ["tasks"] });
       qc.invalidateQueries({ queryKey: ["my-tasks"] });
       qc.invalidateQueries({ queryKey: ["tree"] });
+      // The reindex itself is read-only on disk, but if the user just
+      // edited an .md file outside the app the editor's cached body /
+      // etag are now stale. Invalidating these makes the editor's
+      // useQuery refetch and live-sync the new disk content into the
+      // draft (when there are no unsaved local edits) — fixes #145.
+      qc.invalidateQueries({ queryKey: ["notes"] });
+      qc.invalidateQueries({ queryKey: ["note"] });
     },
     onError: reportError,
   });
