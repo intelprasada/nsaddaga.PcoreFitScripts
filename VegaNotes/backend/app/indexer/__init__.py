@@ -148,6 +148,319 @@ def reindex_file(path: Path, session: Session) -> Note:
     return note
 
 
+def apply_single_task_patch_to_index(
+    session: Session,
+    *,
+    note_id: int,
+    task_id: int,
+    new_body_md: str,
+    new_mtime: float,
+    line_shift: int = 0,
+    line_shift_pivot: int = -1,
+    status: str | None = None,
+    priority: str | None = None,
+    eta: str | None = None,
+    owners: list[str] | None = None,
+    features: list[str] | None = None,
+    add_note: str | None = None,
+) -> None:
+    """Cheap variant of :func:`reindex_file` for a single-task popover patch.
+
+    Skips the parser, per-task fingerprint diff, and ``_apply_ref_rows``.
+    Only the affected ``Note`` (body / mtime / FTS5), the affected ``task``
+    row, and that task's child rows (``TaskAttr`` / ``TaskOwner`` /
+    ``TaskFeature``) are touched. Other tasks in the file see only a
+    cheap ``UPDATE task SET line = line + :n WHERE line > :pivot``.
+
+    Argument semantics:
+
+    * ``new_body_md`` / ``new_mtime``: post-mutation file contents and
+      mtime — the caller has already written them to disk under the lock.
+    * ``line_shift`` / ``line_shift_pivot``: shift ``task.line`` by
+      ``line_shift`` for every task with ``line > line_shift_pivot``.
+      Use ``line_shift=0`` (default) when the mutation didn't change line
+      counts (e.g. an in-place attribute replacement).
+    * ``status`` / ``priority`` / ``eta`` / ``owners`` / ``features`` /
+      ``add_note``: pass only the fields the patch actually changed; pass
+      ``None`` to leave that field alone in the index. ``[]`` for owners /
+      features means "clear all".
+
+    Caller MUST hold the per-file lock and run this in the same DB
+    transaction as the on-disk write so a crash cannot leave indexes
+    desynced.
+    """
+    from ..parser.tokens import REGISTRY  # lazy: avoid potential cycle
+
+    note = session.get(Note, note_id)
+    if note is None:
+        raise ValueError(f"note_id {note_id} not found")
+    note.body_md = new_body_md
+    note.mtime = new_mtime
+    note.updated_at = datetime.utcnow()
+
+    session.exec(text("DELETE FROM notes_fts WHERE rowid = :id").bindparams(id=note.id))
+    session.exec(
+        text("INSERT INTO notes_fts(rowid, title, body_md) VALUES (:id, :t, :b)")
+        .bindparams(id=note.id, t=note.title, b=new_body_md)
+    )
+
+    if line_shift:
+        session.exec(
+            text(
+                "UPDATE task SET line = line + :n "
+                "WHERE note_id = :nid AND line > :pivot"
+            ).bindparams(n=line_shift, pivot=line_shift_pivot, nid=note_id)
+        )
+
+    task = session.get(Task, task_id)
+    if task is None:
+        raise ValueError(f"task_id {task_id} not found")
+
+    def _set_attr(key: str, raw_value: str | None) -> None:
+        """Replace every ``TaskAttr`` row for ``key`` on this task.
+
+        ``raw_value`` is the post-strip user input. Empty / None clears the
+        attr (no row inserted). The normalized form mirrors what the parser
+        would compute via REGISTRY[key].normalize.
+        """
+        session.exec(
+            text("DELETE FROM taskattr WHERE task_id = :tid AND key = :k")
+            .bindparams(tid=task_id, k=key)
+        )
+        v = (raw_value or "").strip()
+        if not v:
+            return
+        spec = REGISTRY.get(key)
+        norm: object | None = None
+        if spec and spec.normalize is not None:
+            try:
+                norm = spec.normalize(v)
+            except Exception:
+                norm = None
+        norm_str = None if norm is None else str(norm)
+        session.add(TaskAttr(task_id=task_id, key=key, value=v, value_norm=norm_str))
+
+    if status is not None:
+        task.status = status
+        _set_attr("status", status)
+
+    if priority is not None:
+        _set_attr("priority", priority)
+
+    if eta is not None:
+        _set_attr("eta", eta)
+
+    if owners is not None:
+        cleaned = [o.strip().lstrip("@") for o in owners if o and o.strip()]
+        # Wipe both the join-table rows and the legacy mirror TaskAttr rows.
+        session.exec(
+            text("DELETE FROM taskowner WHERE task_id = :tid").bindparams(tid=task_id)
+        )
+        session.exec(
+            text("DELETE FROM taskattr WHERE task_id = :tid AND key = 'owner'")
+            .bindparams(tid=task_id)
+        )
+        for name in cleaned:
+            user = _get_or_create(session, User, name=name)
+            session.add(TaskOwner(task_id=task_id, user_id=user.id))
+            session.add(TaskAttr(
+                task_id=task_id, key="owner", value=name, value_norm=name.lower(),
+            ))
+
+    if features is not None:
+        cleaned = [f.strip() for f in features if f and f.strip()]
+        session.exec(
+            text("DELETE FROM taskfeature WHERE task_id = :tid").bindparams(tid=task_id)
+        )
+        session.exec(
+            text("DELETE FROM taskattr WHERE task_id = :tid AND key = 'feature'")
+            .bindparams(tid=task_id)
+        )
+        for name in cleaned:
+            feat = _get_or_create(session, Feature, name=name)
+            session.add(TaskFeature(task_id=task_id, feature_id=feat.id))
+            session.add(TaskAttr(
+                task_id=task_id, key="feature", value=name, value_norm=name.lower(),
+            ))
+
+    if add_note is not None and add_note.strip():
+        for raw_line in add_note.split("\n"):
+            txt = raw_line.strip()
+            if not txt:
+                continue
+            session.add(TaskAttr(
+                task_id=task_id, key="note", value=txt, value_norm=None,
+            ))
+
+
+def update_note_body_only(
+    session: Session,
+    *,
+    note_id: int,
+    new_body_md: str,
+    new_mtime: float,
+) -> None:
+    """Refresh ``Note.body_md`` / ``mtime`` and rebuild that note's FTS5 row.
+
+    Used by the ref-row propagation loop after a popover patch: the
+    canonical task's index rows are already updated by the canonical
+    write, and ref files only need their body / search index synced. The
+    parser, ref-row override re-application, and per-task fingerprinting
+    are skipped — a full reindex would be wasted work for a write that
+    just rewrote one ref-row line in-place.
+    """
+    note = session.get(Note, note_id)
+    if note is None:
+        raise ValueError(f"note_id {note_id} not found")
+    note.body_md = new_body_md
+    note.mtime = new_mtime
+    note.updated_at = datetime.utcnow()
+    session.exec(text("DELETE FROM notes_fts WHERE rowid = :id").bindparams(id=note.id))
+    session.exec(
+        text("INSERT INTO notes_fts(rowid, title, body_md) VALUES (:id, :t, :b)")
+        .bindparams(id=note.id, t=note.title, b=new_body_md)
+    )
+
+
+def insert_single_task_into_index(
+    session: Session,
+    *,
+    note_id: int,
+    new_body_md: str,
+    new_mtime: float,
+    new_task_uuid: str,
+    lines_inserted: int = 1,
+    folder_project: str | None = None,
+) -> int:
+    """Index a single newly-inserted task (create-task / AR-add fast path).
+
+    The caller has already written ``new_body_md`` to disk under the
+    file lock and knows the new task's stamped ``#id`` (``new_task_uuid``).
+    We parse the new body to recover the new task's slug / title /
+    line / indent / attrs (parsing is cheap; the expensive parts of
+    :func:`reindex_file` are the bulk attr loads + per-task fingerprint
+    diff, which we skip).
+
+    Existing tasks in the same file at or below the new task's parsed
+    line are shifted downward by ``lines_inserted`` so their ``line``
+    columns stay aligned with the post-insert file. Pass the actual
+    number of newly added lines (defaults to ``1`` for a single bullet).
+    """
+    update_note_body_only(
+        session,
+        note_id=note_id,
+        new_body_md=new_body_md,
+        new_mtime=new_mtime,
+    )
+
+    parsed = parse(new_body_md)
+    new_pt = next(
+        (p for p in parsed["tasks"] if p["attrs"].get("id") == new_task_uuid),
+        None,
+    )
+    if new_pt is None:
+        raise ValueError(
+            f"new task uuid {new_task_uuid!r} not found in parsed body"
+        )
+
+    new_line = int(new_pt["line"])
+    if lines_inserted:
+        # Shift everything at or below the insertion point. The new task
+        # isn't in the DB yet, so it can't be incorrectly bumped.
+        session.exec(
+            text(
+                "UPDATE task SET line = line + :n "
+                "WHERE note_id = :nid AND line >= :pivot"
+            ).bindparams(n=lines_inserted, pivot=new_line, nid=note_id)
+        )
+
+    parent_task_id: int | None = None
+    if new_pt.get("parent_slug"):
+        parent = session.exec(
+            select(Task).where(
+                Task.note_id == note_id,
+                Task.slug == new_pt["parent_slug"],
+            )
+        ).first()
+        if parent:
+            parent_task_id = parent.id
+
+    t = Task(
+        note_id=note_id,
+        slug=new_pt["slug"],
+        title=new_pt["title"],
+        status=new_pt["status"],
+        line=new_line,
+        indent=new_pt["indent"],
+        kind=new_pt.get("kind", "task"),
+        task_uuid=new_task_uuid,
+        parent_task_id=parent_task_id,
+    )
+    session.add(t)
+    session.flush()
+    _upsert_task_attrs(session, t.id, new_pt, folder_project)
+    return t.id
+
+
+def delete_single_task_from_index(
+    session: Session,
+    *,
+    note_id: int,
+    task_id: int,
+    new_body_md: str,
+    new_mtime: float,
+    line_shift_pivot: int,
+    line_shift: int,
+) -> None:
+    """Remove one task (and its descendant subtree) from the index.
+
+    The caller has already excised the task block from the .md file and
+    written it to disk under the file lock. ``line_shift`` should be
+    negative — the number of removed lines — and ``line_shift_pivot`` is
+    the line number of the deleted task (so tasks strictly below shift
+    upward).
+
+    Children are recursively cascaded via ``parent_task_id``. This does
+    NOT call ``_apply_ref_rows`` — ref rows pointing at a deleted task
+    will simply fail to resolve until the next full reindex of those
+    files; that's acceptable for the rare delete case.
+    """
+    update_note_body_only(
+        session,
+        note_id=note_id,
+        new_body_md=new_body_md,
+        new_mtime=new_mtime,
+    )
+
+    # Collect the task and all transitive descendants in this note.
+    to_delete: list[int] = []
+    frontier: list[int] = [task_id]
+    while frontier:
+        cur = frontier.pop()
+        to_delete.append(cur)
+        kids = session.exec(
+            select(Task.id).where(
+                Task.note_id == note_id,
+                Task.parent_task_id == cur,
+            )
+        ).all()
+        frontier.extend(int(k) for k in kids)
+
+    placeholders = ",".join(str(int(i)) for i in to_delete)
+    for table in ("taskattr", "taskowner", "taskproject", "taskfeature"):
+        session.exec(text(f"DELETE FROM {table} WHERE task_id IN ({placeholders})"))
+    session.exec(text(f"DELETE FROM link WHERE src_task_id IN ({placeholders})"))
+    session.exec(text(f"DELETE FROM task WHERE id IN ({placeholders})"))
+
+    if line_shift:
+        session.exec(
+            text(
+                "UPDATE task SET line = line + :n "
+                "WHERE note_id = :nid AND line > :pivot"
+            ).bindparams(n=line_shift, pivot=line_shift_pivot, nid=note_id)
+        )
+
+
 def _insert_all_tasks(
     session: Session, note_id: int, tasks: list[dict], folder_project: str | None
 ) -> None:
