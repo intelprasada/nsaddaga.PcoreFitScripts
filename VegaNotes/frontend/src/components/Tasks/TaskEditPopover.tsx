@@ -40,6 +40,7 @@ export function TaskEditPopover({ task, onClose }: Props) {
   const [owners, setOwners] = useState(initialOwners);
   const [features, setFeatures] = useState(initialFeatures);
   const [newNote, setNewNote] = useState("");
+  const [newArTitle, setNewArTitle] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -117,6 +118,30 @@ export function TaskEditPopover({ task, onClose }: Props) {
         setErr(String(e?.message ?? e));
       }
       setConfirmDelete(false);
+    },
+  });
+
+  const addAr = useMutation({
+    mutationFn: (title: string) =>
+      api.addAr(task.task_uuid ?? task.id, { title }),
+    onSuccess: () => {
+      setNewArTitle("");
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      qc.invalidateQueries({ queryKey: ["my-tasks"] });
+      qc.invalidateQueries({ queryKey: ["agenda"] });
+      qc.invalidateQueries({ queryKey: ["note"] });
+      qc.invalidateQueries({ queryKey: ["features"] });
+    },
+    onError: (e: any) => {
+      if (e instanceof ApiError) {
+        if (e.status === 403) {
+          setErr("Permission denied: only the parent task's owner, a project manager, or an admin can add an AR.");
+        } else {
+          setErr(`${e.status}: ${e.detail}`);
+        }
+      } else {
+        setErr(String(e?.message ?? e));
+      }
     },
   });
 
@@ -199,6 +224,38 @@ export function TaskEditPopover({ task, onClose }: Props) {
               </ul>
             )}
           </Field>
+
+          {task.kind === "task" && (
+            <Field label="Add an AR (action request)" hint="Inserted as an `!AR` child line under this task in the .md file. Inherits the same project context. Press Enter to add — the popover stays open so you can add several.">
+              <div className="flex gap-2">
+                <input
+                  className="border rounded px-2 py-1 text-sm flex-1"
+                  value={newArTitle}
+                  onChange={(e) => setNewArTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && newArTitle.trim() && !addAr.isPending) {
+                      e.preventDefault();
+                      setErr(null);
+                      addAr.mutate(newArTitle.trim());
+                    }
+                  }}
+                  placeholder="e.g. follow up with @bob on perf numbers"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!newArTitle.trim() || addAr.isPending) return;
+                    setErr(null);
+                    addAr.mutate(newArTitle.trim());
+                  }}
+                  disabled={!newArTitle.trim() || addAr.isPending}
+                  className="rounded bg-amber-600 text-white px-3 py-1 text-xs disabled:opacity-50"
+                >
+                  {addAr.isPending ? "adding…" : "+ AR"}
+                </button>
+              </div>
+            </Field>
+          )}
 
           <Field label="Add a note" hint="Appended as a new `#note` continuation line under the task. Auto-prefixed with timestamp + your @handle. Newlines = multiple entries. Existing notes are NOT overwritten.">
             <textarea

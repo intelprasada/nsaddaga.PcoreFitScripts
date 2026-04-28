@@ -258,6 +258,53 @@ def delete_task_block(md: str, task_line_no: int) -> str:
     return "".join(lines[:task_line_no] + lines[end:])
 
 
+def insert_ar_under_task(
+    md: str, task_line_no: int, ar_line_body: str,
+) -> str:
+    """Insert a new AR child line directly under a parent task in the
+    markdown source.
+
+    Placement: the AR is inserted *inside* the parent task's block — after
+    the parent line and any existing deeper-indented children (sub-tasks,
+    ARs, `#note` continuations), but before the next blank line or sibling
+    at ≤ parent indent.  Keeping it inside the same block ensures the new
+    AR inherits the same parser section context (project / @owner frames)
+    as the parent.
+
+    Indent: the parent's leading-whitespace string + one tab.  If a child
+    already exists, its indent string is reused verbatim so mixed-indent
+    files (tabs vs spaces) stay consistent.
+
+    `ar_line_body` is the bare line content WITHOUT leading indent and
+    WITHOUT a trailing newline, e.g. `"!AR #id T-XXX my title @alice"`.
+    """
+    lines = md.splitlines(keepends=True)
+    if task_line_no < 0 or task_line_no >= len(lines):
+        raise ValueError(f"line {task_line_no} out of range")
+    parent_raw = lines[task_line_no]
+    parent_indent = _line_indent(parent_raw)
+    # parent's literal leading-whitespace
+    parent_ws = parent_raw[: len(parent_raw) - len(parent_raw.lstrip())]
+
+    # Walk the block to find (a) end-of-block position and (b) any existing
+    # child indent string we can reuse.
+    end = task_line_no + 1
+    child_ws: Optional[str] = None
+    while end < len(lines):
+        raw = lines[end]
+        if not raw.strip():
+            break
+        if _line_indent(raw) <= parent_indent:
+            break
+        if child_ws is None:
+            child_ws = raw[: len(raw) - len(raw.lstrip())]
+        end += 1
+
+    indent = child_ws if child_ws is not None else (parent_ws + "\t")
+    new_line = f"{indent}{ar_line_body}\n"
+    return "".join(lines[:end] + [new_line] + lines[end:])
+
+
 def rewrite_tasks_as_refs(md: str) -> str:
     """Convert every surviving ``!task``/``!AR`` declaration line (that has an
     ``#id`` token) into a reference row, preserving any sibling attrs.

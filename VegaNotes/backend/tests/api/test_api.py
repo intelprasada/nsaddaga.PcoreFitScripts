@@ -566,3 +566,54 @@ def test_delete_task_removes_line_and_children(client):
     # The deleted task should no longer be queryable.
     r = client.get("/api/tasks/T-DELME01", headers={"Authorization": AUTH})
     assert r.status_code == 404
+
+
+def test_create_ar_under_task_inserts_inside_block(client):
+    """POST /api/tasks/{ref}/ars — appends an AR child line inside the parent's
+    block (after any existing children, before the next blank-line / sibling).
+    The AR must be reachable as a child in the parent's `include_children`
+    payload."""
+    notes_dir = DATA / "notes" / "araddproj"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    seed = (
+        "# Weekly\n"
+        "@admin\n"
+        "\t!task #id T-PARENT01 Parent task\n"
+        "\t\t!AR #id T-EXIST001 existing ar\n"
+        "\n"
+        "\t!task #id T-SIB00001 Sibling task\n"
+    )
+    rel = "araddproj/wk.md"
+    r = client.put("/api/notes", json={"path": rel, "body_md": seed},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    r = client.post(
+        "/api/tasks/T-PARENT01/ars",
+        json={"title": "newly added AR"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 201, r.text
+    new_ar = r.json()
+    assert new_ar["kind"] == "ar"
+    assert new_ar["title"] == "newly added AR"
+    assert new_ar["parent_task_uuid"] == "T-PARENT01"
+
+    md = (DATA / "notes" / "araddproj" / "wk.md").read_text(encoding="utf-8")
+    # New AR sits between the existing AR and the blank line — same indent as
+    # the existing one.  Sibling task downstream is untouched.
+    lines = md.splitlines()
+    parent_idx = next(i for i, l in enumerate(lines) if "T-PARENT01" in l)
+    existing_idx = next(i for i, l in enumerate(lines) if "T-EXIST001" in l)
+    new_idx = next(i for i, l in enumerate(lines) if "newly added AR" in l)
+    sibling_idx = next(i for i, l in enumerate(lines) if "T-SIB00001" in l)
+    assert parent_idx < existing_idx < new_idx < sibling_idx
+
+    # The new AR must show up in the parent's children when fetched with
+    # include_children — that's how the Kanban + My Tasks dropdown picks it up.
+    r = client.get("/api/tasks/T-PARENT01?include_children=true",
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+    parent_payload = r.json()
+    child_titles = [c["title"] for c in parent_payload.get("children", [])]
+    assert "newly added AR" in child_titles

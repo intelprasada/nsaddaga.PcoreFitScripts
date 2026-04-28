@@ -172,6 +172,12 @@ export const api = {
       { method: "DELETE" },
     ),
 
+  addAr: (ref: number | string, body: { title: string; owners?: string[]; priority?: string; eta?: string; features?: string[] }) =>
+    req<Task & { parent_task_uuid: string | null }>(
+      `/tasks/${ref}/ars`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
   agenda: (owner?: string, days?: number, start?: string, end?: string) => {
     const qs = new URLSearchParams();
     if (days != null) qs.set("days", String(days));
