@@ -874,3 +874,110 @@ def test_list_mixed_columns_returns_2(fake_client, capsys):
     rc = cli.main(["list", "--columns", "id,+kind"])
     assert rc == 2
     assert "cannot mix" in capsys.readouterr().err
+
+
+# ---------- vn me <subcommand> ---------------------------------------------
+
+_FAKE_STATS = {
+    "as_of": "2026-04-27",
+    "tasks_closed": {"today": 3, "week": 11, "month": 28, "lifetime": 142},
+    "notes_touched": {"week": 6, "month": 19},
+    "current_streak_days": 7,
+    "longest_streak_days": 23,
+    "rest_tokens_remaining": 1,
+    "on_time_eta_rate_30d": 0.81,
+    "on_time_sample_30d": 26,
+    "favorite_project_30d": "ww18",
+    "by_kind": {"task": 26, "ar": 2},
+}
+
+
+def test_me_stats_renders_card(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/stats")] = _FAKE_STATS
+    rc = cli.main(["me", "stats"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "as of 2026-04-27" in out
+    assert "closed today      3" in out
+    assert "current streak    7 day(s)" in out
+    assert "favorite project  ww18" in out
+    assert "on-time ETA (30d) 81%" in out
+
+
+def test_me_stats_json_passthrough(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/stats")] = _FAKE_STATS
+    rc = cli.main(["--json", "me", "stats"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["current_streak_days"] == 7
+
+
+def test_me_streak_compact(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/streak")] = {
+        "current_streak_days": 5, "longest_streak_days": 11,
+        "rest_tokens_remaining": 2, "as_of": "2026-04-27",
+    }
+    rc = cli.main(["me", "streak"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "5 day(s)" in out
+    assert "longest: 11" in out
+    assert "rest tokens: 2" in out
+
+
+def test_me_streak_zero_no_flame(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/streak")] = {
+        "current_streak_days": 0, "longest_streak_days": 4,
+        "rest_tokens_remaining": 2, "as_of": "2026-04-27",
+    }
+    cli.main(["me", "streak"])
+    out = capsys.readouterr().out
+    # No flame when current == 0
+    assert "🔥" not in out
+
+
+def test_me_history_sparkline(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/history")] = [
+        {"date": "2026-04-21", "closes": 0, "edits": 1},
+        {"date": "2026-04-22", "closes": 2, "edits": 3},
+        {"date": "2026-04-23", "closes": 1, "edits": 0},
+    ]
+    rc = cli.main(["me", "history", "--days", "3"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "closes" in out and "edits" in out
+    assert "total 3" in out  # 0+2+1
+    assert "total 4" in out  # 1+3+0
+    # The history endpoint was called with the requested days param.
+    call = [c for c in fake_client.calls if c[1] == "/api/me/history"][0]
+    assert call[2] == {"days": 3}
+
+
+def test_me_history_empty(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/history")] = []
+    cli.main(["me", "history"])
+    assert "no activity" in capsys.readouterr().out
+
+
+def test_me_activity_filters(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/activity")] = [
+        {"id": 1, "kind": "task.closed", "ref": "T-X", "ts": "2026-04-27T10:00:00",
+         "meta": {"from": "todo", "to": "done"}},
+    ]
+    rc = cli.main(["me", "activity", "--kind", "task.closed", "--limit", "5"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "task.closed" in out and "T-X" in out
+    call = [c for c in fake_client.calls if c[1] == "/api/me/activity"][0]
+    assert call[2] == {"kind": "task.closed", "limit": 5}
+
+
+def test_me_activity_empty(fake_client, capsys):
+    fake_client.responses[("GET", "/api/me/activity")] = []
+    cli.main(["me", "activity"])
+    assert "no events" in capsys.readouterr().out
+
+
+def test_me_subcommand_required(fake_client, capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["me"])

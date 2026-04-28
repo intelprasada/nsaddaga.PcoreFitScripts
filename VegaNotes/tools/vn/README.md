@@ -233,6 +233,33 @@ The slug uses the same lowercase-kebab rule as the rest of VegaNotes
 
 Prints the authenticated user (and `(admin)` if applicable).
 
+### `vn me <subcommand>` — personal stats (gamification)
+
+Solo / self-progress mode: every stat is private to you. Reads only;
+nothing here changes data.
+
+```bash
+vn me stats                  # full stats card
+vn me streak                 # current + longest streak (with rest tokens)
+vn me history --days 30      # ANSI sparkline of closes/edits per day
+vn me activity               # recent event log
+vn me activity --kind task.closed --limit 20
+vn me activity --since 2026-04-01 --until 2026-04-15
+```
+
+`vn me stats` shows tasks closed (today / 7d / 30d / lifetime), notes
+touched (7d / 30d), current and longest streak, on-time-ETA rate over
+the last 30 days, your favorite project, and a per-kind breakdown.
+Streaks are forgiving: you have **2 rest tokens per rolling 14-day
+window**, so a single off day doesn't kill a long run. Dates are UTC.
+
+Pass the global `--json` flag (before `me`) to get raw JSON for any
+subcommand:
+
+```bash
+vn --json me stats | jq .current_streak_days
+```
+
 ### `vn show <resource>` — read-only inspector
 
 Browse the database without curl-ing the API by hand. Every resource maps
