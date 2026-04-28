@@ -735,3 +735,128 @@ def test_patch_add_note_propagates_to_ref_row_files(client):
     weekly2 = (DATA / "notes" / "noteprop" / "ww17.md").read_text(encoding="utf-8")
     for body in (canon2, weekly2):
         assert "first follow-up note" in body and "second follow-up note" in body
+
+
+# ---------------------------------------------------------------------------
+# Note history persistence (regression coverage)
+# ---------------------------------------------------------------------------
+# These guard the contract that powers the "Notes — history" panel in
+# TaskEditPopover: every PATCH `add_note` is *appended*; existing notes are
+# never lost; and the GET `/api/tasks/{id}` response surfaces the full list
+# in `note_history` (and joined as `notes`) so the popover can render it.
+
+def test_note_history_appears_in_task_get(client):
+    """Two sequential add_note PATCHes -> note_history has both entries
+    in oldest-first order, and `notes` joins them with newlines.
+    Regression: if note_history is missing/empty, the popover panel will
+    say "No prior notes." even when the .md file has prior #note lines.
+    """
+    body = (
+        "# History\n"
+        "- !task #id T-HIST01 Track me #status todo @alice\n"
+    )
+    r = client.put("/api/notes",
+                   json={"path": "history-task.md", "body_md": body},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    # First note.
+    r = client.patch("/api/tasks/T-HIST01",
+                     json={"add_note": "first observation"},
+                     headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    # Second note.
+    r = client.patch("/api/tasks/T-HIST01",
+                     json={"add_note": "second observation"},
+                     headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    # GET the task — both entries must surface in note_history (oldest first)
+    # and the joined `notes` string used by legacy clients.
+    r = client.get("/api/tasks?q=Track+me", headers={"Authorization": AUTH})
+    task = next(t for t in r.json()["tasks"] if t.get("task_uuid") == "T-HIST01")
+    assert task["note_history"] == ["first observation", "second observation"], (
+        f"note_history lost entries; got {task['note_history']!r}"
+    )
+    assert task["notes"] == "first observation\nsecond observation"
+
+
+def test_unrelated_patch_preserves_existing_notes(client):
+    """A PATCH that mutates status/owner/eta MUST NOT clobber the existing
+    #note continuation block. Regression for the legacy `body.notes` path
+    (replace_notes) accidentally being reachable from the popover save flow.
+    """
+    body = (
+        "# Mixed\n"
+        "- !task #id T-HIST02 Mixed mutation #status todo @alice\n"
+    )
+    r = client.put("/api/notes",
+                   json={"path": "history-mixed.md", "body_md": body},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    # Seed two notes.
+    for txt in ("seed note alpha", "seed note beta"):
+        r = client.patch("/api/tasks/T-HIST02",
+                         json={"add_note": txt},
+                         headers={"Authorization": AUTH})
+        assert r.status_code == 200, r.text
+
+    # Now do a status-only patch. Notes must survive on disk + in API.
+    r = client.patch("/api/tasks/T-HIST02",
+                     json={"status": "in-progress"},
+                     headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    on_disk = (DATA / "notes" / "history-mixed.md").read_text(encoding="utf-8")
+    assert "seed note alpha" in on_disk and "seed note beta" in on_disk, (
+        "status-only patch wiped notes from disk:\n" + on_disk
+    )
+
+    r = client.get("/api/tasks?q=Mixed+mutation", headers={"Authorization": AUTH})
+    task = next(t for t in r.json()["tasks"] if t.get("task_uuid") == "T-HIST02")
+    assert task["note_history"] == ["seed note alpha", "seed note beta"]
+    assert task["status"] == "in-progress"
+
+
+def test_note_history_propagates_to_ref_row_file_and_persists(client):
+    """Notes added via PATCH must (a) land in the canonical file as
+    appended #note lines, (b) propagate to every ref-row file that
+    references the task, and (c) on a GET, `note_history` reflects the
+    canonical (de-duplicated) sequence — not the doubled sum across files.
+    """
+    canon = "# Canon\n- !task #id T-HIST03 Cross-file note @alice\n"
+    ref = "# Weekly\n- #task T-HIST03 Cross-file note @alice\n"
+    r = client.put("/api/notes",
+                   json={"path": "history-canon.md", "body_md": canon},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+    r = client.put("/api/notes",
+                   json={"path": "history-ref.md", "body_md": ref},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    for txt in ("xfile note one", "xfile note two", "xfile note three"):
+        r = client.patch("/api/tasks/T-HIST03",
+                         json={"add_note": txt},
+                         headers={"Authorization": AUTH})
+        assert r.status_code == 200, r.text
+
+    canon_md = (DATA / "notes" / "history-canon.md").read_text(encoding="utf-8")
+    ref_md = (DATA / "notes" / "history-ref.md").read_text(encoding="utf-8")
+    for txt in ("xfile note one", "xfile note two", "xfile note three"):
+        assert txt in canon_md, f"missing {txt!r} in canonical:\n{canon_md}"
+        assert txt in ref_md, f"missing {txt!r} in ref-row file:\n{ref_md}"
+
+    # Each note appears EXACTLY once per file (not duplicated by propagation).
+    for txt in ("xfile note one", "xfile note two", "xfile note three"):
+        assert canon_md.count(txt) == 1, f"{txt!r} duplicated in canonical"
+        assert ref_md.count(txt) == 1, f"{txt!r} duplicated in ref-row file"
+
+    # And GET surfaces the canonical history (3 entries, in order).
+    r = client.get("/api/tasks?q=Cross-file+note", headers={"Authorization": AUTH})
+    task = next(t for t in r.json()["tasks"] if t.get("task_uuid") == "T-HIST03")
+    assert task["note_history"] == [
+        "xfile note one", "xfile note two", "xfile note three",
+    ]
