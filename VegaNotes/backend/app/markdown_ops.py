@@ -448,6 +448,64 @@ def rewrite_tasks_as_refs(md: str) -> str:
 
 
 
+def _strip_attr_from_continuations(md: str, task_line_no: int, key: str) -> str:
+    """Remove every ``#key <value>`` token from continuation lines beneath
+    the task at ``task_line_no``.
+
+    A "continuation" is any subsequent line whose visual indent is strictly
+    greater than the task's. The block ends at EOF or at the first non-blank
+    line whose indent is ``<=`` the task's. Blank lines are kept verbatim.
+    If a continuation line is left whitespace-only after the strip, the line
+    is dropped entirely (so we don't leak orphan ``\\t`` lines).
+
+    For the ``owner`` key we also strip bare ``@user`` mentions, mirroring
+    :func:`remove_attr`.
+
+    Used by :func:`update_task_status` and :func:`replace_attr` so that
+    editing a single-valued attr through the popover/kanban UI doesn't leave
+    stale tokens on continuation lines (issue #146 — the parser would
+    otherwise see two ``#status`` tokens and the continuation would win,
+    silently undoing the user's edit).
+    """
+    lines = md.splitlines(keepends=True)
+    if task_line_no < 0 or task_line_no >= len(lines):
+        return md
+    base = _line_indent(lines[task_line_no])
+    pat = re.compile(rf"\s*#{re.escape(key)}\s+\S+", re.IGNORECASE)
+    out: list[str] = list(lines[: task_line_no + 1])
+    i = task_line_no + 1
+    while i < len(lines):
+        raw = lines[i]
+        stripped = raw.strip()
+        if stripped and _line_indent(raw) <= base:
+            out.extend(lines[i:])
+            return "".join(out)
+        if not stripped:
+            out.append(raw)
+            i += 1
+            continue
+        nl = ""
+        body = raw
+        while body.endswith("\n") or body.endswith("\r"):
+            nl = body[-1] + nl
+            body = body[:-1]
+        # Preserve the original leading indent so the continuation line
+        # stays visually aligned after the strip — only collapse runs of
+        # whitespace inside the body proper.
+        lead = body[: len(body) - len(body.lstrip())]
+        rest = body[len(lead):]
+        rest = pat.sub("", rest)
+        if key == "owner":
+            rest = re.sub(r"\s*@[a-zA-Z][\w.-]*", "", rest)
+        rest = re.sub(r"\s{2,}", " ", rest).strip()
+        if not rest:
+            i += 1
+            continue
+        out.append(lead + rest + nl)
+        i += 1
+    return "".join(out)
+
+
 def update_task_status(md: str, line_no: int, new_status: str) -> str:
     """Return ``md`` with the `#status` token on ``line_no`` set to ``new_status``.
 
@@ -457,6 +515,7 @@ def update_task_status(md: str, line_no: int, new_status: str) -> str:
     """
     from .parser.tokens import normalize_status
     new_status = normalize_status(new_status)
+    md = _strip_attr_from_continuations(md, line_no, "status")
     lines = md.splitlines(keepends=True)
     if line_no < 0 or line_no >= len(lines):
         raise ValueError(f"line {line_no} out of range")
@@ -480,6 +539,7 @@ def replace_attr(md: str, line_no: int, key: str, new_value: str) -> str:
     :func:`update_task_status` but for any registered attr key."""
     if not is_known(key):
         raise ValueError(f"unknown token '{key}'")
+    md = _strip_attr_from_continuations(md, line_no, key)
     lines = md.splitlines(keepends=True)
     if line_no < 0 or line_no >= len(lines):
         raise ValueError(f"line {line_no} out of range")
@@ -503,6 +563,7 @@ def remove_attr(md: str, line_no: int, key: str) -> str:
     """Strip every ``#key <value>`` token (or ``@value`` for owner) from line."""
     if not is_known(key):
         raise ValueError(f"unknown token '{key}'")
+    md = _strip_attr_from_continuations(md, line_no, key)
     lines = md.splitlines(keepends=True)
     if line_no < 0 or line_no >= len(lines):
         raise ValueError(f"line {line_no} out of range")
