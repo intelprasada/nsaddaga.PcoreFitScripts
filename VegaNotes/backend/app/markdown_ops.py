@@ -852,3 +852,55 @@ def patch_ref_rows(md: str, ref_id: str, patch: dict) -> tuple[str, bool]:
             changed = True
 
     return md, changed
+
+
+# Captures the leading whitespace + optional bullet marker of a ref row,
+# so a sibling line we insert beneath it can copy the same prefix verbatim.
+_REF_ROW_LEAD_RE = re.compile(r"^(?P<ws>\s*)(?P<bullet>[-*+]\s+|\d+[.)]\s+)?")
+
+
+def insert_ar_ref_row_after(
+    md: str, parent_ref_id: str, new_ar_id: str, ar_line_body: str
+) -> tuple[str, bool]:
+    """Insert a ``#AR <new_ar_id> <ar_line_body>`` row directly beneath the
+    last ``#task <parent_ref_id>`` ref row in ``md``.
+
+    The new line copies the parent ref row's leading whitespace and bullet
+    marker verbatim so it sits at the same visual indent (mirrors the shape
+    that :func:`roll_to_next_week` would emit for an open AR).
+
+    Idempotent: if any ref row for ``new_ar_id`` already exists in ``md``,
+    returns ``(md, False)``. Likewise if no parent ref row is found.
+
+    ``ar_line_body`` should be the title plus any tokens
+    (``#status …``, ``#priority …``, ``@user``, ``#feature …``) — the
+    helper prepends the leading indent / bullet and the ``#AR <id>`` token.
+
+    Returns ``(new_md, changed)``. Used by ``create_ar_under_task`` to
+    propagate newly-added ARs into every md file that already references
+    the parent task (issue #148, follow-up to #92).
+    """
+    # Idempotency guard — the new AR id must not already appear as a ref row.
+    if find_ref_row_lines(md, new_ar_id):
+        return md, False
+    parent_lines = find_ref_row_lines(md, parent_ref_id)
+    if not parent_lines:
+        return md, False
+    insert_after = parent_lines[-1]
+    lines = md.splitlines(keepends=True)
+    parent_raw = lines[insert_after]
+    nl = "\n"
+    if parent_raw.endswith("\r\n"):
+        nl = "\r\n"
+    elif parent_raw.endswith("\r"):
+        nl = "\r"
+    m = _REF_ROW_LEAD_RE.match(parent_raw)
+    lead = m.group("ws") if m else ""
+    bullet = (m.group("bullet") or "- ") if m else "- "
+    body = (ar_line_body or "").strip()
+    new_line = f"{lead}{bullet}#AR {new_ar_id}"
+    if body:
+        new_line = f"{new_line} {body}"
+    new_line = new_line + nl
+    new_lines = lines[: insert_after + 1] + [new_line] + lines[insert_after + 1 :]
+    return "".join(new_lines), True

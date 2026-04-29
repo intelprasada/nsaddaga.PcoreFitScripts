@@ -619,6 +619,161 @@ def test_create_ar_under_task_inserts_inside_block(client):
     assert "newly added AR" in child_titles
 
 
+def test_add_ar_propagates_to_ref_row_files(client):
+    """POST /api/tasks/{ref}/ars must add a `#AR <new_id> <title>` row to
+    every md file that already contains a `#task <parent_uuid>` ref row.
+
+    Without this propagation, the new AR is invisible from weekly notes
+    and any later PATCH on the AR's status finds no ref-row to update
+    (the user-facing symptom described in #148).
+    """
+    notes_dir = DATA / "notes" / "arpropproj"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    canonical = (
+        "# Sprint ww16\n"
+        "@admin\n"
+        "\t!task #id T-ARPROP01 Parent task\n"
+    )
+    weekly = (
+        "# Weekly ww17\n"
+        "- #task T-ARPROP01 Parent task #status todo\n"
+        "Some prose\n"
+    )
+    r = client.put("/api/notes", json={"path": "arpropproj/ww16.md", "body_md": canonical},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+    r = client.put("/api/notes", json={"path": "arpropproj/ww17.md", "body_md": weekly},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    r = client.post(
+        "/api/tasks/T-ARPROP01/ars",
+        json={"title": "investigate dns"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 201, r.text
+    new_id = r.json()["task_uuid"]
+    assert new_id and new_id.startswith("T-")
+
+    # Canonical: !AR declaration written into ww16.
+    ww16 = (DATA / "notes" / "arpropproj" / "ww16.md").read_text(encoding="utf-8")
+    assert f"!AR #id {new_id} investigate dns" in ww16
+
+    # Propagated: ref-row row appears in ww17 directly under the parent's
+    # #task ref row, at the same indent (no leading tab).
+    ww17 = (DATA / "notes" / "arpropproj" / "ww17.md").read_text(encoding="utf-8")
+    lines = ww17.splitlines()
+    parent_idx = next(i for i, l in enumerate(lines) if "#task T-ARPROP01" in l)
+    ar_idx = next((i for i, l in enumerate(lines) if f"#AR {new_id}" in l), None)
+    assert ar_idx is not None, f"propagated AR ref row missing in ww17:\n{ww17}"
+    assert ar_idx == parent_idx + 1, "AR ref row must sit immediately under the parent ref row"
+    assert lines[ar_idx] == f"- #AR {new_id} investigate dns @admin"
+
+
+def test_add_ar_then_patch_status_propagates(client):
+    """Second-order regression mirroring the user's reported symptom: add
+    AR, then change its status. Both the canonical AR line AND the
+    propagated ref row must carry the new status (the existing #92
+    PATCH-propagation block requires the ref row to exist in the first
+    place, which is what #148 fixes).
+    """
+    notes_dir = DATA / "notes" / "arstatusproj"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    canonical = "# ww16\n@admin\n\t!task #id T-ARSTAT01 Parent\n"
+    weekly = "# ww17\n- #task T-ARSTAT01 Parent #status todo\n"
+    client.put("/api/notes", json={"path": "arstatusproj/ww16.md", "body_md": canonical},
+               headers={"Authorization": AUTH})
+    client.put("/api/notes", json={"path": "arstatusproj/ww17.md", "body_md": weekly},
+               headers={"Authorization": AUTH})
+
+    r = client.post("/api/tasks/T-ARSTAT01/ars",
+                    json={"title": "fix tests"},
+                    headers={"Authorization": AUTH})
+    assert r.status_code == 201, r.text
+    new_id = r.json()["task_uuid"]
+
+    r = client.patch(f"/api/tasks/{new_id}",
+                     json={"status": "done"},
+                     headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    ww16 = (DATA / "notes" / "arstatusproj" / "ww16.md").read_text(encoding="utf-8")
+    ww17 = (DATA / "notes" / "arstatusproj" / "ww17.md").read_text(encoding="utf-8")
+    # Canonical AR line carries the new status.
+    assert f"!AR #id {new_id}" in ww16
+    canonical_ar = next(l for l in ww16.splitlines() if f"!AR #id {new_id}" in l)
+    assert "#status done" in canonical_ar
+    # Propagated AR ref row also carries the new status.
+    assert f"#AR {new_id}" in ww17
+    propagated_ar = next(l for l in ww17.splitlines() if f"#AR {new_id}" in l)
+    assert "#status done" in propagated_ar
+
+
+def test_add_ar_skips_files_without_parent_ref(client):
+    """A note that mentions the parent UUID only inside prose (no `#task`
+    keyword) must not be modified. The propagation must trigger off the
+    `#task <parent>` ref-row pattern, not bare substring matches."""
+    notes_dir = DATA / "notes" / "arproseproj"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    canonical = "# ww16\n@admin\n\t!task #id T-ARPROS01 Parent\n"
+    prose = (
+        "# Notes\n"
+        "Talking about T-ARPROS01 in passing — no ref row here.\n"
+    )
+    client.put("/api/notes", json={"path": "arproseproj/ww16.md", "body_md": canonical},
+               headers={"Authorization": AUTH})
+    client.put("/api/notes", json={"path": "arproseproj/loose.md", "body_md": prose},
+               headers={"Authorization": AUTH})
+
+    r = client.post("/api/tasks/T-ARPROS01/ars",
+                    json={"title": "do thing"},
+                    headers={"Authorization": AUTH})
+    assert r.status_code == 201, r.text
+    new_id = r.json()["task_uuid"]
+
+    loose_after = (DATA / "notes" / "arproseproj" / "loose.md").read_text(encoding="utf-8")
+    assert prose == loose_after, "prose-only note must be untouched"
+    assert new_id not in loose_after
+
+
+def test_add_ar_idempotent_on_retry(client):
+    """If create_ar_under_task is called twice for the same logical AR
+    (transient 5xx + client retry produces a new task_uuid each time, but
+    a retry that re-sends the same request body should not duplicate the
+    ref row in ref files).
+
+    Because each POST stamps a fresh `T-NEW...` id, a second POST does
+    represent a new AR — so we expect a SECOND ref row, not zero.
+    Idempotency at the helper level (same id passed twice) is covered by
+    the unit tests; this test pins the API behaviour: each call → exactly
+    one new ref row per file, no duplication of prior ARs.
+    """
+    notes_dir = DATA / "notes" / "aridempproj"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    canonical = "# ww16\n@admin\n\t!task #id T-ARIDEM01 Parent\n"
+    weekly = "# ww17\n- #task T-ARIDEM01 Parent #status todo\n"
+    client.put("/api/notes", json={"path": "aridempproj/ww16.md", "body_md": canonical},
+               headers={"Authorization": AUTH})
+    client.put("/api/notes", json={"path": "aridempproj/ww17.md", "body_md": weekly},
+               headers={"Authorization": AUTH})
+
+    r1 = client.post("/api/tasks/T-ARIDEM01/ars",
+                     json={"title": "first"},
+                     headers={"Authorization": AUTH})
+    assert r1.status_code == 201, r1.text
+    id1 = r1.json()["task_uuid"]
+    r2 = client.post("/api/tasks/T-ARIDEM01/ars",
+                     json={"title": "second"},
+                     headers={"Authorization": AUTH})
+    assert r2.status_code == 201, r2.text
+    id2 = r2.json()["task_uuid"]
+    assert id1 != id2
+
+    ww17 = (DATA / "notes" / "aridempproj" / "ww17.md").read_text(encoding="utf-8")
+    assert ww17.count(f"#AR {id1}") == 1, f"first AR row duplicated:\n{ww17}"
+    assert ww17.count(f"#AR {id2}") == 1, f"second AR row duplicated:\n{ww17}"
+
+
 def test_add_note_rejects_ar_or_task_token(client):
     """PATCH /api/tasks/{id} with `add_note` text starting with `!AR` or
     `!task` is refused — those payloads were silently being filed as #note

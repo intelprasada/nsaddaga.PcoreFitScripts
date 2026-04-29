@@ -27,7 +27,7 @@ from ..markdown_ops import (
     append_note, generate_task_id, existing_ids, delete_task_block,
     insert_ar_under_task,
     remove_attr, roll_to_next_week, update_task_status,
-    find_ref_row_lines, patch_ref_rows,
+    find_ref_row_lines, patch_ref_rows, insert_ar_ref_row_after,
 )
 from ..models import (
     ActivityEvent, Feature, Link, Note, Project, ProjectMember, Task, TaskAttr,
@@ -747,6 +747,69 @@ def create_ar_under_task(
         lines_inserted=max(lines_inserted, 1),
         folder_project=folder_project,
     )
+
+    # ── Propagate the new AR to ref-row files ─────────────────────────────
+    # Any other md file that contains a `#task <parent_uuid>` ref row should
+    # also gain a `#AR <new_id> <title>` row at the same indent — mirrors
+    # the shape that `roll_to_next_week` would emit for an open AR. Without
+    # this, the AR is invisible from weekly notes that reference the parent,
+    # which also defeats the #92 PATCH propagation for any later status /
+    # priority / eta edits on the new AR (no ref row → no propagation
+    # target). See issue #148.
+    if parent_uuid:
+        # Build the bare body (title + optional tokens). The helper prepends
+        # the ref-row lead/bullet and the `#AR <id>` keyword.
+        body_parts: list[str] = [title.strip()]
+        for o in cleaned_owners:
+            if o:
+                body_parts.append(f"@{o}")
+        if body.priority and body.priority.strip():
+            body_parts.append(f"#priority {body.priority.strip()}")
+        if body.eta and body.eta.strip():
+            body_parts.append(f"#eta {body.eta.strip()}")
+        for f in (body.features or []):
+            n = f.strip()
+            if n:
+                body_parts.append(f"#feature {n}")
+        ar_body = " ".join(body_parts)
+
+        from sqlmodel import col as _col
+        candidate_notes = s.exec(
+            select(Note)
+            .where(_col(Note.body_md).contains(parent_uuid))
+            .where(Note.id != note.id)
+        ).all()
+
+        for ref_note in candidate_notes:
+            ref_full = settings.notes_dir / ref_note.path
+            ref_changed = False
+            ref_disk_after: str = ""
+            ref_mtime_after: float = 0.0
+            with with_file_lock(ref_full):
+                if ref_full.exists():
+                    ref_disk_md = ref_full.read_text(encoding="utf-8")
+                    new_ref_md, ref_changed = insert_ar_ref_row_after(
+                        ref_disk_md, parent_uuid, new_id, ar_body,
+                    )
+                    if ref_changed:
+                        _safe_write_unlocked(
+                            ref_full, new_ref_md, notes_dir=settings.notes_dir,
+                        )
+                        ref_disk_after = ref_full.read_text(encoding="utf-8")
+                        ref_mtime_after = ref_full.stat().st_mtime
+            if ref_changed:
+                # Body-only refresh: the new AR's canonical Task row lives
+                # in the parent's note (already indexed above). Ref-row
+                # attribute overrides for this AR will be derived on the
+                # next full reindex of this file; for now we only need the
+                # cached body to reflect what's on disk so subsequent #92
+                # PATCH propagation can find the row.
+                update_note_body_only(
+                    s,
+                    note_id=ref_note.id,
+                    new_body_md=ref_disk_after,
+                    new_mtime=ref_mtime_after,
+                )
 
     created = s.exec(select(Task).where(Task.task_uuid == new_id)).first()
     if created is None:

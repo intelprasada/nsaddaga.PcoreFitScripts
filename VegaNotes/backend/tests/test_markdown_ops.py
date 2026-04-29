@@ -542,6 +542,69 @@ def test_patch_ref_rows_multiple_lines():
     assert "#status todo" not in new_md
 
 
+# ── insert_ar_ref_row_after (#148) ────────────────────────────────────────────
+
+def test_insert_ar_ref_row_after_basic():
+    from app.markdown_ops import insert_ar_ref_row_after
+    md = (
+        "# Weekly\n"
+        "- #task T-PARENT0 Fix login #status todo\n"
+        "Some prose\n"
+    )
+    out, changed = insert_ar_ref_row_after(md, "T-PARENT0", "T-NEWAR01", "investigate dns")
+    assert changed
+    lines = out.splitlines()
+    assert lines[1] == "- #task T-PARENT0 Fix login #status todo"
+    assert lines[2] == "- #AR T-NEWAR01 investigate dns"
+    assert lines[3] == "Some prose"
+
+
+def test_insert_ar_ref_row_after_idempotent():
+    from app.markdown_ops import insert_ar_ref_row_after
+    md = (
+        "- #task T-PARENT0 Fix login\n"
+        "- #AR T-NEWAR01 investigate dns\n"
+    )
+    out, changed = insert_ar_ref_row_after(md, "T-PARENT0", "T-NEWAR01", "investigate dns")
+    assert not changed
+    assert out == md
+
+
+def test_insert_ar_ref_row_after_no_parent_match():
+    from app.markdown_ops import insert_ar_ref_row_after
+    md = "# Empty week\n- #task T-OTHER01 Different task\n"
+    out, changed = insert_ar_ref_row_after(md, "T-PARENT0", "T-NEWAR01", "investigate")
+    assert not changed
+    assert out == md
+
+
+def test_insert_ar_ref_row_preserves_parent_indent():
+    from app.markdown_ops import insert_ar_ref_row_after
+    md = "\t- #task T-PARENT0 Indented parent\n"
+    out, changed = insert_ar_ref_row_after(md, "T-PARENT0", "T-NEWAR01", "child")
+    assert changed
+    lines = out.splitlines()
+    # New AR row matches the parent's leading tab + bullet style.
+    assert lines[1] == "\t- #AR T-NEWAR01 child"
+
+
+def test_insert_ar_ref_row_inserts_after_last_parent_ref():
+    from app.markdown_ops import insert_ar_ref_row_after
+    md = (
+        "- #task T-PARENT0 First mention\n"
+        "Some prose\n"
+        "- #task T-PARENT0 Second mention\n"
+        "Tail\n"
+    )
+    out, changed = insert_ar_ref_row_after(md, "T-PARENT0", "T-NEWAR01", "")
+    assert changed
+    lines = out.splitlines()
+    # Inserted directly after the LAST parent ref row, before "Tail".
+    assert lines[2] == "- #task T-PARENT0 Second mention"
+    assert lines[3] == "- #AR T-NEWAR01"
+    assert lines[4] == "Tail"
+
+
 # ---------- normalize_indent_to_tabs ----------
 from app.markdown_ops import normalize_indent_to_tabs
 
