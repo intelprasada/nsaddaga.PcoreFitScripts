@@ -1015,3 +1015,24 @@ def test_note_history_propagates_to_ref_row_file_and_persists(client):
     assert task["note_history"] == [
         "xfile note one", "xfile note two", "xfile note three",
     ]
+
+
+# --- watcher status (#150) ------------------------------------------------
+
+def test_watcher_status_endpoint_requires_admin(client):
+    r = client.get("/api/admin/watcher_status")
+    assert r.status_code == 401
+
+
+def test_watcher_status_endpoint_reports_state(client):
+    r = client.get("/api/admin/watcher_status", headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    # Lifespan started watch_loop -> these keys must be populated.
+    assert data["mode"] in {"event", "polling"}
+    assert data["notes_dir"]
+    assert isinstance(data["events_total"], int)
+    assert isinstance(data["errors_total"], int)
+    assert "fs_type" in data
+    assert "force_polling" in data
+    assert "poll_delay_ms" in data

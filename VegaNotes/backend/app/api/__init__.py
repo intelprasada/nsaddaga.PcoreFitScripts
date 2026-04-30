@@ -2244,3 +2244,18 @@ def admin_reindex(
     """Re-scan all notes on disk, update the index, and auto-bootstrap orphan projects."""
     n = reindex_all(s)
     return {"status": "ok", "files_indexed": n}
+
+
+@router.get("/admin/watcher_status")
+def admin_watcher_status(
+    _admin: str = Depends(require_admin),
+) -> dict[str, Any]:
+    """Diagnostic view of the file watcher (#150).
+
+    Reports whether the watcher is running, which mode it picked
+    (event/polling), the detected filesystem type, and how many events have
+    been processed.  Use this to confirm out-of-band edits are being
+    observed before relying on propagation fast paths.
+    """
+    from ..indexer import WATCHER_STATE
+    return dict(WATCHER_STATE)
