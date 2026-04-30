@@ -1036,3 +1036,46 @@ def test_watcher_status_endpoint_reports_state(client):
     assert "fs_type" in data
     assert "force_polling" in data
     assert "poll_delay_ms" in data
+
+
+# --- /notes/etag freshness probe (#153) ----------------------------------
+
+def test_notes_etag_endpoint(client):
+    body = "# probe-153\n\nhello\n"
+    r = client.put("/api/notes",
+        json={"path": "etag-probe.md", "body_md": body},
+        headers={"Authorization": AUTH})
+    assert r.status_code in (200, 201), r.text
+    full_etag = r.json()["etag"]
+
+    # Light endpoint: returns etag + mtime, no body.
+    r2 = client.get("/api/notes/etag?path=etag-probe.md",
+        headers={"Authorization": AUTH})
+    assert r2.status_code == 200, r2.text
+    data = r2.json()
+    assert data["etag"] == full_etag
+    assert "body_md" not in data
+    assert isinstance(data["mtime"], (int, float))
+
+    # Mutate and confirm etag advances.
+    r = client.put("/api/notes",
+        json={"path": "etag-probe.md", "body_md": body + "more\n"},
+        headers={"Authorization": AUTH, "If-Match": full_etag})
+    assert r.status_code == 200, r.text
+    new_etag = r.json()["etag"]
+    assert new_etag != full_etag
+
+    r3 = client.get("/api/notes/etag?path=etag-probe.md",
+        headers={"Authorization": AUTH})
+    assert r3.json()["etag"] == new_etag
+
+
+def test_notes_etag_endpoint_404(client):
+    r = client.get("/api/notes/etag?path=does-not-exist.md",
+        headers={"Authorization": AUTH})
+    assert r.status_code == 404
+
+
+def test_notes_etag_endpoint_requires_auth(client):
+    r = client.get("/api/notes/etag?path=etag-probe.md")
+    assert r.status_code == 401

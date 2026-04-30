@@ -190,68 +190,73 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
     }
   };
 
-  // Debounced autosave: schedules per-path timers for ANY dirty draft entry.
-  useEffect(() => {
-    if (!canWrite) return; // members can't save — don't even schedule
-    for (const [path, e] of Object.entries(draft)) {
-      if (e.body === e.saved) continue;
-      if (saveTimers.current[path]) continue;
-      saveTimers.current[path] = setTimeout(() => {
-        delete saveTimers.current[path];
-        const cur = draft[path];
-        if (!cur || cur.body === cur.saved) return;
-        if (cur.savedAt > 0 && !knownPathsRef.current.has(path)) return;
-        flushSave(path, cur.body);
-      }, 800);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft]);
+  // Manual-save UX (#153): no autosave timer.  Saves only happen on
+  // explicit user action (Save button, Ctrl/Cmd+S, or confirmed prompt
+  // on tab/route exit).  A passive disk-poll watches for out-of-band
+  // changes and surfaces a non-modal banner when both sides have moved.
 
-  // On EditorPane unmount (tab switch): immediately flush every dirty entry.
+  // beforeunload guard: warn if any buffer is dirty.  Never silently saves
+  // — that's the entire point of #153.  Using a ref so the listener stays
+  // stable across renders.
+  const draftRef = useRef(draft);
+  useEffect(() => { draftRef.current = draft; }, [draft]);
   useEffect(() => {
-    return () => {
-      for (const t of Object.values(saveTimers.current)) clearTimeout(t);
-      saveTimers.current = {};
-      setDraft((prev) => {
-        for (const [path, e] of Object.entries(prev)) {
-          if (e.body !== e.saved
-              && (e.savedAt === 0 || knownPathsRef.current.has(path))) {
-            // Send the etag too — if disk has moved we'd rather lose this
-            // background save (return 409) than silently clobber the new
-            // disk content. There's no UI on unmount to surface a conflict.
-            api.saveNote(path, e.body, e.etag).then((r) => {
-              setDraft((p2) => p2[path]
-                ? { ...p2, [path]: { ...p2[path], saved: e.body, savedAt: Date.now(), etag: r.etag } }
-                : p2);
-              // Force a final global refresh on unmount (no throttle).
-              qcLocal.invalidateQueries({ queryKey: ["notes"] });
-              qcLocal.invalidateQueries({ queryKey: ["tree"] });
-              qcLocal.invalidateQueries({ queryKey: ["tasks"] });
-            }).catch(() => {});
-          }
-        }
-        return prev;
-      });
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Save before page unload too.
-  useEffect(() => {
-    const handler = () => {
-      for (const [path, e] of Object.entries(draft)) {
-        if (e.body !== e.saved
-            && (e.savedAt === 0 || knownPathsRef.current.has(path))) {
-          // Best-effort save with the cached etag — same rationale as the
-          // unmount path: if disk has moved, prefer 409 (lost write) over
-          // a silent overwrite of someone else's changes.
-          try { api.saveNote(path, e.body, e.etag); } catch {}
-        }
+    const handler = (ev: BeforeUnloadEvent) => {
+      const hasDirty = Object.values(draftRef.current).some(
+        (e) => e.body !== e.saved);
+      if (hasDirty) {
+        ev.preventDefault();
+        ev.returnValue = "You have unsaved changes. Leave anyway?";
+        return ev.returnValue;
       }
     };
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
-  }, [draft]);
+  }, []);
+
+  // Disk-watch banner state for the *currently-open* note only.  When the
+  // file on disk diverges from our cached etag and the local buffer is
+  // also dirty, we surface this banner instead of letting the next save
+  // 409 silently in the background.
+  const [diskConflict, setDiskConflict] = useState<{
+    path: string; diskEtag: string;
+  } | null>(null);
+
+  // Reset banner whenever the user switches notes.
+  useEffect(() => { setDiskConflict(null); }, [selectedPath]);
+
+  // 5 s freshness poll, paused while the tab is hidden.  Cheap: just an
+  // etag, no body.  See #153.
+  useEffect(() => {
+    if (!selectedPath || !entry) return;
+    let cancelled = false;
+    const tick = async () => {
+      if (document.hidden) return;
+      try {
+        const r = await api.noteEtag(selectedPath);
+        if (cancelled) return;
+        const cur = draftRef.current[selectedPath];
+        if (!cur) return;
+        if (r.etag === cur.etag) {
+          // Disk still matches what we have — clear any stale banner.
+          if (diskConflict?.path === selectedPath) setDiskConflict(null);
+          return;
+        }
+        if (cur.body === cur.saved) {
+          // Buffer clean → silent refetch via the React-Query cache.
+          if (noteId != null) qcLocal.invalidateQueries({ queryKey: ["note", noteId] });
+          if (diskConflict?.path === selectedPath) setDiskConflict(null);
+        } else {
+          // Both sides moved → surface the banner.
+          setDiskConflict({ path: selectedPath, diskEtag: r.etag });
+        }
+      } catch { /* network blip — ignore */ }
+    };
+    const id = window.setInterval(tick, 5_000);
+    // Run once immediately on focus / mount so the banner doesn't lag.
+    void tick();
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, [selectedPath, entry, noteId, qcLocal, diskConflict]);
 
   const onChange = (v: string) => {
     if (!selectedPath || !canWrite) return;
@@ -267,6 +272,52 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
   };
 
   const onSave = () => { if (selectedPath && entry) flushSave(selectedPath, entry.body); };
+
+  // Ctrl/Cmd+S manual save (#153).  Listens at the document level so it
+  // fires even when the editor textarea is focused.  Prevents the browser
+  // "Save Page As..." dialog.
+  useEffect(() => {
+    const handler = (ev: KeyboardEvent) => {
+      const isSave = (ev.ctrlKey || ev.metaKey) && (ev.key === "s" || ev.key === "S");
+      if (!isSave) return;
+      ev.preventDefault();
+      if (!canWrite || !selectedPath) return;
+      const cur = draftRef.current[selectedPath];
+      if (!cur || cur.body === cur.saved) return;
+      void flushSave(selectedPath, cur.body);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+    // flushSave closes over `draft` via state setters, but reading from
+    // draftRef keeps this effect cheap (no rebind on every keystroke).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPath, canWrite]);
+
+  // Banner actions for the disk-watch conflict surface (#153).
+  const onConflictReload = async () => {
+    if (!selectedPath || noteId == null) return;
+    try {
+      const fresh = await api.note(noteId);
+      setDraft((prev) => ({
+        ...prev,
+        [selectedPath]: {
+          body: fresh.body_md, saved: fresh.body_md,
+          savedAt: Date.now(), etag: fresh.etag,
+        },
+      }));
+      qcLocal.invalidateQueries({ queryKey: ["note", noteId] });
+      setDiskConflict(null);
+    } catch { setStatus("error"); }
+  };
+  const onConflictKeep = () => {
+    if (!selectedPath || !diskConflict) return;
+    // Adopt the new disk etag without changing local body — next manual
+    // Save will overwrite disk content.
+    setDraft((prev) => prev[selectedPath]
+      ? { ...prev, [selectedPath]: { ...prev[selectedPath], etag: diskConflict.diskEtag } }
+      : prev);
+    setDiskConflict(null);
+  };
 
   const onStampIds = async () => {
     if (!selectedPath || !entry) return;
@@ -342,10 +393,15 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
   return (
     <div className="p-4 space-y-2 h-full flex flex-col">
       <div className="text-sm text-slate-500 flex items-center gap-3">
-        <span>{selectedPath || "(no notes — pick or create one)"}</span>
+        <span>{selectedPath ? `${dirty ? "● " : ""}${selectedPath}` : "(no notes — pick or create one)"}</span>
         {statusText && (
           <span className={`text-xs ${status === "error" ? "text-rose-600" : dirty ? "text-amber-600" : "text-emerald-600"}`}>
             {statusText}
+          </span>
+        )}
+        {dirty && (
+          <span className="text-xs text-slate-500" title="No autosave — press Ctrl+S to save">
+            ⌘/Ctrl+S to save
           </span>
         )}
         {selectedPath && !canWrite && projectRole && (
@@ -354,6 +410,17 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
           </span>
         )}
       </div>
+      {diskConflict && diskConflict.path === selectedPath && (
+        <div className="rounded border border-amber-400 bg-amber-50 px-3 py-2 text-sm text-amber-900 flex items-center gap-3 flex-wrap">
+          <span>⚠ <b>{selectedPath}</b> changed on disk while you have unsaved edits.</span>
+          <button className="rounded bg-white border border-amber-400 px-2 py-0.5 text-xs hover:bg-amber-100"
+            onClick={onConflictReload}>Reload from disk</button>
+          <button className="rounded bg-white border border-amber-400 px-2 py-0.5 text-xs hover:bg-amber-100"
+            onClick={onConflictKeep}>Keep my edits (overwrite on next save)</button>
+          <button className="ml-auto text-xs underline"
+            onClick={() => setDiskConflict(null)}>dismiss</button>
+        </div>
+      )}
       <div className="flex-1 overflow-auto">
         <NoteEditor value={body} onChange={onChange} readOnly={!canWrite} />
       </div>

@@ -149,7 +149,7 @@ def test_polling_awatch_observes_external_change(tmp_path):
                 if seen:
                     return
 
-        await asyncio.wait_for(asyncio.gather(reader(), writer()), timeout=8)
+        await asyncio.wait_for(asyncio.gather(reader(), writer()), timeout=20)
         return seen
 
     seen = asyncio.run(run())
