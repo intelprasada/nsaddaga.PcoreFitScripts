@@ -105,25 +105,25 @@
 
 @Ragavi
 	#project jnc
-		!task #id T-CS2X6C JNC bucket debug 
-			!AR #id T-PC96Y9 ITLB cache miss bucket debug #status done. 
-			!AR #id T-V5ZQCR ITLB MT1 enablement 3 issues #status done 
+		!task #id T-CS2X6C JNC bucket debug #status done
+			!AR #id T-PC96Y9 ITLB cache miss bucket debug #status done
+			!AR #id T-V5ZQCR ITLB MT1 enablement 3 issues #status done
 			!AR #id T-RXKF7Q ITLB msid mini EID: 1696677 , TXTE_MSG_FILL_BUFFER_OUT_FillBufUBit_mismatch #status done
 				#eta ww17
 				#note fix in GFC, waiting for sync
 			!AR #id T-M2TRKN TXTE_MSG_TLB_LOOKUP_OUT_ItCacheableM122H_mismatch @Ragavi #status done
-		!task #id T-3CF48M ITLB preloader SMT coding and smart preloader 
-			!AR #id T-WZW8XS smt coding #status done 
-			!AR #id T-022MGA smart preloader #status wip #eta ww18.4 
-			!AR #id T-E32SWW randomizing TIDs in preload #eta ww21 
+		!task #id T-3CF48M ITLB preloader SMT coding and smart preloader #status in-progress
+			!AR #id T-WZW8XS smt coding
+			!AR #id T-022MGA smart preloader #eta ww18.4
+			!AR #id T-E32SWW randomizing TIDs in preload #eta ww21
 		!task #id T-A7KC90 CB for tid based flush feature #status done 
 		!task #id T-EATM79 CR for forced partition CTE support #eta ww19 
 			!AR #id T-C2RA2C CTE coding 
 			!AR #id T-RBTWDT Integration 
 		!task #id T-NWXAKW Validation plan for SMT ITLB #eta ww21 #priority high 
 			!AR #id T-RDJYHX Internal review for val plan #eta ww20 
-		!task #id T-2953KW Snoop injector  SMT coding #eta ww19 
-			!AR #id T-XN2WQY further breakdown of tasks #eta ww18.2 #status done
+		!task #id T-2953KW Snoop injector  SMT coding #eta ww19 #status in-progress
+			!AR #id T-XN2WQY further breakdown of tasks #eta ww18.2
 			!AR #id T-6XJAS5 Coding done #eta ww18
 			!AR #id T-R4HWHC Integration done #eta ww19
 

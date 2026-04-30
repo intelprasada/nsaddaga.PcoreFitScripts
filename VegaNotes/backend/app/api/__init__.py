@@ -266,6 +266,34 @@ def note_abs_path(
     }
 
 
+@router.get("/notes/etag")
+def note_etag(
+    path: str = Query(..., description="Repo-relative note path"),
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    """Cheap freshness check (#153).
+
+    Returns just ``{etag, mtime}`` for a note's on-disk file so the editor
+    can poll for out-of-band changes without transferring the full body on
+    every tick.  The etag matches what ``GET /notes/{id}`` would return.
+    """
+    if ".." in path or path.startswith("/"):
+        raise HTTPException(400, "invalid path")
+    project = _project_for_path(path)
+    if _user_role_for_project(s, user, project) == "none":
+        raise HTTPException(403, "no access")
+    full = settings.notes_dir / path
+    if not full.exists():
+        raise HTTPException(404, "note not found")
+    disk_md = full.read_text(encoding="utf-8")
+    return {
+        "path": path,
+        "etag": etag_for_bytes(disk_md.encode()),
+        "mtime": full.stat().st_mtime,
+    }
+
+
 @router.get("/notes/{note_id}")
 def get_note(note_id: int, s: Session = Depends(get_session)) -> dict[str, Any]:
     n = s.get(Note, note_id)

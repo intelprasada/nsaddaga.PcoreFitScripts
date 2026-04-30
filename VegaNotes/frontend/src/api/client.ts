@@ -145,6 +145,10 @@ export interface ProjectMember {
 export const api = {
   notes: () => req<{ id: number; path: string; title: string }[]>("/notes"),
   note:  (id: number) => req<{ id: number; path: string; title: string; body_md: string; etag: string }>(`/notes/${id}`),
+  noteEtag: (path: string) =>
+    req<{ path: string; etag: string; mtime: number }>(
+      `/notes/etag?path=${encodeURIComponent(path)}`,
+    ),
   saveNote: (path: string, body_md: string, ifMatch?: string) =>
     req<{ id: number; path: string; etag: string }>("/notes", {
       method: "PUT",
