@@ -122,7 +122,7 @@ export function NoteEditor({ value, onChange, readOnly = false }: Props) {
       <pre
         ref={preRef}
         aria-hidden="true"
-        className="vega-editor-pre absolute inset-0 m-0 p-3 overflow-auto whitespace-pre-wrap break-words pointer-events-none"
+        className="vega-editor-pre absolute inset-0 m-0 p-3 whitespace-pre-wrap pointer-events-none"
       />
       <textarea
         ref={taRef}
@@ -133,7 +133,8 @@ export function NoteEditor({ value, onChange, readOnly = false }: Props) {
         onBlur={(e) => { if (!readOnly) flushNow(e.currentTarget.value); }}
         readOnly={readOnly}
         spellCheck={false}
-        className={`vega-editor-ta absolute inset-0 w-full h-full m-0 p-3 bg-transparent text-transparent caret-slate-900 resize-none outline-none whitespace-pre-wrap break-words ${readOnly ? "cursor-not-allowed select-text" : ""}`}
+        wrap="soft"
+        className={`vega-editor-ta absolute inset-0 w-full h-full m-0 p-3 bg-transparent text-transparent caret-slate-900 resize-none outline-none whitespace-pre-wrap overflow-auto ${readOnly ? "cursor-not-allowed select-text" : ""}`}
       />
     </div>
   );
