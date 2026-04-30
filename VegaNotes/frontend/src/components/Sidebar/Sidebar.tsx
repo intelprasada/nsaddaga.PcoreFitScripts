@@ -1,7 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { api, type TreeNode } from "../../api/client";
 import { ManageMembersModal } from "./ManageMembersModal";
+import {
+  useSidebarPrefs,
+  applySidebarPrefs,
+  projectKey,
+  projectLabel,
+} from "../../store/sidebarPrefs";
 
 interface Props {
   selectedPath: string;
@@ -15,7 +21,7 @@ interface Props {
 }
 
 type MenuKind =
-  | { kind: "project"; project: string; role: "manager" | "member" }
+  | { kind: "project"; project: string; role: "manager" | "member"; key: string }
   | { kind: "note"; path: string; id: number | null; project: string | null };
 
 interface MenuState {
@@ -25,11 +31,16 @@ interface MenuState {
 }
 
 /**
- * Project/notes tree with right-click context menu:
- *   - On a project: "New note", "Delete project" (managers only).
- *   - On a note:    "Delete note" (managers only).
- * Top-level entries are projects (folders under notes/). Loose root-level
- * files appear under a "(no project)" group at the bottom.
+ * Project/notes tree with right-click context menu and per-user view
+ * preferences (collapse, hide).  See issue #157 for the full UX spec.
+ *
+ * Right-click menu:
+ *   - Project: "New note", "Hide from sidebar", "Manage members…" (manager),
+ *     "Delete project…" (manager).
+ *   - Note:    "Delete note" (managers only).
+ *
+ * Top-level entries are projects (folders under notes/).  Loose root-level
+ * files appear under a "(no project)" group.
  */
 export function Sidebar({ selectedPath, onSelect, onAfterDelete }: Props) {
   const qc = useQueryClient();
@@ -43,11 +54,29 @@ export function Sidebar({ selectedPath, onSelect, onAfterDelete }: Props) {
   const [newNoteFor, setNewNoteFor] = useState<string | null>(null);
   const [newNoteName, setNewNoteName] = useState("");
   const [manageMembersFor, setManageMembersFor] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [showHiddenPopover, setShowHiddenPopover] = useState(false);
 
-  // Dismiss the context menu on any outside click / Escape.
+  const collapsed = useSidebarPrefs((s) => s.collapsed);
+  const hidden = useSidebarPrefs((s) => s.hidden);
+  const toggleCollapse = useSidebarPrefs((s) => s.toggleCollapse);
+  const collapseAll = useSidebarPrefs((s) => s.collapseAll);
+  const expandAll = useSidebarPrefs((s) => s.expandAll);
+  const hideProject = useSidebarPrefs((s) => s.hideProject);
+  const unhideProject = useSidebarPrefs((s) => s.unhideProject);
+
+  const applied = useMemo(
+    () => applySidebarPrefs(tree, { collapsed, hidden }, search),
+    [tree, collapsed, hidden, search],
+  );
+
+  // Dismiss the context menu / hidden popover on any outside click / Escape.
   useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
+    if (!menu && !showHiddenPopover) return;
+    const close = () => {
+      setMenu(null);
+      setShowHiddenPopover(false);
+    };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
     window.addEventListener("click", close);
     window.addEventListener("keydown", onKey);
@@ -55,7 +84,7 @@ export function Sidebar({ selectedPath, onSelect, onAfterDelete }: Props) {
       window.removeEventListener("click", close);
       window.removeEventListener("keydown", onKey);
     };
-  }, [menu]);
+  }, [menu, showHiddenPopover]);
 
   const refreshAll = () => {
     qc.invalidateQueries({ queryKey: ["tree"] });
@@ -112,18 +141,67 @@ export function Sidebar({ selectedPath, onSelect, onAfterDelete }: Props) {
     onError: (e: any) => alert(`Create note failed: ${e?.message ?? e}`),
   });
 
+  const allKeys = useMemo(() => tree.map(projectKey), [tree]);
+  const hiddenCount = applied.hiddenProjects.length;
+
   return (
     <aside className="w-64 shrink-0 border-r bg-slate-50 overflow-y-auto p-3 text-sm relative">
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-xs uppercase tracking-wide text-slate-500">Projects</h3>
-        <button
-          onClick={() => setCreating((c) => !c)}
-          title="New project"
-          className="text-sky-600 hover:text-sky-800 text-xs"
-        >
-          + new
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => collapseAll(allKeys)}
+            title="Collapse all projects"
+            aria-label="Collapse all projects"
+            className="text-slate-500 hover:text-slate-800 text-xs px-1"
+          >
+            ⊟
+          </button>
+          <button
+            onClick={() => expandAll()}
+            title="Expand all projects"
+            aria-label="Expand all projects"
+            className="text-slate-500 hover:text-slate-800 text-xs px-1"
+          >
+            ⊞
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowHiddenPopover((v) => !v);
+            }}
+            title={
+              hiddenCount
+                ? `${hiddenCount} hidden project${hiddenCount === 1 ? "" : "s"}`
+                : "No hidden projects"
+            }
+            aria-label="Hidden projects"
+            aria-expanded={showHiddenPopover}
+            className={`text-xs px-1 ${
+              hiddenCount ? "text-amber-600 hover:text-amber-800" : "text-slate-400"
+            }`}
+          >
+            👁{hiddenCount ? ` ${hiddenCount}` : ""}
+          </button>
+          <button
+            onClick={() => setCreating((c) => !c)}
+            title="New project"
+            aria-label="New project"
+            className="text-sky-600 hover:text-sky-800 text-xs ml-1"
+          >
+            + new
+          </button>
+        </div>
       </div>
+
+      <input
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Filter projects / notes…"
+        aria-label="Filter projects and notes"
+        className="w-full rounded border px-2 py-1 text-xs mb-2"
+      />
+
       {creating && (
         <form
           className="mb-3 flex gap-1"
@@ -142,98 +220,161 @@ export function Sidebar({ selectedPath, onSelect, onAfterDelete }: Props) {
           <button className="rounded bg-sky-600 text-white px-2 text-xs">add</button>
         </form>
       )}
-      <ul className="space-y-3">
-        {tree.map((node) => (
-          <li key={node.project ?? "__root__"}>
-            <div
-              className="flex items-center justify-between text-slate-700 font-semibold cursor-default"
-              onContextMenu={(e) => {
-                if (!node.project) return;
-                e.preventDefault();
-                setMenu({
-                  x: e.clientX,
-                  y: e.clientY,
-                  target: { kind: "project", project: node.project, role: node.role },
-                });
-              }}
-              title={node.project ? "Right-click for actions" : undefined}
-            >
-              <span>{node.project ?? "(no project)"}</span>
-              {node.project && (
-                <span
-                  className={`text-[10px] uppercase rounded px-1.5 py-0.5 ${
-                    node.role === "manager"
-                      ? "bg-violet-100 text-violet-700"
-                      : "bg-slate-200 text-slate-600"
-                  }`}
-                  title={`Your role: ${node.role}`}
-                >
-                  {node.role}
-                </span>
-              )}
-            </div>
-            {newNoteFor === node.project && (
-              <form
-                className="mt-1 ml-2 flex gap-1"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (node.project)
-                    createNote.mutate({ project: node.project, name: newNoteName });
+
+      {showHiddenPopover && (
+        <HiddenProjectsPopover
+          hiddenProjects={
+            // Show every project the user has hidden, regardless of search
+            // status, so they can always be unhidden from one place.
+            tree.filter((n) => hidden[projectKey(n)])
+          }
+          onUnhide={(key) => unhideProject(key)}
+          onClose={() => setShowHiddenPopover(false)}
+        />
+      )}
+
+      <ul role="tree" className="space-y-3">
+        {applied.visibleProjects.map((view) => {
+          const node = view.node;
+          const key = projectKey(node);
+          const label = projectLabel(node);
+          return (
+            <li key={key} role="treeitem" aria-expanded={view.expanded}>
+              <div
+                className="flex items-center justify-between text-slate-700 font-semibold cursor-pointer select-none"
+                onClick={(e) => {
+                  // Don't toggle on right-click or when clicking inside the
+                  // role/hidden badge (they're decorative).
+                  if (e.button !== 0) return;
+                  toggleCollapse(key);
                 }}
+                onContextMenu={(e) => {
+                  if (!node.project) return;
+                  e.preventDefault();
+                  setMenu({
+                    x: e.clientX,
+                    y: e.clientY,
+                    target: {
+                      kind: "project",
+                      project: node.project,
+                      role: node.role,
+                      key,
+                    },
+                  });
+                }}
+                title={node.project ? "Click to collapse · Right-click for actions" : "Click to collapse"}
               >
-                <input
-                  autoFocus
-                  value={newNoteName}
-                  onChange={(e) => setNewNoteName(e.target.value)}
-                  placeholder="note-name.md"
-                  className="flex-1 rounded border px-2 py-1 text-xs"
-                />
-                <button className="rounded bg-sky-600 text-white px-2 text-xs">
-                  add
-                </button>
-              </form>
-            )}
-            <ul className="mt-1 ml-2 border-l border-slate-200">
-              {node.notes.length === 0 && (
-                <li className="pl-2 text-xs italic text-slate-400">empty</li>
-              )}
-              {node.notes.map((n) => {
-                const active = n.path === selectedPath;
-                return (
-                  <li key={n.path}>
-                    <button
-                      onClick={() => onSelect(n.path)}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        setMenu({
-                          x: e.clientX,
-                          y: e.clientY,
-                          target: {
-                            kind: "note",
-                            path: n.path,
-                            id: n.id,
-                            project: node.project,
-                          },
-                        });
-                      }}
-                      className={`block w-full text-left pl-2 py-1 text-xs truncate ${
-                        active
-                          ? "bg-sky-100 text-sky-900"
-                          : "text-slate-600 hover:bg-slate-100"
-                      }`}
-                      title={`${n.path} — right-click for actions`}
+                <span className="flex items-center gap-1 min-w-0">
+                  <span
+                    aria-hidden="true"
+                    className="inline-block w-3 text-slate-400 text-[10px]"
+                  >
+                    {view.expanded ? "▾" : "▸"}
+                  </span>
+                  <span className="truncate">{label}</span>
+                  {!view.expanded && view.notes.length > 0 && (
+                    <span className="text-[10px] text-slate-400 ml-1">
+                      · {view.notes.length}
+                    </span>
+                  )}
+                  {view.hiddenByPref && (
+                    <span
+                      className="text-[10px] uppercase rounded px-1 bg-amber-100 text-amber-700 ml-1"
+                      title="Hidden — surfaced because the search matched"
                     >
-                      {n.title || n.path}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </li>
-        ))}
+                      hidden
+                    </span>
+                  )}
+                </span>
+                {node.project && (
+                  <span
+                    className={`text-[10px] uppercase rounded px-1.5 py-0.5 ml-1 shrink-0 ${
+                      node.role === "manager"
+                        ? "bg-violet-100 text-violet-700"
+                        : "bg-slate-200 text-slate-600"
+                    }`}
+                    title={`Your role: ${node.role}`}
+                  >
+                    {node.role}
+                  </span>
+                )}
+              </div>
+
+              {newNoteFor === node.project && (
+                <form
+                  className="mt-1 ml-2 flex gap-1"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (node.project)
+                      createNote.mutate({ project: node.project, name: newNoteName });
+                  }}
+                >
+                  <input
+                    autoFocus
+                    value={newNoteName}
+                    onChange={(e) => setNewNoteName(e.target.value)}
+                    placeholder="note-name.md"
+                    className="flex-1 rounded border px-2 py-1 text-xs"
+                  />
+                  <button className="rounded bg-sky-600 text-white px-2 text-xs">
+                    add
+                  </button>
+                </form>
+              )}
+
+              {view.expanded && (
+                <ul role="group" className="mt-1 ml-2 border-l border-slate-200">
+                  {view.notes.length === 0 && (
+                    <li className="pl-2 text-xs italic text-slate-400">
+                      {applied.searchActive ? "no matches" : "empty"}
+                    </li>
+                  )}
+                  {view.notes.map((n) => {
+                    const active = n.path === selectedPath;
+                    return (
+                      <li key={n.path} role="treeitem">
+                        <button
+                          onClick={() => onSelect(n.path)}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setMenu({
+                              x: e.clientX,
+                              y: e.clientY,
+                              target: {
+                                kind: "note",
+                                path: n.path,
+                                id: n.id,
+                                project: node.project,
+                              },
+                            });
+                          }}
+                          className={`block w-full text-left pl-2 py-1 text-xs truncate ${
+                            active
+                              ? "bg-sky-100 text-sky-900"
+                              : "text-slate-600 hover:bg-slate-100"
+                          }`}
+                          title={`${n.path} — right-click for actions`}
+                        >
+                          {n.title || n.path}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </li>
+          );
+        })}
         {tree.length === 0 && (
           <li className="text-xs italic text-slate-400">
             No projects. Click <em>+ new</em> to create one.
+          </li>
+        )}
+        {tree.length > 0 && applied.visibleProjects.length === 0 && (
+          <li className="text-xs italic text-slate-400">
+            {applied.searchActive
+              ? "No projects match your filter."
+              : `All projects hidden. Click 👁 ${hiddenCount} to restore.`}
           </li>
         )}
       </ul>
@@ -246,6 +387,10 @@ export function Sidebar({ selectedPath, onSelect, onAfterDelete }: Props) {
             onNewNote: (project) => {
               setNewNoteFor(project);
               setNewNoteName("");
+              setMenu(null);
+            },
+            onHide: (key) => {
+              hideProject(key);
               setMenu(null);
             },
             onManageMembers: (project) => {
@@ -294,6 +439,7 @@ function buildMenuItems(
   target: MenuKind,
   cb: {
     onNewNote: (project: string) => void;
+    onHide: (key: string) => void;
     onManageMembers: (project: string) => void;
     onDeleteProject: (project: string) => void;
     onDeleteNote: (id: number | null, path: string) => void;
@@ -302,6 +448,7 @@ function buildMenuItems(
   if (target.kind === "project") {
     const items: MenuItem[] = [
       { label: "New note in project", onClick: () => cb.onNewNote(target.project) },
+      { label: "Hide from sidebar", onClick: () => cb.onHide(target.key) },
     ];
     if (target.role === "manager") {
       items.push({
@@ -336,6 +483,7 @@ function ContextMenu({
 }) {
   return (
     <ul
+      role="menu"
       className="fixed z-50 min-w-[10rem] rounded border bg-white shadow-lg py-1 text-xs"
       style={{ left: x, top: y }}
       onClick={(e) => e.stopPropagation()}
@@ -344,6 +492,7 @@ function ContextMenu({
       {items.map((it, i) => (
         <li key={i}>
           <button
+            role="menuitem"
             onClick={it.onClick}
             className={`w-full text-left px-3 py-1.5 hover:bg-slate-100 ${
               it.danger ? "text-rose-600" : "text-slate-700"
@@ -354,5 +503,68 @@ function ContextMenu({
         </li>
       ))}
     </ul>
+  );
+}
+
+function HiddenProjectsPopover({
+  hiddenProjects,
+  onUnhide,
+  onClose,
+}: {
+  hiddenProjects: TreeNode[];
+  onUnhide: (key: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-label="Hidden projects"
+      className="absolute right-3 top-10 z-40 w-56 rounded border bg-white shadow-lg p-2 text-xs"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-center justify-between mb-1">
+        <span className="font-semibold text-slate-700">Hidden projects</span>
+        <button
+          onClick={onClose}
+          aria-label="Close hidden projects popover"
+          className="text-slate-400 hover:text-slate-700"
+        >
+          ✕
+        </button>
+      </div>
+      {hiddenProjects.length === 0 ? (
+        <p className="text-slate-400 italic">No hidden projects.</p>
+      ) : (
+        <ul className="space-y-1 max-h-64 overflow-y-auto">
+          {hiddenProjects.map((n) => {
+            const key = projectKey(n);
+            return (
+              <li key={key} className="flex items-center justify-between gap-2">
+                <span className="truncate text-slate-700">{projectLabel(n)}</span>
+                <button
+                  onClick={() => onUnhide(key)}
+                  className="text-sky-600 hover:text-sky-800 shrink-0"
+                  title="Unhide this project"
+                >
+                  unhide
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {hiddenProjects.length > 0 && (
+        <div className="mt-2 pt-2 border-t flex justify-end">
+          <button
+            onClick={() => {
+              for (const n of hiddenProjects) onUnhide(projectKey(n));
+            }}
+            className="text-sky-600 hover:text-sky-800 text-xs"
+          >
+            Unhide all
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
