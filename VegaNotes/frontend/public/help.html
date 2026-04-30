@@ -1,0 +1,1187 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>VegaNotes — Guided Tour</title>
+<style>
+  /* -----------------------------------------------------------------------
+     Self-contained help presentation. No external CDNs so it works offline
+     and inside the iframe served by the React app's "help" tab.
+     ----------------------------------------------------------------------- */
+  :root {
+    --bg: #f8fafc;
+    --bg-elev: #ffffff;
+    --bg-soft: #f1f5f9;
+    --fg: #0f172a;
+    --fg-muted: #475569;
+    --fg-faint: #94a3b8;
+    --border: #e2e8f0;
+    --accent: #0369a1;
+    --accent-soft: #e0f2fe;
+    --accent-strong: #075985;
+    --amber: #b45309;
+    --amber-soft: #fef3c7;
+    --rose: #be123c;
+    --rose-soft: #ffe4e6;
+    --emerald: #047857;
+    --emerald-soft: #d1fae5;
+    --violet: #6d28d9;
+    --violet-soft: #ede9fe;
+    --code-bg: #0f172a;
+    --code-fg: #e2e8f0;
+    --shadow: 0 1px 2px rgba(15,23,42,.04), 0 8px 24px rgba(15,23,42,.06);
+    --radius: 10px;
+    --radius-sm: 6px;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  [data-theme="dark"] {
+    --bg: #0b1120;
+    --bg-elev: #111827;
+    --bg-soft: #1e293b;
+    --fg: #f1f5f9;
+    --fg-muted: #cbd5e1;
+    --fg-faint: #64748b;
+    --border: #1e293b;
+    --accent: #38bdf8;
+    --accent-soft: #0c4a6e;
+    --accent-strong: #7dd3fc;
+    --amber: #fbbf24;
+    --amber-soft: #422006;
+    --rose: #fb7185;
+    --rose-soft: #4c0519;
+    --emerald: #34d399;
+    --emerald-soft: #064e3b;
+    --violet: #a78bfa;
+    --violet-soft: #2e1065;
+    --code-bg: #020617;
+    --code-fg: #e2e8f0;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.5);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.55;
+    font-size: 15px;
+    scroll-behavior: smooth;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* layout */
+  .app { display: grid; grid-template-columns: 260px 1fr; min-height: 100vh; }
+  aside.nav {
+    border-right: 1px solid var(--border);
+    background: var(--bg-elev);
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 16px 12px;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+    padding: 4px 8px 12px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+  }
+  .brand .logo {
+    width: 28px; height: 28px; border-radius: 8px;
+    background: linear-gradient(135deg, #0ea5e9, #6366f1);
+    display: grid; place-items: center;
+    color: white; font-weight: 800; font-size: 14px;
+    box-shadow: 0 4px 12px rgba(99,102,241,.3);
+  }
+  .brand h1 { font-size: 14px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+  .brand small { display: block; color: var(--fg-faint); font-size: 11px; font-weight: 500; }
+
+  .search {
+    width: 100%;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 13px;
+    margin-bottom: 12px;
+  }
+  .search:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+
+  nav ul { list-style: none; padding: 0; margin: 0 0 16px; }
+  nav .nav-group { font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--fg-faint);
+    padding: 12px 8px 4px; }
+  nav a.nav-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px;
+    border-radius: var(--radius-sm);
+    color: var(--fg-muted);
+    font-size: 13px;
+    text-decoration: none;
+    border-left: 3px solid transparent;
+  }
+  nav a.nav-item:hover { background: var(--bg-soft); color: var(--fg); }
+  nav a.nav-item.active {
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+    border-left-color: var(--accent);
+    font-weight: 600;
+  }
+  nav a.nav-item .icon {
+    width: 18px; text-align: center; font-size: 14px;
+  }
+
+  .toolbar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 4px 4px;
+    border-top: 1px solid var(--border);
+    margin-top: 8px;
+    font-size: 11px; color: var(--fg-faint);
+  }
+  .toolbar button {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--fg-muted);
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 11px; cursor: pointer;
+  }
+  .toolbar button:hover { background: var(--bg-soft); color: var(--fg); }
+
+  /* main */
+  main {
+    padding: 32px 48px 80px;
+    max-width: 1080px;
+    width: 100%;
+  }
+  section.tile {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px 32px;
+    margin-bottom: 24px;
+    box-shadow: var(--shadow);
+  }
+  section.tile.hidden { display: none; }
+  h2.section-title {
+    margin: 0 0 4px;
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+  .section-sub {
+    color: var(--fg-muted);
+    margin: 0 0 20px;
+    font-size: 14px;
+  }
+  h3 { margin: 24px 0 8px; font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+  h4 { margin: 16px 0 6px; font-size: 13px; font-weight: 700; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
+  /* code */
+  pre, code { font-family: var(--mono); }
+  code:not(pre code) {
+    background: var(--bg-soft);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.92em;
+    color: var(--accent-strong);
+  }
+  pre.code {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 14px 16px;
+    border-radius: var(--radius-sm);
+    overflow-x: auto;
+    font-size: 12.5px;
+    line-height: 1.55;
+    position: relative;
+    margin: 8px 0 12px;
+  }
+  pre.code .copy {
+    position: absolute; top: 6px; right: 6px;
+    background: rgba(255,255,255,.06);
+    color: rgba(255,255,255,.7);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 4px;
+    font-size: 10px; padding: 2px 7px;
+    cursor: pointer; font-family: var(--sans);
+  }
+  pre.code .copy:hover { background: rgba(255,255,255,.12); color: white; }
+  pre.code .copy.copied { background: var(--emerald); color: white; }
+  /* token highlighting in pre.code */
+  .tk-bang   { color: #fde68a; font-weight: 700; }
+  .tk-hash   { color: #93c5fd; font-weight: 600; }
+  .tk-arg    { color: #f9a8d4; }
+  .tk-cmt    { color: #64748b; font-style: italic; }
+  .tk-str    { color: #6ee7b7; }
+  .tk-flag   { color: #fcd34d; }
+
+  /* tables */
+  table.tbl {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin: 8px 0 16px;
+  }
+  table.tbl th, table.tbl td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  table.tbl th {
+    background: var(--bg-soft);
+    font-weight: 700;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--fg-muted);
+  }
+  table.tbl td code { font-size: 11.5px; }
+
+  /* feature grid */
+  .grid {
+    display: grid;
+    gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    margin: 16px 0 12px;
+  }
+  .card {
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+  }
+  .card h4 {
+    margin: 0 0 4px; color: var(--fg);
+    text-transform: none; letter-spacing: 0; font-size: 14px;
+  }
+  .card p { margin: 0; color: var(--fg-muted); font-size: 13px; }
+  .card .badge {
+    display: inline-block;
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 2px 6px;
+    border-radius: 3px;
+    margin-bottom: 6px;
+  }
+
+  /* callouts */
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    color: var(--fg);
+    padding: 10px 14px;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    margin: 12px 0;
+    font-size: 13px;
+  }
+  .callout.warn  { border-color: var(--amber);  background: var(--amber-soft); }
+  .callout.tip   { border-color: var(--emerald); background: var(--emerald-soft); }
+  .callout.danger{ border-color: var(--rose);   background: var(--rose-soft); }
+
+  /* badge tile demo */
+  .badge-tile {
+    display: inline-flex; flex-direction: column;
+    background: var(--amber-soft);
+    border: 1px solid #fcd34d;
+    color: var(--amber);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 4px 6px 4px 0;
+    width: 200px; vertical-align: top;
+  }
+  .badge-tile .t { font-weight: 700; font-size: 13px; }
+  .badge-tile .d { font-size: 11.5px; opacity: 0.85; margin-top: 2px; }
+
+  /* live demo */
+  .demo {
+    border: 1px dashed var(--border);
+    background: var(--bg-soft);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    margin: 8px 0 14px;
+  }
+  .demo h4 { margin-top: 0; }
+  .demo textarea {
+    width: 100%;
+    min-height: 110px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 10px;
+    border-radius: 4px;
+    resize: vertical;
+  }
+  .demo .out {
+    margin-top: 8px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.55;
+  }
+  .demo .out .out-tag { color: var(--accent-strong); font-weight: 700; }
+  .demo .out .out-attr { color: var(--violet); }
+  .demo .out .out-val { color: var(--emerald); }
+  .demo .out .out-cmt { color: var(--fg-faint); }
+
+  /* keyboard shortcut keys */
+  kbd {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--fg);
+    box-shadow: inset 0 -1px 0 var(--border);
+  }
+
+  /* details/summary */
+  details.cmd {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0;
+    margin: 6px 0;
+    background: var(--bg-soft);
+    overflow: hidden;
+  }
+  details.cmd > summary {
+    cursor: pointer;
+    padding: 10px 14px;
+    list-style: none;
+    display: flex; align-items: baseline; gap: 8px;
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  details.cmd > summary::-webkit-details-marker { display: none; }
+  details.cmd > summary::before {
+    content: "▸"; color: var(--fg-faint); font-family: var(--sans);
+    transition: transform 0.15s;
+  }
+  details.cmd[open] > summary::before { transform: rotate(90deg); display: inline-block; }
+  details.cmd .body {
+    padding: 4px 14px 14px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-elev);
+    font-size: 13px;
+  }
+  details.cmd .body p:first-child { margin-top: 6px; }
+  details.cmd > summary .name { color: var(--accent-strong); font-weight: 700; }
+  details.cmd > summary .desc { color: var(--fg-muted); font-family: var(--sans); }
+
+  .pill {
+    display: inline-block;
+    background: var(--violet-soft);
+    color: var(--violet);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px 6px;
+    border-radius: 3px;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+
+  /* hero slide */
+  .hero {
+    background: linear-gradient(135deg, #0ea5e9 0%, #6366f1 100%);
+    color: white;
+    padding: 40px 36px;
+    border-radius: var(--radius);
+    margin-bottom: 24px;
+    box-shadow: var(--shadow);
+  }
+  .hero h2 { margin: 0; font-size: 36px; font-weight: 800; letter-spacing: -0.03em; }
+  .hero .tagline { font-size: 16px; opacity: 0.95; margin: 8px 0 18px; max-width: 640px; }
+  .hero .pills { display: flex; gap: 10px; flex-wrap: wrap; }
+  .hero .pills span {
+    background: rgba(255,255,255,.15);
+    border: 1px solid rgba(255,255,255,.2);
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    backdrop-filter: blur(4px);
+  }
+
+  /* responsive */
+  @media (max-width: 780px) {
+    .app { grid-template-columns: 1fr; }
+    aside.nav { position: static; height: auto; }
+    main { padding: 24px 18px 60px; }
+  }
+
+  /* hide-via-search support */
+  .nohit { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+<aside class="nav">
+  <div class="brand">
+    <div class="logo">VN</div>
+    <div>
+      <h1>VegaNotes</h1>
+      <small>Guided tour</small>
+    </div>
+  </div>
+
+  <input id="search" class="search" placeholder="Search (press /)" autocomplete="off" />
+
+  <nav>
+    <div class="nav-group">Welcome</div>
+    <ul>
+      <li><a class="nav-item" href="#welcome"><span class="icon">🏁</span>Overview</a></li>
+      <li><a class="nav-item" href="#concepts"><span class="icon">💡</span>Core concepts</a></li>
+    </ul>
+
+    <div class="nav-group">Authoring</div>
+    <ul>
+      <li><a class="nav-item" href="#syntax"><span class="icon">✍️</span>Markdown syntax</a></li>
+      <li><a class="nav-item" href="#tasks"><span class="icon">✅</span>Tasks &amp; ARs</a></li>
+      <li><a class="nav-item" href="#filtering"><span class="icon">🔎</span>Filtering &amp; DSL</a></li>
+    </ul>
+
+    <div class="nav-group">Views</div>
+    <ul>
+      <li><a class="nav-item" href="#views"><span class="icon">🖼️</span>All views</a></li>
+      <li><a class="nav-item" href="#me"><span class="icon">🏆</span>Me / gamification</a></li>
+    </ul>
+
+    <div class="nav-group">CLI</div>
+    <ul>
+      <li><a class="nav-item" href="#cli-install"><span class="icon">📦</span>Install</a></li>
+      <li><a class="nav-item" href="#cli-config"><span class="icon">⚙️</span>vn config</a></li>
+      <li><a class="nav-item" href="#cli-show"><span class="icon">🔭</span>vn show</a></li>
+      <li><a class="nav-item" href="#cli-task"><span class="icon">📌</span>vn task / list / note</a></li>
+      <li><a class="nav-item" href="#cli-me"><span class="icon">🎯</span>vn me</a></li>
+      <li><a class="nav-item" href="#cli-api"><span class="icon">🛠️</span>vn api</a></li>
+    </ul>
+
+    <div class="nav-group">Reference</div>
+    <ul>
+      <li><a class="nav-item" href="#workflows"><span class="icon">📚</span>Recipes</a></li>
+      <li><a class="nav-item" href="#shortcuts"><span class="icon">⌨️</span>Keyboard</a></li>
+    </ul>
+  </nav>
+
+  <div class="toolbar">
+    <button id="theme-toggle" type="button" title="Toggle light / dark">🌓 theme</button>
+    <button id="expand-all" type="button" title="Expand every command">⤵ expand all</button>
+  </div>
+</aside>
+
+<main id="main">
+
+<!-- ============ WELCOME ============ -->
+<section id="welcome" class="tile" data-search>
+  <div class="hero">
+    <h2>VegaNotes</h2>
+    <p class="tagline">Markdown-native task &amp; project tracking for engineers who live in their notes — and a terminal CLI for the ones who live in their shell.</p>
+    <div class="pills">
+      <span>📝 Markdown is the source of truth</span>
+      <span>🧩 Inline token grammar</span>
+      <span>🎯 Solo gamification</span>
+      <span>⚡ React + FastAPI + SQLite</span>
+      <span>🧵 CLI + Web</span>
+    </div>
+  </div>
+
+  <h3>What you can do here</h3>
+  <div class="grid">
+    <div class="card"><span class="badge">Author</span><h4>Write notes</h4><p>Plain <code>.md</code> files. Drop <code>!task</code> tokens to make work trackable without leaving the editor.</p></div>
+    <div class="card"><span class="badge">Plan</span><h4>Pick a view</h4><p>Editor, Kanban, Agenda, Timeline (Gantt), Calendar, Graph, My Tasks, Me. All read the same data.</p></div>
+    <div class="card"><span class="badge">Filter</span><h4>Slice with chips</h4><p>A small DSL — <code>@area=fit-val</code>, <code>eta&gt;=ww18</code>, <code>owner=alice</code> — drives every list.</p></div>
+    <div class="card"><span class="badge">Track</span><h4>Watch progress</h4><p>Per-user stats, streaks, and badges. Celebrations are private and opt-out, no leaderboards.</p></div>
+    <div class="card"><span class="badge">Automate</span><h4>Drive from <code>vn</code></h4><p>Read or mutate everything from your shell. Same data, same auth, no curl gymnastics.</p></div>
+    <div class="card"><span class="badge">Integrate</span><h4>Hit the API</h4><p>Plain REST under <code>/api/</code>. <code>vn api METHOD /api/...</code> is the escape hatch.</p></div>
+  </div>
+
+  <div class="callout tip">
+    <strong>Tip — keyboard navigation.</strong> Press <kbd>/</kbd> to search this tour, <kbd>↑</kbd>/<kbd>↓</kbd> to move between sections, <kbd>?</kbd> to jump to keyboard shortcuts. Click any code block to copy it.
+  </div>
+</section>
+
+<!-- ============ CONCEPTS ============ -->
+<section id="concepts" class="tile" data-search>
+  <h2 class="section-title">💡 Core concepts</h2>
+  <p class="section-sub">A few small ideas that the rest of the product is built on.</p>
+
+  <div class="grid">
+    <div class="card">
+      <h4>Markdown is canonical</h4>
+      <p>Every task lives inside a <code>.md</code> file on disk. The SQLite index is rebuilt from those files; you can edit them in any editor and the UI catches up.</p>
+    </div>
+    <div class="card">
+      <h4>Tokens, not fields</h4>
+      <p><code>!task</code>, <code>#eta</code>, <code>#owner</code>, <code>#priority</code> are inline annotations. The parser is a pure function: <code>parse(md) → {tasks, attrs, refs}</code>.</p>
+    </div>
+    <div class="card">
+      <h4>Stable IDs (<code>#id T-…</code>)</h4>
+      <p>The agenda-roll button injects a 6-character Crockford id into every task. <strong>Keep it</strong> — references and links resolve through it.</p>
+    </div>
+    <div class="card">
+      <h4>Reference rows</h4>
+      <p>A bullet starting with <code>#task T-…</code> is not a new task — it points at the canonical one and any tokens on that line are write-through overrides.</p>
+    </div>
+    <div class="card">
+      <h4>Solo gamification</h4>
+      <p>Stats &amp; badges are <em>private</em> to you. No leaderboards, no comparisons, no manager dashboards. Recordings are server-side; surfacing is per-client.</p>
+    </div>
+    <div class="card">
+      <h4>One auth model</h4>
+      <p>HTTP Basic everywhere. The CLI re-uses <code>~/.veganotes/credentials</code>; the web reuses the browser-cached header. Profiles let you point at multiple servers.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SYNTAX ============ -->
+<section id="syntax" class="tile" data-search>
+  <h2 class="section-title">✍️ Markdown syntax</h2>
+  <p class="section-sub">A small grammar that turns plain markdown into structured work. Unknown tokens are preserved verbatim.</p>
+
+  <h3>Token reference</h3>
+  <table class="tbl">
+    <thead><tr><th>Token</th><th>Meaning</th><th>Example</th></tr></thead>
+    <tbody>
+      <tr><td><code>!task &lt;title&gt;</code></td><td>Declares a task. Title runs until the next known <code>#token</code>.</td><td><code>- !task Wire up auth #eta +2d</code></td></tr>
+      <tr><td><code>!AR &lt;title&gt;</code></td><td>Action-required item. Same shape, kind <code>ar</code>.</td><td><code>- !AR follow up with vendor</code></td></tr>
+      <tr><td><code>#task &lt;ID&gt;</code></td><td>Reference to an existing task. Leading-position = agenda reference row; mid-prose = directed link.</td><td><code>- #task T-A3F9K2 #status done</code></td></tr>
+      <tr><td><code>#id &lt;ID&gt;</code></td><td>Stable identifier auto-injected by the agenda roll (Crockford-base32, 6 chars).</td><td><code>!task Wire SSO #id T-A3F9K2</code></td></tr>
+      <tr><td><code>#eta &lt;when&gt;</code></td><td>Due date. ISO, <code>+2d</code>, <code>tomorrow</code>, <code>next fri</code>, or <code>wwNN[.D]</code>.</td><td><code>#eta ww18.4</code></td></tr>
+      <tr><td><code>#priority &lt;val&gt;</code></td><td>Free user vocabulary (P0..P3, high/med/low).</td><td><code>#priority P1</code></td></tr>
+      <tr><td><code>#project &lt;name&gt;</code></td><td>Project bucket.</td><td><code>#project veganotes</code></td></tr>
+      <tr><td><code>#owner &lt;name&gt;</code></td><td>Owner. Repeat for multiple.</td><td><code>#owner alice #owner bob</code></td></tr>
+      <tr><td><code>#status &lt;val&gt;</code></td><td>Free-form. Trigger words bucket it into <code>todo</code>/<code>in-progress</code>/<code>blocked</code>/<code>done</code> for the Kanban.</td><td><code>#status blocked by HSD approval</code></td></tr>
+      <tr><td><code>#estimate &lt;dur&gt;</code></td><td>Effort: <code>30m</code>, <code>2h</code>, <code>1d</code>, <code>0.5w</code>.</td><td><code>#estimate 4h</code></td></tr>
+      <tr><td><code>#feature &lt;name&gt;</code></td><td>Cross-cutting feature label.</td><td><code>#feature search-rewrite</code></td></tr>
+      <tr><td><code>#link &lt;slug&gt;</code></td><td>Generic bidirectional link.</td><td><code>#link rfc-2026-04</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>Rules of thumb</h3>
+  <ul>
+    <li>A token attaches to the <strong>nearest enclosing</strong> <code>!task</code> — same line or the most recent <code>!task</code> above in the same list block.</li>
+    <li>Indentation is 2 spaces (or one tab = 4). Children become subtasks of their parent.</li>
+    <li>A blank line ends the current task block.</li>
+    <li>Unknown <code>#foo bar</code> tokens are preserved verbatim and round-trip on re-serialize.</li>
+    <li>Reference rows (<code>- #task T-…</code> as the first token) are write-through overrides, not new tasks.</li>
+  </ul>
+
+  <h3>Live token playground</h3>
+  <div class="demo">
+    <h4>Paste markdown — the parser highlights tokens it recognises.</h4>
+    <textarea id="syntax-demo">- !task Wire up SSO #project veganotes #owner alice #eta +5d #priority P1
+  - !task Add login screen #owner bob #eta +6d
+  - !task Add OAuth callback #owner alice #eta +7d #status in-progress
+- !task Migrate index #feature search-rewrite #owner alice #status done
+  Blocked by #task T-A3F9K2 and tracked in #link rfc-2026-04</textarea>
+    <div class="out" id="syntax-out"></div>
+  </div>
+
+  <div class="callout tip"><strong>Pro tip.</strong> Status accepts free-form text. Write <code>#status waiting on PSW review</code> and the Kanban still buckets it as <em>blocked</em> while keeping your prose on disk.</div>
+</section>
+
+<!-- ============ TASKS ============ -->
+<section id="tasks" class="tile" data-search>
+  <h2 class="section-title">✅ Tasks &amp; ARs</h2>
+  <p class="section-sub">The lifecycle of a unit of work, end-to-end.</p>
+
+  <h3>Create</h3>
+  <p>Three equally-good ways:</p>
+  <ul>
+    <li><strong>Inline in a note</strong> — type <code>- !task Do the thing #owner alice #eta +3d</code> anywhere in a list.</li>
+    <li><strong>From the web</strong> — <em>My Tasks</em>, <em>Kanban</em>, and the editor each expose a "+ New" composer that stamps the right tokens for you.</li>
+    <li><strong>From the CLI</strong> — <code>vn note new</code> for a fresh note, or use a <code>vn api POST /api/tasks</code> escape hatch.</li>
+  </ul>
+
+  <h3>Update</h3>
+  <ul>
+    <li><strong>Drag in Kanban</strong> — drop the card in a new column and the underlying markdown is rewritten.</li>
+    <li><strong>Click in Agenda / My Tasks</strong> — popover edits status, owner, priority, eta.</li>
+    <li><strong>Reference row</strong> — in any note, write <code>- #task T-A3F9K2 #status done</code> and the indexer applies the override on save.</li>
+    <li><strong><code>vn task</code></strong> — <code>vn task T-A3F9K2 status=done priority=P1 eta=2026-W18</code>.</li>
+  </ul>
+
+  <h3>Link tasks</h3>
+  <ul>
+    <li>Drop <code>#task T-…</code> mid-sentence to create a directional link.</li>
+    <li>Use <code>#link &lt;slug&gt;</code> for generic many-to-many cross-references.</li>
+    <li>The <em>Graph</em> view renders both as a navigable network.</li>
+  </ul>
+
+  <h3>Action Requests (ARs)</h3>
+  <p><code>!AR</code> is identical to <code>!task</code> with kind <code>ar</code>. Use it when an item is "someone else needs to do this" — the Kanban filters and AR-only badges treat it as a separate stream. Add them inline or with <code>vn api POST /api/tasks/T-…/ars</code>.</p>
+
+  <h3>Anatomy of a worked example</h3>
+  <pre class="code"><span class="tk-cmt"># Sprint 14</span>
+
+- <span class="tk-bang">!task</span> Wire up SSO <span class="tk-hash">#project</span> <span class="tk-arg">veganotes</span> <span class="tk-hash">#owner</span> <span class="tk-arg">alice</span> <span class="tk-hash">#eta</span> <span class="tk-arg">+5d</span> <span class="tk-hash">#priority</span> <span class="tk-arg">P1</span>
+  - <span class="tk-bang">!task</span> Add login screen <span class="tk-hash">#owner</span> <span class="tk-arg">bob</span> <span class="tk-hash">#eta</span> <span class="tk-arg">+6d</span>
+  - <span class="tk-bang">!task</span> Add OAuth callback <span class="tk-hash">#owner</span> <span class="tk-arg">alice</span> <span class="tk-hash">#eta</span> <span class="tk-arg">+7d</span> <span class="tk-hash">#status</span> <span class="tk-arg">in-progress</span>
+- <span class="tk-bang">!task</span> Migrate index <span class="tk-hash">#feature</span> <span class="tk-arg">search-rewrite</span> <span class="tk-hash">#status</span> <span class="tk-arg">done</span>
+  Blocked by <span class="tk-hash">#task</span> <span class="tk-arg">T-A3F9K2</span> and tracked in <span class="tk-hash">#link</span> <span class="tk-arg">rfc-2026-04</span></pre>
+</section>
+
+<!-- ============ FILTERING ============ -->
+<section id="filtering" class="tile" data-search>
+  <h2 class="section-title">🔎 Filtering &amp; DSL</h2>
+  <p class="section-sub">A tiny query language that powers the chip bar and the <code>vn list -w</code> flag.</p>
+
+  <h3>Fixed columns</h3>
+  <p>Every view supports <code>owner</code>, <code>project</code>, <code>feature</code>, <code>priority</code>, <code>status</code>, <code>hide_done</code>, and a free-text <code>q</code> search.</p>
+
+  <h3>Where chips</h3>
+  <p>Click <em>+ chip</em> in the filter bar (or pass <code>-w</code> to <code>vn list</code>) to compose richer predicates:</p>
+  <table class="tbl">
+    <thead><tr><th>Clause</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td><code>owner=alice</code></td><td>Tasks owned by alice.</td></tr>
+      <tr><td><code>@area=fit-val</code></td><td>Match the free-form attribute <code>area</code> with value <code>fit-val</code>.</td></tr>
+      <tr><td><code>eta&gt;=ww18</code></td><td>Range filter; works with ISO, <code>ww</code>, <code>+Nd</code>.</td></tr>
+      <tr><td><code>kind=ar</code></td><td>Only ARs.</td></tr>
+      <tr><td><code>status!=done</code></td><td>Negation.</td></tr>
+      <tr><td><code>title~migrate</code></td><td>Substring match (case-insensitive).</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    Compose multiple chips. They <strong>AND</strong> together. The same string works in the URL bar — bookmarkable views are basically free.
+  </div>
+
+  <h3>Saved views</h3>
+  <p>The <code>+</code> button next to the chip bar saves the current chip set as a named view. They're per-user and synced (<code>GET /api/me/views</code> /  <code>PUT /api/me/views</code>). The <em>command palette</em> (<kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>K</kbd>) jumps to any saved view.</p>
+</section>
+
+<!-- ============ VIEWS ============ -->
+<section id="views" class="tile" data-search>
+  <h2 class="section-title">🖼️ Views</h2>
+  <p class="section-sub">All views read the same indexed task data. Filter chips persist across views.</p>
+
+  <div class="grid">
+    <div class="card"><span class="badge">Default</span><h4>📋 My Tasks</h4><p>The opinionated landing page: your open work, sorted by ETA then priority. Click a row to edit in place.</p></div>
+    <div class="card"><span class="badge">Author</span><h4>📝 Editor</h4><p>WYSIWYG markdown with TipTap. Tasks render as inline cards; saving syncs the file on disk.</p></div>
+    <div class="card"><span class="badge">Plan</span><h4>📊 Kanban</h4><p>Drag-and-drop columns. The status field is rewritten in markdown when you drop a card.</p></div>
+    <div class="card"><span class="badge">Plan</span><h4>📅 Agenda</h4><p>Per-day grouping for the next N days. Excludes <code>done</code>; perfect for stand-ups.</p></div>
+    <div class="card"><span class="badge">Plan</span><h4>📈 Timeline</h4><p>Gantt-style horizontal bars by ETA &amp; estimate. Spot overlapping deadlines at a glance.</p></div>
+    <div class="card"><span class="badge">Plan</span><h4>🗓️ Calendar</h4><p>FullCalendar month view of ETAs. Click a date to filter to it.</p></div>
+    <div class="card"><span class="badge">Explore</span><h4>🕸️ Graph</h4><p>Force-directed view of <code>#task</code> and <code>#link</code> references. Pan/zoom; click a node to focus.</p></div>
+    <div class="card"><span class="badge">You</span><h4>🏆 Me</h4><p>Private stats card, streak, badge grid, history sparkline, and recent activity. <a href="#me">Detail →</a></p></div>
+    <div class="card"><span class="badge">Admin</span><h4>🛡️ Admin</h4><p>User management, password resets, manual reindex. Visible only to admins.</p></div>
+  </div>
+</section>
+
+<!-- ============ ME / GAMIFICATION ============ -->
+<section id="me" class="tile" data-search>
+  <h2 class="section-title">🏆 Me &amp; gamification</h2>
+  <p class="section-sub">Solo, private, opt-out. Designed to be a small dopamine hit, never a comparison engine.</p>
+
+  <h3>What's on the page</h3>
+  <ul>
+    <li><strong>Stats card</strong> — closes today / 7d / 30d / lifetime, notes touched, on-time-ETA rate, favorite project.</li>
+    <li><strong>Streak card</strong> — current + longest streak in days, plus rest tokens (you get 2 per rolling 14-day window — one off day doesn't kill a long run).</li>
+    <li><strong>Badge grid</strong> — earned tiles (amber), locked tiles with progress bars, and a <code>+N hidden</code> footer for badges you'll discover by playing.</li>
+    <li><strong>History sparkline</strong> — closes vs. note edits per day with 7 / 30 / 90 day toggle.</li>
+    <li><strong>Recent activity</strong> — paginated event log, filterable by kind.</li>
+    <li><strong>TZ widget</strong> — your IANA timezone. Streaks roll over at <em>your</em> midnight, not UTC.</li>
+  </ul>
+
+  <h3>Badge catalog (sampler)</h3>
+  <div>
+    <div class="badge-tile"><span class="t">🏆 First Light</span><span class="d">close your first task</span></div>
+    <div class="badge-tile"><span class="t">🏆 Hat Trick</span><span class="d">close 3 tasks in one day</span></div>
+    <div class="badge-tile"><span class="t">🏆 Big Day</span><span class="d">close 5 tasks in one day</span></div>
+    <div class="badge-tile"><span class="t">🏆 Marathoner</span><span class="d">10-day streak</span></div>
+    <div class="badge-tile"><span class="t">🏆 On Time</span><span class="d">close 10 tasks on or before ETA</span></div>
+    <div class="badge-tile"><span class="t">🏆 AR Wrangler</span><span class="d">close 25 ARs</span></div>
+    <div class="badge-tile"><span class="t">🏆 Notebook</span><span class="d">edit notes 50 times</span></div>
+    <div class="badge-tile"><span class="t">🏆 Centurion</span><span class="d">close 100 tasks lifetime</span></div>
+    <div class="badge-tile"><span class="t">🔒 + hidden</span><span class="d">a few you'll discover by playing</span></div>
+  </div>
+
+  <h3>Celebrations</h3>
+  <p>When a write crosses a badge threshold, the API echoes <code>awarded_badges: [...]</code> and the UI pops a 🏆 toast in the corner. The CLI prints <code>unlocked: &lt;Name&gt; — &lt;blurb&gt;</code> after the normal output.</p>
+
+  <h3>Opt-out</h3>
+  <div class="callout warn">
+    <strong>Hide it whenever you want.</strong>
+    <ul style="margin: 6px 0 0 18px;">
+      <li><strong>Web:</strong> the <em>show gamification</em> toggle at the top of the Me page (stored in <code>localStorage</code>).</li>
+      <li><strong>CLI:</strong> <code>vn config gamify=off</code>. Re-enable with <code>vn config gamify=on</code>.</li>
+      <li>The server keeps recording either way, so flipping back on restores your full history.</li>
+      <li><code>vn me tz</code> stays available even with gamification off — TZ is a generic preference.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============ CLI INSTALL ============ -->
+<section id="cli-install" class="tile" data-search>
+  <h2 class="section-title">📦 CLI — install &amp; auth</h2>
+  <p class="section-sub"><code>vn</code> is a stdlib-only Python helper. No third-party deps, runs on Python ≥ 3.9.</p>
+
+  <h3>One-liner install</h3>
+  <pre class="code">/path/to/VegaNotes/tools/vn/install.sh
+<span class="tk-cmt"># Options: --no-editable | --system | --python python3.11 | --uninstall</span></pre>
+
+  <p>Or run pip yourself from the repo root:</p>
+  <pre class="code">python3 -m pip install --user -e VegaNotes/tools/vn
+<span class="tk-cmt"># puts a `vn` shim in ~/.local/bin (drop --user inside a venv)</span></pre>
+
+  <h3>Authenticate</h3>
+  <p>Lookup order, first hit wins:</p>
+  <ol>
+    <li>Env vars — <code>VEGANOTES_URL</code>, <code>VEGANOTES_USER</code>, <code>VEGANOTES_PASS</code>.</li>
+    <li><code>~/.veganotes/credentials</code> (INI):</li>
+  </ol>
+  <pre class="code"><span class="tk-cmt"># ~/.veganotes/credentials</span>
+[default]
+url = http://localhost:8000
+user = alice
+password = s3cret
+
+[prod]
+url = https://veganotes.example.com
+user = alice
+password = otherone</pre>
+
+  <p>Pick a profile other than <code>[default]</code> with <code>--profile prod</code> or <code>VEGANOTES_PROFILE=prod</code>. <code>chmod 600</code> the file.</p>
+</section>
+
+<!-- ============ CLI CONFIG ============ -->
+<section id="cli-config" class="tile" data-search>
+  <h2 class="section-title">⚙️ CLI — <code>vn config</code></h2>
+  <p class="section-sub">Per-profile client-side settings. Stored in <code>~/.veganotes/config</code> (INI).</p>
+
+  <table class="tbl">
+    <thead><tr><th>Key</th><th>Default</th><th>Effect when off</th></tr></thead>
+    <tbody>
+      <tr><td><code>gamify</code></td><td>on</td><td>Hide all <code>vn me &lt;subcommand&gt;</code> output and suppress badge celebrations.</td></tr>
+      <tr><td><code>gamify.notify</code></td><td>on</td><td>Keep stats/badges working, but suppress the <code>unlocked:</code> celebration line.</td></tr>
+    </tbody>
+  </table>
+
+  <pre class="code">vn config                       <span class="tk-cmt"># list keys, values, and which are defaults</span>
+vn config gamify                <span class="tk-cmt"># show one key</span>
+vn config gamify=off            <span class="tk-cmt"># key=value form</span>
+vn config gamify.notify off     <span class="tk-cmt"># space-separated form</span></pre>
+
+  <div class="callout tip">Config flips don't change what the server records. Turn gamification off for a sprint, back on later, your full history is intact.</div>
+</section>
+
+<!-- ============ CLI SHOW ============ -->
+<section id="cli-show" class="tile" data-search>
+  <h2 class="section-title">🔭 CLI — <code>vn show</code></h2>
+  <p class="section-sub">Read-only inspector. Every resource respects <code>--format {table,json,jsonl,csv,ids}</code> and <code>--columns col1,col2,…</code>.</p>
+
+  <details class="cmd" data-search>
+    <summary><span class="name">vn show projects</span> <span class="desc">— list projects you can see</span></summary>
+    <div class="body">
+      <p>Each row: name, role (manager/member). Pass a project name for member list and notes.</p>
+      <pre class="code">vn show projects
+vn show projects ww18
+vn show projects --format json | jq</pre>
+    </div>
+  </details>
+
+  <details class="cmd" data-search>
+    <summary><span class="name">vn show tasks</span> <span class="desc">— filter the task list</span></summary>
+    <div class="body">
+      <p>Same flags as <code>vn list</code>. Add columns:</p>
+      <pre class="code">vn show tasks --owner alice --status open
+vn show tasks --columns +kind-status     <span class="tk-cmt"># add kind, drop status</span>
+vn show tasks -w '@area=fit-val' -w 'eta&gt;=ww18'</pre>
+    </div>
+  </details>
+
+  <details class="cmd" data-search>
+    <summary><span class="name">vn show task T-…</span> <span class="desc">— one task</span></summary>
+    <div class="body">
+      <p>Use <code>--format json</code> to get every field including links and notes:</p>
+      <pre class="code">vn show task T-A3F9K2
+vn show task T-A3F9K2 --format json | jq .links</pre>
+    </div>
+  </details>
+
+  <details class="cmd" data-search>
+    <summary><span class="name">vn show notes</span> <span class="desc">— browse the markdown corpus</span></summary>
+    <div class="body">
+      <pre class="code">vn show notes                      <span class="tk-cmt"># id / path / etag</span>
+vn show notes 42                   <span class="tk-cmt"># one note (header)</span>
+vn show notes 42 --full            <span class="tk-cmt"># include body</span>
+vn show notes projects/ww18/foo.md <span class="tk-cmt"># path also works</span></pre>
+    </div>
+  </details>
+
+  <details class="cmd" data-search>
+    <summary><span class="name">vn show tree</span> <span class="desc">— project → note → task tree</span></summary>
+    <div class="body">
+      <p>Indented map of every project you can see, every note in it, and every task on those notes.</p>
+      <pre class="code">vn show tree</pre>
+    </div>
+  </details>
+
+  <details class="cmd" data-search>
+    <summary><span class="name">vn show agenda</span> <span class="desc">— next-N-days view</span></summary>
+    <div class="body">
+      <pre class="code">vn show agenda --owner alice --days 14</pre>
+    </div>
+  </details>
+
+  <details class="cmd" data-search>
+    <summary><span class="name">vn show links T-…</span> <span class="desc">— inbound &amp; outbound references</span></summary>
+    <div class="body">
+      <pre class="code">vn show links T-A3F9K2</pre>
+    </div>
+  </details>
+
+  <details class="cmd" data-search>
+    <summary><span class="name">vn show search 'query'</span> <span class="desc">— cross-resource search</span></summary>
+    <div class="body">
+      <p>Full-text search over notes and task titles. Returns rows tagged with their resource type.</p>
+      <pre class="code">vn show search 'fit-val'
+vn show search 'sso' --format json</pre>
+    </div>
+  </details>
+
+  <details class="cmd" data-search>
+    <summary><span class="name">vn show me</span> <span class="desc">— self info + saved views</span></summary>
+    <div class="body">
+      <pre class="code">vn show me</pre>
+    </div>
+  </details>
+</section>
+
+<!-- ============ CLI TASK ============ -->
+<section id="cli-task" class="tile" data-search>
+  <h2 class="section-title">📌 CLI — tasks &amp; notes</h2>
+  <p class="section-sub">Everyday mutations from the shell.</p>
+
+  <h3>Mutate a task</h3>
+  <pre class="code">vn task T-A3F9K2 status=done
+vn task T-A3F9K2 status=done priority=P1 eta=2026-W18
+vn task T-A3F9K2 add_note='blocked on PSW review'</pre>
+  <p>Field shorthands: <code>status=</code>, <code>priority=</code>, <code>eta=</code>, <code>owners=alice,bob</code>, <code>features=auth,sso</code>, <code>add_note=…</code> (appends), <code>notes=…</code> (replaces).</p>
+
+  <h3>List tasks</h3>
+  <pre class="code">vn list --owner alice --status open
+vn list -w '@area=fit-val' -w 'eta&gt;=ww18' --sort eta:desc
+vn list --columns id,title,status,eta,owner --format csv</pre>
+
+  <h3>New note</h3>
+  <pre class="code">vn note new --project ww18 --title 'standup notes'
+vn note new --project ww18 --title 'design review' --open  <span class="tk-cmt"># opens $EDITOR</span></pre>
+
+  <h3>Identity check</h3>
+  <pre class="code">vn whoami</pre>
+
+  <div class="callout tip">
+    <strong>Output formats apply everywhere.</strong> <code>--format {table,json,jsonl,csv,ids}</code> works for <code>vn list</code>, <code>vn show *</code>, and <code>vn me *</code>. <code>ids</code> is great for piping into another <code>vn task</code>.
+  </div>
+</section>
+
+<!-- ============ CLI ME ============ -->
+<section id="cli-me" class="tile" data-search>
+  <h2 class="section-title">🎯 CLI — <code>vn me</code></h2>
+  <p class="section-sub">Solo gamification surfaces. All reads, all private.</p>
+
+  <details class="cmd" data-search>
+    <summary><span class="name">vn me stats</span> <span class="desc">— full stats card</span></summary>
+    <div class="body">
+      <pre class="code">vn me stats
+vn --json me stats | jq .current_streak_days</pre>
+    </div>
+  </details>
+
+  <details class="cmd" data-search>
+    <summary><span class="name">vn me streak</span> <span class="desc">— headline streak only</span></summary>
+    <div class="body">
+      <pre class="code">vn me streak</pre>
+    </div>
+  </details>
+
+  <details class="cmd" data-search>
+    <summary><span class="name">vn me history --days 30</span> <span class="desc">— ANSI sparkline of closes/edits per day</span></summary>
+    <div class="body">
+      <pre class="code">vn me history --days 7
+vn me history --days 90</pre>
+    </div>
+  </details>
+
+  <details class="cmd" data-search>
+    <summary><span class="name">vn me activity</span> <span class="desc">— recent event log</span></summary>
+    <div class="body">
+      <pre class="code">vn me activity
+vn me activity --kind task.closed --limit 20
+vn me activity --since 2026-04-01 --until 2026-04-15</pre>
+    </div>
+  </details>
+
+  <details class="cmd" data-search>
+    <summary><span class="name">vn me badges</span> <span class="desc">— earned achievements</span></summary>
+    <div class="body">
+      <pre class="code">vn me badges            <span class="tk-cmt"># earned only</span>
+vn me badges --all      <span class="tk-cmt"># also list locked + progress</span></pre>
+    </div>
+  </details>
+
+  <details class="cmd" data-search>
+    <summary><span class="name">vn me tz</span> <span class="desc">— show / set IANA timezone</span> <span class="pill">always on</span></summary>
+    <div class="body">
+      <p>Exempt from <code>gamify=off</code> because TZ is a general preference.</p>
+      <pre class="code">vn me tz                            <span class="tk-cmt"># show</span>
+vn me tz America/Los_Angeles        <span class="tk-cmt"># set (streaks roll local)</span>
+vn me tz UTC                        <span class="tk-cmt"># reset</span></pre>
+    </div>
+  </details>
+</section>
+
+<!-- ============ CLI API ============ -->
+<section id="cli-api" class="tile" data-search>
+  <h2 class="section-title">🛠️ CLI — <code>vn api</code></h2>
+  <p class="section-sub">Generic HTTP escape hatch for endpoints <code>vn show</code> doesn't cover, prototyping, or admin routes.</p>
+
+  <pre class="code">vn api GET   /api/admin/users
+vn api GET   /api/tasks --query 'project=ww18' --query 'kind=ar'
+vn api POST  /api/projects --json-body '{"name":"ww19"}'
+vn api PATCH /api/tasks/T-A3F9K2 --json-body '{"status":"done"}'</pre>
+
+  <p>Output formats: <code>--format json</code> (default), <code>jsonl</code>, <code>raw</code>. HTTP errors print <code>HTTP &lt;status&gt;: &lt;body&gt;</code> to stderr and exit <code>4</code> (4xx) or <code>5</code> (5xx).</p>
+
+  <div class="callout">
+    The API is documented under <code>/docs</code> on any running server (FastAPI auto-spec). When in doubt, hit <code>vn api GET /openapi.json | jq .paths</code>.
+  </div>
+</section>
+
+<!-- ============ WORKFLOWS ============ -->
+<section id="workflows" class="tile" data-search>
+  <h2 class="section-title">📚 Recipes</h2>
+  <p class="section-sub">Battle-tested patterns the team uses every week.</p>
+
+  <h3>Daily stand-up</h3>
+  <pre class="code">vn show agenda --owner $USER --days 1     <span class="tk-cmt"># what's due today</span>
+vn me streak                              <span class="tk-cmt"># quick morale check</span>
+vn me activity --since $(date -d yesterday +%F)  <span class="tk-cmt"># what you closed</span></pre>
+
+  <h3>Weekly roll</h3>
+  <p>Hit the <em>roll</em> button in the editor (or <code>vn api POST /api/notes/next-week</code>) to copy this week's note forward, stamping any missing <code>#id</code>s.</p>
+
+  <h3>Triage someone else's queue</h3>
+  <pre class="code">vn show tasks --owner alice --status open --columns id,title,eta,priority --format table</pre>
+
+  <h3>Bulk-close stale items</h3>
+  <pre class="code">vn list -w 'eta&lt;ww17' --status open --format ids \
+  | xargs -I{} vn task {} status='dropped — sprint over'</pre>
+
+  <h3>Audit your closes for a sprint</h3>
+  <pre class="code">vn me activity --kind task.closed --since 2026-04-14 --until 2026-04-28 --format csv</pre>
+
+  <h3>Onboard a new project</h3>
+  <pre class="code">vn api POST /api/projects --json-body '{"name":"ww19"}'
+vn api PUT  /api/projects/ww19/members --json-body '{"user_name":"alice","role":"manager"}'</pre>
+</section>
+
+<!-- ============ KEYBOARD ============ -->
+<section id="shortcuts" class="tile" data-search>
+  <h2 class="section-title">⌨️ Keyboard shortcuts</h2>
+  <p class="section-sub">All hand-on-keyboard, no mouse required.</p>
+
+  <h3>This tour</h3>
+  <table class="tbl">
+    <thead><tr><th>Keys</th><th>Action</th></tr></thead>
+    <tbody>
+      <tr><td><kbd>/</kbd></td><td>Focus the search box.</td></tr>
+      <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>Previous / next section.</td></tr>
+      <tr><td><kbd>?</kbd></td><td>Jump to this page.</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>Clear search and unfocus.</td></tr>
+      <tr><td><kbd>T</kbd></td><td>Toggle light / dark theme.</td></tr>
+      <tr><td><kbd>E</kbd></td><td>Expand all command details.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>VegaNotes web app</h3>
+  <table class="tbl">
+    <thead><tr><th>Keys</th><th>Action</th></tr></thead>
+    <tbody>
+      <tr><td><kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>K</kbd></td><td>Open the command palette.</td></tr>
+      <tr><td><kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Save the current note.</td></tr>
+      <tr><td><kbd>?</kbd></td><td>Quick chip cheatsheet (in the filter bar).</td></tr>
+    </tbody>
+  </table>
+
+  <h3>CLI conveniences</h3>
+  <ul>
+    <li><code>vn --json &lt;cmd&gt;</code> swaps output to raw JSON for any command.</li>
+    <li><code>vn -p &lt;profile&gt; …</code> picks an alternate auth profile.</li>
+    <li><code>vn show … --columns +foo-bar</code> adds <code>foo</code> to the default columns and removes <code>bar</code>.</li>
+    <li>All <code>vn list</code> / <code>vn show</code> commands accept <code>-w</code> chips repeatedly.</li>
+  </ul>
+
+  <div class="callout tip">
+    Found a missing feature or a typo? Open an issue on
+    <a href="https://github.com/intelprasada/nsaddaga.PcoreFitScripts/issues" target="_blank" rel="noopener">GitHub</a>
+    or run <code>vn api POST /api/notes</code> with a feedback note in your inbox project.
+  </div>
+</section>
+
+</main>
+
+</div>
+
+<script>
+(function(){
+  // ---------- copy-to-clipboard for every <pre.code> ----------
+  document.querySelectorAll('pre.code').forEach(function(pre){
+    var btn = document.createElement('button');
+    btn.className = 'copy';
+    btn.type = 'button';
+    btn.textContent = 'copy';
+    btn.addEventListener('click', function(ev){
+      ev.stopPropagation();
+      var txt = pre.innerText.replace(/^copy\n?/, '');
+      navigator.clipboard.writeText(txt).then(function(){
+        btn.textContent = 'copied';
+        btn.classList.add('copied');
+        setTimeout(function(){ btn.textContent = 'copy'; btn.classList.remove('copied'); }, 1200);
+      }).catch(function(){
+        btn.textContent = 'failed';
+        setTimeout(function(){ btn.textContent = 'copy'; }, 1200);
+      });
+    });
+    pre.appendChild(btn);
+  });
+
+  // ---------- scroll-spy for the sidebar ----------
+  var navLinks = Array.prototype.slice.call(document.querySelectorAll('aside.nav a.nav-item'));
+  var sections = navLinks.map(function(a){
+    var id = a.getAttribute('href').slice(1);
+    return { link: a, el: document.getElementById(id) };
+  }).filter(function(s){ return s.el; });
+
+  function activateFor(id){
+    navLinks.forEach(function(a){
+      a.classList.toggle('active', a.getAttribute('href') === '#' + id);
+    });
+  }
+
+  var io = new IntersectionObserver(function(entries){
+    var visible = entries.filter(function(e){ return e.isIntersecting; });
+    if (visible.length === 0) return;
+    visible.sort(function(a,b){ return a.target.offsetTop - b.target.offsetTop; });
+    activateFor(visible[0].target.id);
+  }, { rootMargin: '-30% 0px -55% 0px', threshold: 0 });
+  sections.forEach(function(s){ io.observe(s.el); });
+
+  // ---------- theme toggle ----------
+  var html = document.documentElement;
+  function setTheme(t){
+    html.setAttribute('data-theme', t);
+    try { localStorage.setItem('vn-help-theme', t); } catch (e) {}
+  }
+  try {
+    var saved = localStorage.getItem('vn-help-theme');
+    if (saved === 'dark' || saved === 'light') setTheme(saved);
+    else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) setTheme('dark');
+  } catch (e) {}
+  document.getElementById('theme-toggle').addEventListener('click', function(){
+    setTheme(html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  });
+
+  // ---------- expand-all toggle ----------
+  document.getElementById('expand-all').addEventListener('click', function(){
+    var details = document.querySelectorAll('details.cmd');
+    var anyClosed = Array.prototype.some.call(details, function(d){ return !d.open; });
+    details.forEach(function(d){ d.open = anyClosed; });
+  });
+
+  // ---------- search ----------
+  var search = document.getElementById('search');
+  function applySearch(q){
+    q = (q || '').trim().toLowerCase();
+    document.querySelectorAll('section.tile').forEach(function(sec){
+      var allDetails = sec.querySelectorAll('details.cmd');
+      var sectionMatch = q === '' || sec.innerText.toLowerCase().indexOf(q) !== -1;
+      sec.classList.toggle('nohit', !sectionMatch);
+      // Also auto-expand every <details> that contains the query.
+      allDetails.forEach(function(d){
+        if (q !== '' && d.innerText.toLowerCase().indexOf(q) !== -1) d.open = true;
+      });
+    });
+  }
+  search.addEventListener('input', function(){ applySearch(search.value); });
+
+  // ---------- live syntax highlighter ----------
+  var KNOWN = ['task','id','eta','priority','project','owner','status','estimate','feature','link'];
+  function escapeHtml(s){ return s.replace(/[&<>]/g, function(c){ return c==='&'?'&amp;':c==='<'?'&lt;':'&gt;'; }); }
+  function highlightLine(line){
+    // !task / !AR
+    line = line.replace(/^(\s*-\s*)?(\!task|\!AR)\b(.*)$/, function(_, lead, bang, rest){
+      lead = lead || '';
+      return escapeHtml(lead) + '<span class="out-tag">' + escapeHtml(bang) + '</span>' + highlightTokens(rest);
+    });
+    if (line.indexOf('out-tag') !== -1) return line;
+    // reference rows / tokens in plain prose
+    return highlightTokens(line);
+  }
+  function highlightTokens(rest){
+    return escapeHtml(rest).replace(/(#(?:task|id|eta|priority|project|owner|status|estimate|feature|link))(\s+)([^\s#]+)/g,
+      function(_, k, sp, v){
+        return '<span class="out-attr">' + k + '</span>' + sp + '<span class="out-val">' + v + '</span>';
+      });
+  }
+  var demo = document.getElementById('syntax-demo');
+  var out = document.getElementById('syntax-out');
+  function renderDemo(){
+    var lines = demo.value.split('\n');
+    out.innerHTML = lines.map(highlightLine).join('\n');
+  }
+  if (demo) {
+    demo.addEventListener('input', renderDemo);
+    renderDemo();
+  }
+
+  // ---------- keyboard shortcuts ----------
+  function activeIndex(){
+    var hash = window.location.hash || '#welcome';
+    for (var i=0;i<sections.length;i++) if ('#' + sections[i].el.id === hash) return i;
+    return 0;
+  }
+  document.addEventListener('keydown', function(ev){
+    if (ev.target && (ev.target.tagName === 'INPUT' || ev.target.tagName === 'TEXTAREA')) {
+      if (ev.key === 'Escape') { ev.target.blur(); if (search.value) { search.value=''; applySearch(''); } }
+      return;
+    }
+    if (ev.key === '/') { ev.preventDefault(); search.focus(); search.select(); return; }
+    if (ev.key === '?') { ev.preventDefault(); window.location.hash = '#shortcuts'; return; }
+    if (ev.key === 't' || ev.key === 'T') { setTheme(html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'); return; }
+    if (ev.key === 'e' || ev.key === 'E') { document.getElementById('expand-all').click(); return; }
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      var i = activeIndex();
+      var next = ev.key === 'ArrowDown' ? Math.min(sections.length - 1, i + 1) : Math.max(0, i - 1);
+      window.location.hash = '#' + sections[next].el.id;
+    }
+  });
+})();
+</script>
+
+</body>
+</html>

@@ -9,6 +9,7 @@ import { GraphView } from "./components/Graph/GraphView";
 import { MyTasksView } from "./components/Tasks/MyTasksView";
 import { MeView } from "./components/Me/MeView";
 import { UnlockToast } from "./components/Me/UnlockToast";
+import { HelpView } from "./components/Help/HelpView";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { NoteEditor } from "./components/Editor/NoteEditor";
 import { Sidebar } from "./components/Sidebar/Sidebar";
@@ -34,6 +35,7 @@ function ViewSwitcher({ selectedPath, setSelectedPath, draft, setDraft }: {
     case "admin":     return <AdminPanel />;
     case "my-tasks":  return <MyTasksView />;
     case "me":        return <MeView />;
+    case "help":      return <HelpView />;
     case "editor":    return <EditorPane selectedPath={selectedPath} setSelectedPath={setSelectedPath} draft={draft} setDraft={setDraft} />;
   }
 }
@@ -627,8 +629,8 @@ function NavBar() {
   const { view, set } = useUI();
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => api.me() });
   const [changingPw, setChangingPw] = useState(false);
-  const tabs: ("editor" | "kanban" | "agenda" | "timeline" | "calendar" | "graph" | "admin" | "my-tasks" | "me")[] = [
-    "my-tasks", "editor", "kanban", "agenda", "timeline", "calendar", "graph", "me",
+  const tabs: ("editor" | "kanban" | "agenda" | "timeline" | "calendar" | "graph" | "admin" | "my-tasks" | "me" | "help")[] = [
+    "my-tasks", "editor", "kanban", "agenda", "timeline", "calendar", "graph", "me", "help",
   ];
   if (me?.is_admin) tabs.push("admin");
 
