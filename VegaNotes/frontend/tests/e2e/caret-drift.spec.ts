@@ -145,24 +145,33 @@ for (const flavor of ["classic", "cm6", "lexical"] as const) {
       await seedNote(request, makeBody());
     });
 
-    if (flavor !== "classic") {
-      test.skip(`${flavor} keeps caret on click after scroll (pending #164/#165)`, async () => {});
+    if (flavor === "lexical") {
+      test.skip("lexical keeps caret on click after scroll (pending #165)", async () => {});
       return;
     }
 
-    test.fail(
-      "classic keeps caret on click after scroll (known-failing — see #155)",
-      async ({ page, request }) => {
-        await openNote(page);
-        await scrollAndClickTarget(page, "classic");
-        await page.keyboard.type(SENTINEL);
-        await page.keyboard.press(process.platform === "darwin" ? "Meta+S" : "Control+S");
-        await page.waitForTimeout(1500);
-        const after = await readNote(request);
-        const expected = `Line ${String(TARGET_LINE).padStart(3, "0")}: __${SENTINEL}MARKER__`;
-        const lines = after.split("\n");
-        expect(lines[TARGET_LINE - 1]).toBe(expected);
-      },
-    );
+    // Shared assertion body — Classic uses test.fail() (known-bad);
+    // CM6 (#164) is expected to pass.  Lexical (#165) flips to a real
+    // test() once that flavor lands.
+    const body = async ({ page, request }: { page: Page; request: APIRequestContext }) => {
+      await openNote(page);
+      await scrollAndClickTarget(page, flavor);
+      await page.keyboard.type(SENTINEL);
+      await page.keyboard.press(process.platform === "darwin" ? "Meta+S" : "Control+S");
+      await page.waitForTimeout(1500);
+      const after = await readNote(request);
+      const expected = `Line ${String(TARGET_LINE).padStart(3, "0")}: __${SENTINEL}MARKER__`;
+      const lines = after.split("\n");
+      expect(lines[TARGET_LINE - 1]).toBe(expected);
+    };
+
+    if (flavor === "classic") {
+      test.fail(
+        "classic keeps caret on click after scroll (known-failing — see #155)",
+        body,
+      );
+    } else {
+      test("cm6 keeps caret on click after scroll (#164)", body);
+    }
   });
 }
