@@ -2,11 +2,13 @@ import { useEditorPrefs } from "../../store/editorPrefs";
 import { CM6Editor } from "./CM6Editor";
 import { ClassicEditor } from "./ClassicEditor";
 import { EditorFlavorTabs } from "./EditorFlavorTabs";
+import { LexicalEditor } from "./LexicalEditor";
 import type { EditorFlavor, EditorHostProps } from "./types";
 
 const FLAVORS: Record<EditorFlavor, React.FC<EditorHostProps>> = {
   classic: ClassicEditor,
   cm6: CM6Editor,
+  lexical: LexicalEditor,
 };
 
 /**

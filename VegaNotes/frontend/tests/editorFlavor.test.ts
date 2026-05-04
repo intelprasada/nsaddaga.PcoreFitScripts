@@ -12,8 +12,8 @@ beforeEach(() => {
 });
 
 describe("EditorFlavor metadata", () => {
-  it("declares classic + cm6 in a stable order (lexical retired post-bake-off)", () => {
-    expect(ALL_FLAVORS).toEqual(["classic", "cm6"]);
+  it("declares exactly three flavors in a stable order", () => {
+    expect(ALL_FLAVORS).toEqual(["classic", "cm6", "lexical"]);
   });
 
   it("provides a label and prototype flag for every flavor", () => {
@@ -24,9 +24,10 @@ describe("EditorFlavor metadata", () => {
     }
   });
 
-  it("marks CM6 as a prototype; Classic is not", () => {
+  it("marks CM6 and Lexical as prototypes; Classic is not", () => {
     expect(FLAVOR_PROTOTYPE.classic).toBe(false);
     expect(FLAVOR_PROTOTYPE.cm6).toBe(true);
+    expect(FLAVOR_PROTOTYPE.lexical).toBe(true);
   });
 });
 
