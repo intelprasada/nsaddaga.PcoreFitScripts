@@ -15,19 +15,17 @@ export interface EditorHostProps {
   requestSave?: () => void;
 }
 
-export type EditorFlavor = "classic" | "cm6" | "lexical";
+export type EditorFlavor = "classic" | "cm6";
 
-export const ALL_FLAVORS: EditorFlavor[] = ["classic", "cm6", "lexical"];
+export const ALL_FLAVORS: EditorFlavor[] = ["classic", "cm6"];
 
 export const FLAVOR_LABEL: Record<EditorFlavor, string> = {
   classic: "Classic",
   cm6: "CM6",
-  lexical: "Lexical",
 };
 
 /** Prototype tabs are badged so users know they're experimental. */
 export const FLAVOR_PROTOTYPE: Record<EditorFlavor, boolean> = {
   classic: false,
   cm6: true,
-  lexical: true,
 };

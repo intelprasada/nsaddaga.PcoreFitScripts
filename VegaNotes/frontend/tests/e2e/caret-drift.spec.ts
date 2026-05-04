@@ -138,24 +138,15 @@ async function scrollAndClickTarget(page: Page, flavor: EditorFlavor) {
     .click({ position: { x: 0, y: 0 } });
 }
 
-for (const flavor of ["classic", "cm6", "lexical"] as const) {
+for (const flavor of ["classic", "cm6"] as const) {
   test.describe(`caret fidelity — ${flavor}`, () => {
     test.beforeEach(async ({ page, request }) => {
       await selectFlavor(page, flavor);
       await seedNote(request, makeBody());
     });
 
-    if (flavor === "lexical") {
-      // Lexical wraps TextNodes in our custom <span class="vega-…"> highlights,
-      // so the line text is rendered as a series of inline spans inside a
-      // contenteditable paragraph rather than a single .cm-content node.
-      // The shared scrollAndClickTarget() helper handles both cases via the
-      // ".cm-content, [contenteditable='true']" locator.
-    }
-
     // Shared assertion body — Classic uses test.fail() (known-bad);
-    // CM6 (#164) is expected to pass.  Lexical (#165) flips to a real
-    // test() once that flavor lands.
+    // CM6 (#164) is expected to pass.
     const body = async ({ page, request }: { page: Page; request: APIRequestContext }) => {
       await openNote(page);
       await scrollAndClickTarget(page, flavor);
@@ -173,10 +164,8 @@ for (const flavor of ["classic", "cm6", "lexical"] as const) {
         "classic keeps caret on click after scroll (known-failing — see #155)",
         body,
       );
-    } else if (flavor === "cm6") {
-      test("cm6 keeps caret on click after scroll (#164)", body);
     } else {
-      test("lexical keeps caret on click after scroll (#165)", body);
+      test("cm6 keeps caret on click after scroll (#164)", body);
     }
   });
 }
