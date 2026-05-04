@@ -38,3 +38,8 @@ dist/
 # Build artifacts
 backend/app/static/
 VegaNotes/*.db
+
+# Playwright
+frontend/playwright-report/
+frontend/test-results/
+frontend/.playwright/
