@@ -119,7 +119,13 @@ export function CM6Editor({
 
     const state = EditorState.create({
       doc: value,
+      // Required for vim's blockwise visual mode (Ctrl-v): the package
+      // models a column band as one selection range per line, and CM6
+      // collapses multi-range selections by default unless this facet
+      // is set.  Cheap to enable globally.
+      selection: { anchor: 0 },
       extensions: [
+        EditorState.allowMultipleSelections.of(true),
         // vim() must come BEFORE other keymaps so it can intercept Esc /
         // hjkl / : etc. before defaultKeymap consumes them.  Toggled via
         // a Compartment so the user can flip it on/off without losing
@@ -152,7 +158,7 @@ export function CM6Editor({
         }),
         history(),
         highlightActiveLine(),
-        highlightSelectionMatches(),
+        highlightSelectionMatches({ minSelectionLength: 2 }),
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap, ...searchKeymap]),
         saveKeymap,
         vegaHighlighter(),
