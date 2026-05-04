@@ -66,11 +66,11 @@
 
 @Muana
 	#project jnc
-		!task #id T-8V3204 IFU ramp up 
-			!AR #id T-5DY4HK Study in use bit and array concept #status done
-			!AR #id T-XHZD85 Study MITE reduction penalty feature #status done 
-			!AR #id T-1RMTZT iTLB #eta ww18 #status wip
-		!task #id T-SYNYEP Use GHCP to study fv_VIdPid_chk #eta ww19
+		!task #id T-8V3204 IFU ramp up #status in-progress
+			!AR #id T-5DY4HK Study in use bit and array concept
+			!AR #id T-XHZD85 Study MITE reduction penalty feature
+			!AR #id T-1RMTZT iTLB #eta ww18
+		!task #id T-SYNYEP Use GHCP to study fv_VIdPid_chk #eta ww19 #status in-progress
 			!AR #id T-J0DHG8 Convert to SMT #eta ww19
 	#project gfc
 		!task #id T-0C8D86 bucket debug 
@@ -139,17 +139,18 @@
 			!AR #id T-S3B7ZW created yaml packet, tlm infrastructure and tracker @Gautham #status done
 			!AR #id T-D6JB94 verified cycle accuracy of packet signals @Gautham #status done
 			!AR #id T-RZBY17 review and update with corrected signals and columns @Gautham #status done
-			!AR #id T-R6GWND Code review/ TI @Gautham
+			!AR #id T-R6GWND Code review/ TI @Gautham #status in-progress
+			!AR #id T-8P8RPW core txte failed with merge from master. debug @Gautham #status in-progress
 		!task #id T-VREJ1D updating coverage for fe_ifu_tlm_cov.e for SMT #status wip 
 			!AR #id T-4FEBGG verify covers being hit for smt_core_gating.list @Gautham #status in-progress
 			!AR #id T-31QEAV coded thread scoping @Gautham #status done
 			!AR #id T-GKDB9P verify if threads are being differentiated with core_gaitng.list @Gautham #status done
-			!AR #id T-Q1S4R7 revise val plan with thread-aware signals @Gautham
+			!AR #id T-Q1S4R7 revise val plan with thread-aware signals @Gautham #status in-progress
 			!AR #id T-XTFDVA verify rtl signal names from .vs file @Gautham
 			!AR #id T-1ZDG4T add additional coverage for SMT @Gautham
-		!task #id T-TSRF81 IDQ Ramp up #status wip 
-			!AR #id T-Q2F4T2 LSD, BIQ checker #eta ww18 #status done
-			!AR #id T-44JP6F create presentation @Gautham #status in-progress
+		!task #id T-TSRF81 IDQ Ramp up #status done 
+			!AR #id T-Q2F4T2 LSD, BIQ checker #eta ww18
+			!AR #id T-44JP6F create presentation @Gautham
 @Yongxi
 	#project csk
 		!task #id T-JV6MZH MRQ (mop recover queue) preloader/injector #status done
@@ -178,10 +179,10 @@
 	#project jnc
 		!task #id T-5R1062 IFU val plan review #eta ww21
 
-!task #id T-P7QS48 Full Code coverage GFC @Gautham
+!task #id T-P7QS48 Full Code coverage GFC @Gautham #status in-progress #eta 2026-ww19
 	#note Required changes:
 	#note - in commands provided, switch OOO to FE
 	#note - simgress command update:
 	#note simregress -dut fe -cost_source ooo -reg_type debug_regression -l $MODEL_ROOT/core/ooo/reglist/gfc_weekly_regression.list -trex -cfg_sw COVERAGE=COLLECT -cfg_sw- -trex- -collect_coverage -trex -ms -vcs -cm fsm+assert+branch+line+tgl+cond -vcs- -ms- -vms_args -project gfc -stepping gfc-a0 -super_cluster ip -cluster ooo -te_platform sim -ind_scope fe_cc -vms_args- -trex- &
 	!AR #id T-FJ0M34 make required changes based off doc/email @Gautham
-	!AR #id T-G9W18Y run coverage @Gautham
+	!AR #id T-G9W18Y run coverage @Gautham #status in-progress
