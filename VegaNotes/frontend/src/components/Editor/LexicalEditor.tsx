@@ -3,6 +3,8 @@ import {
   $getRoot,
   $createParagraphNode,
   $createTextNode,
+  $createLineBreakNode,
+  $isLineBreakNode,
   TextNode,
   COMMAND_PRIORITY_HIGH,
   KEY_DOWN_COMMAND,
@@ -23,27 +25,45 @@ import type { EditorHostProps } from "./types";
 /**
  * Lexical prototype editor (#165 / umbrella #162).
  *
- * Pragmatic shape for a plain-text + inline syntax-highlight surface:
- *   * `@lexical/plain-text` gives us Enter→line-break, paste cleanup, etc.
- *   * Per-line text is held in `ParagraphNode > TextNode` blocks. Reading
- *     value back uses `$getRoot().getTextContent()` which joins blocks
- *     with "\n", round-tripping the markdown source verbatim.
- *   * A NodeTransform scans every TextNode for VegaNotes tokens (same
- *     regex set as Classic + CM6) and replaces matched substrings with
- *     `VegaTokenNode` — a TextNode subclass whose DOM is wrapped in a
- *     `<span class="vega-…">` so it picks up the existing globals.css
- *     styling without duplication.
- *   * Mod-s is intercepted via KEY_DOWN_COMMAND at high priority so the
- *     browser's native "Save Page" prompt never fires.
+ * Document model: a SINGLE root-level ParagraphNode whose inline children
+ * are alternating `TextNode`s and `LineBreakNode`s — one TextNode per
+ * source line, separated by inline LineBreakNodes.
+ *
+ * Why this shape (vs. the obvious "one ParagraphNode per line"):
+ *   * Lexical's reconciler joins **non-inline (block-level) children** of
+ *     the root with `DOUBLE_LINE_BREAK` ("\n\n").  A paragraph-per-line
+ *     layout therefore made `$getRoot().getTextContent()` return doubled
+ *     newlines, which fed back through `OnChangePlugin → onChange →
+ *     flushSave` and grew the file on disk on every settle (#167).
+ *   * Inline siblings inside a single paragraph are concatenated WITHOUT
+ *     `DOUBLE_LINE_BREAK`; `LineBreakNode.getTextContent()` returns "\n"
+ *     natively (see node_modules/lexical/Lexical.dev.mjs:4639).  So the
+ *     single-paragraph + LineBreakNode model lets the native fast-path
+ *     `getTextContent()` return the correct round-trip text with zero
+ *     post-processing on the JS side.
+ *   * `@lexical/plain-text` already routes Enter through
+ *     `INSERT_LINE_BREAK_COMMAND` rather than splitting the paragraph,
+ *     so user typing produces exactly this shape natively — only the
+ *     initial mount/value-sync code has to match it.
+ *
+ * Other concerns:
+ *   * Mod-s is intercepted via `KEY_DOWN_COMMAND` at HIGH priority so
+ *     the browser's "Save Page" prompt never fires.
  *   * External value changes (NFS reload from disk) replace the editor
  *     state only when the on-screen text actually differs, so typing
  *     isn't clobbered by an in-flight reload.
+ *   * A NodeTransform on TextNode scans every text fragment for the
+ *     same VegaNotes tokens as Classic + CM6 and replaces matched
+ *     substrings with `VegaTokenNode` (a TextNode subclass whose DOM
+ *     wraps in <span class="vega-…">) — visuals come straight from
+ *     globals.css with no duplication.  Because each line lives in its
+ *     own TextNode separated by LineBreakNodes, line-anchored regexes
+ *     (^...$) work without surprises.
  *
  * Caveats vs. CM6:
  *   * No native viewport virtualisation — large notes (10k+ lines) will
- *     paint slower than CM6. Acceptable for the bake-off; will surface
- *     in the perf harness (umbrella #162).
- *   * No line-numbers gutter / search / vim keymap out of the box.
+ *     paint slower than CM6.
+ *   * No line-numbers gutter / search panel / vim keymap out of the box.
  */
 export function LexicalEditor(props: EditorHostProps) {
   const initialConfig = {
@@ -310,12 +330,22 @@ function GotoLinePlugin({ gotoLine }: { gotoLine?: number }) {
     if (!gotoLine || gotoLine < 1) return;
     editor.update(() => {
       const root = $getRoot();
-      const children = root.getChildren();
-      const idx = Math.min(gotoLine, children.length) - 1;
-      const target = children[idx];
-      if (!target) return;
-      // Scroll target into view; selection placement is a best-effort
-      // affordance for the click-to-jump UX.
+      const para = root.getFirstChild();
+      if (!para) return;
+      // Single-paragraph layout: walk inline children counting LineBreakNodes
+      // to locate the start of the requested 1-based source line. Selection
+      // placement / caret is best-effort; the visible scroll is what matters
+      // for the click-to-jump UX.
+      const want = gotoLine - 1;
+      let lineIdx = 0;
+      let target: ReturnType<typeof root.getFirstChild> = para;
+      // @ts-expect-error - getChildren exists on ElementNode at runtime
+      const inline = (para.getChildren?.() ?? []) as Array<ReturnType<typeof root.getFirstChild>>;
+      for (const child of inline) {
+        if (lineIdx === want) { target = child; break; }
+        if (child && $isLineBreakNode(child)) lineIdx++;
+      }
+      if (!target) target = para;
       const dom = editor.getElementByKey(target.getKey());
       if (dom && "scrollIntoView" in dom) {
         (dom as HTMLElement).scrollIntoView({ block: "center" });
@@ -327,9 +357,22 @@ function GotoLinePlugin({ gotoLine }: { gotoLine?: number }) {
 
 /* ---------- helpers ------------------------------------------------------- */
 
+/* ---------- helpers (test-exported) -------------------------------------- */
+
+export function _editorPlainText_forTest(editor: LexicalEditorType): string {
+  return editorPlainText(editor);
+}
+export function _setEditorPlainText_forTest(editor: LexicalEditorType, value: string): void {
+  setEditorPlainText(editor, value);
+}
+
 function editorPlainText(editor: LexicalEditorType): string {
   let text = "";
   editor.getEditorState().read(() => {
+    // Single-paragraph layout: native `getTextContent()` is the fast path.
+    // The root's only block child is one ParagraphNode whose inline children
+    // (TextNodes + LineBreakNodes) are concatenated WITHOUT
+    // `DOUBLE_LINE_BREAK`, so this returns the source markdown verbatim.
     text = $getRoot().getTextContent();
   });
   return text;
@@ -339,11 +382,12 @@ function setEditorPlainText(editor: LexicalEditorType, value: string): void {
   editor.update(() => {
     const root = $getRoot();
     root.clear();
+    const para = $createParagraphNode();
     const lines = value.split("\n");
-    for (const line of lines) {
-      const p = $createParagraphNode();
-      if (line.length > 0) p.append($createTextNode(line));
-      root.append(p);
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].length > 0) para.append($createTextNode(lines[i]));
+      if (i < lines.length - 1) para.append($createLineBreakNode());
     }
+    root.append(para);
   });
 }
