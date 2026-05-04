@@ -424,7 +424,12 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
         </div>
       )}
       <div className="flex-1 overflow-auto">
-        <NoteEditor value={body} onChange={onChange} readOnly={!canWrite} />
+        <NoteEditor
+          value={body}
+          onChange={onChange}
+          readOnly={!canWrite}
+          requestSave={() => { if (selectedPath && entry) void flushSave(selectedPath, entry.body); }}
+        />
       </div>
       <div className="flex gap-2 flex-wrap">
         <button className="rounded bg-sky-600 text-white px-3 py-1 text-sm disabled:opacity-50"
