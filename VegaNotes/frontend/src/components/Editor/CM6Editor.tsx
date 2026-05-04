@@ -8,6 +8,7 @@ import {
   highlightActiveLineGutter,
   Decoration,
   ViewPlugin,
+  drawSelection,
 } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import {
@@ -126,6 +127,10 @@ export function CM6Editor({
         vimCompartment.current.of(vimEnabled ? vim() : []),
         lineNumbers(),
         highlightActiveLineGutter(),
+        // drawSelection paints CM6's own selection layer (instead of the
+        // native browser one) — required for vim's visual-block (Ctrl-v)
+        // rectangular selection to render across multiple lines.
+        drawSelection(),
         history(),
         highlightActiveLine(),
         highlightSelectionMatches(),
