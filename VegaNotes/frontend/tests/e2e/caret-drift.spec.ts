@@ -146,8 +146,11 @@ for (const flavor of ["classic", "cm6", "lexical"] as const) {
     });
 
     if (flavor === "lexical") {
-      test.skip("lexical keeps caret on click after scroll (pending #165)", async () => {});
-      return;
+      // Lexical wraps TextNodes in our custom <span class="vega-…"> highlights,
+      // so the line text is rendered as a series of inline spans inside a
+      // contenteditable paragraph rather than a single .cm-content node.
+      // The shared scrollAndClickTarget() helper handles both cases via the
+      // ".cm-content, [contenteditable='true']" locator.
     }
 
     // Shared assertion body — Classic uses test.fail() (known-bad);
@@ -170,8 +173,10 @@ for (const flavor of ["classic", "cm6", "lexical"] as const) {
         "classic keeps caret on click after scroll (known-failing — see #155)",
         body,
       );
-    } else {
+    } else if (flavor === "cm6") {
       test("cm6 keeps caret on click after scroll (#164)", body);
+    } else {
+      test("lexical keeps caret on click after scroll (#165)", body);
     }
   });
 }
