@@ -18,6 +18,7 @@ import {
   indentWithTab,
 } from "@codemirror/commands";
 import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
+import { indentUnit } from "@codemirror/language";
 import { vim, Vim, getCM } from "@replit/codemirror-vim";
 import { useEditorPrefs } from "../../store/editorPrefs";
 import type { EditorHostProps } from "./types";
@@ -37,6 +38,40 @@ function ensureVimSaveBinding(saveRef: { current: (() => void) | undefined }) {
   // instance's requestSave callback.
   Vim.defineEx("write", "w", () => { pendingSaveRef?.current?.(); });
   Vim.defineEx("update", "up", () => { pendingSaveRef?.current?.(); });
+}
+
+// Module-level latch: register vim :set options once.  These are *global*
+// to the vim runtime (the package keeps a single options registry), so
+// re-registering on every mount would just stomp the same names.  The
+// callbacks fan out to per-editor Compartments via a small registry that
+// every active CM6Editor adds itself to on mount.
+type VimOpts = {
+  number: boolean;
+  wrap: boolean;
+  tabstop: number;
+};
+const vimOptApplicators = new Set<(opts: Partial<VimOpts>) => void>();
+let vimSetBound = false;
+function ensureVimSetBindings() {
+  if (vimSetBound) return;
+  vimSetBound = true;
+  // :set number / :set nonumber / :set nu! / :set nu?
+  Vim.defineOption("number", true, "boolean", ["nu"], (val) => {
+    if (val === undefined) return undefined;
+    vimOptApplicators.forEach((fn) => fn({ number: !!val }));
+  });
+  // :set wrap / :set nowrap
+  Vim.defineOption("wrap", true, "boolean", [], (val) => {
+    if (val === undefined) return undefined;
+    vimOptApplicators.forEach((fn) => fn({ wrap: !!val }));
+  });
+  // :set tabstop=N / :set ts=N / :set ts?
+  Vim.defineOption("tabstop", 4, "number", ["ts"], (val) => {
+    if (val === undefined) return undefined;
+    const n = Number(val);
+    if (!Number.isFinite(n) || n < 1 || n > 16) return;
+    vimOptApplicators.forEach((fn) => fn({ tabstop: n }));
+  });
 }
 
 /**
@@ -82,6 +117,9 @@ export function CM6Editor({
   const externalValueRef = useRef(value);
   const readOnlyCompartment = useRef(new Compartment());
   const vimCompartment = useRef(new Compartment());
+  const numberCompartment = useRef(new Compartment());
+  const wrapCompartment = useRef(new Compartment());
+  const tabSizeCompartment = useRef(new Compartment());
 
   // Read vim flag from the editor-prefs store; toggling it via the
   // `Vim` chip in EditorFlavorTabs reconfigures the compartment without
@@ -95,6 +133,38 @@ export function CM6Editor({
   // Bind :w / :update once globally; rebinds the latest requestSave ref
   // on every mount so the most recently-mounted editor handles the save.
   ensureVimSaveBinding(requestSaveRef);
+  // Register :set number / :set wrap / :set tabstop=N once globally; the
+  // applicator below routes each change to *this* editor's compartments.
+  ensureVimSetBindings();
+
+  useEffect(() => {
+    // Each mounted editor registers an applicator that reconfigures its
+    // own compartments when a :set option changes.  Unregister on unmount
+    // so destroyed views don't try to dispatch.
+    const apply = (opts: Partial<VimOpts>) => {
+      const view = viewRef.current;
+      if (!view) return;
+      const effects = [];
+      if (opts.number !== undefined) {
+        effects.push(numberCompartment.current.reconfigure(
+          opts.number ? [lineNumbers(), highlightActiveLineGutter()] : [],
+        ));
+      }
+      if (opts.wrap !== undefined) {
+        effects.push(wrapCompartment.current.reconfigure(
+          opts.wrap ? EditorView.lineWrapping : [],
+        ));
+      }
+      if (opts.tabstop !== undefined) {
+        effects.push(tabSizeCompartment.current.reconfigure(
+          EditorState.tabSize.of(opts.tabstop),
+        ));
+      }
+      if (effects.length) view.dispatch({ effects });
+    };
+    vimOptApplicators.add(apply);
+    return () => { vimOptApplicators.delete(apply); };
+  }, []);
 
   useEffect(() => {
     if (!hostRef.current || viewRef.current) return;
@@ -126,13 +196,23 @@ export function CM6Editor({
       selection: { anchor: 0 },
       extensions: [
         EditorState.allowMultipleSelections.of(true),
+        // VegaNotes uses tab-character indentation for !task / !AR
+        // sub-items (#163).  CM6's indentWithTab inserts the value of
+        // the indentUnit facet, which defaults to two spaces — so
+        // without this we'd be silently inserting spaces and breaking
+        // the parser's indent contract.
+        indentUnit.of("\t"),
+        // tabSize must be present at init even though we don't expose
+        // it to the user yet — vim :set tabstop reconfigures this.
+        tabSizeCompartment.current.of(EditorState.tabSize.of(4)),
         // vim() must come BEFORE other keymaps so it can intercept Esc /
         // hjkl / : etc. before defaultKeymap consumes them.  Toggled via
         // a Compartment so the user can flip it on/off without losing
         // the current document state (#168).
         vimCompartment.current.of(vimEnabled ? vim() : []),
-        lineNumbers(),
-        highlightActiveLineGutter(),
+        // lineNumbers + highlightActiveLineGutter are bundled inside
+        // the same Compartment so :set nonumber drops both together.
+        numberCompartment.current.of([lineNumbers(), highlightActiveLineGutter()]),
         // drawSelection paints CM6's own selection layer (instead of the
         // native browser one) — required for vim's visual-block (Ctrl-v)
         // rectangular selection to render across multiple lines.
@@ -163,7 +243,7 @@ export function CM6Editor({
         saveKeymap,
         vegaHighlighter(),
         readOnlyCompartment.current.of(EditorState.readOnly.of(readOnly)),
-        EditorView.lineWrapping,
+        wrapCompartment.current.of(EditorView.lineWrapping),
         EditorView.theme({
           "&": { height: "28rem", fontSize: "13px" },
           ".cm-content": { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
