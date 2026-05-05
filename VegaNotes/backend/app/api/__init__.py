@@ -238,34 +238,6 @@ def list_notes(s: Session = Depends(get_session)) -> list[dict[str, Any]]:
     return [{"id": n.id, "path": n.path, "title": n.title, "updated_at": n.updated_at} for n in notes]
 
 
-@router.get("/notes/abs-path")
-def note_abs_path(
-    path: str = Query(..., description="Repo-relative note path"),
-    s: Session = Depends(get_session),
-    user: str = Depends(require_user),
-) -> dict[str, str]:
-    """Return the absolute filesystem path for a note.
-
-    Used by the frontend's *Edit in Vim* affordance so a user on the same
-    host can run `vim "<abs path>"` directly in their terminal. The file
-    watcher reindexes on save, so changes round-trip into the UI without
-    further action.
-    """
-    if ".." in path or path.startswith("/"):
-        raise HTTPException(400, "invalid path")
-    project = _project_for_path(path)
-    if _user_role_for_project(s, user, project) == "none":
-        raise HTTPException(403, "no access")
-    full = settings.notes_dir / path
-    if not full.exists():
-        raise HTTPException(404, "note not found")
-    return {
-        "path": path,
-        "abs_path": str(full.resolve()),
-        "vim_cmd": f'vim "{full.resolve()}"',
-    }
-
-
 @router.get("/notes/etag")
 def note_etag(
     path: str = Query(..., description="Repo-relative note path"),

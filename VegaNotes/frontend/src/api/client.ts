@@ -167,10 +167,6 @@ export const api = {
     req<{ path: string; injected: number; body_md: string }>("/notes/stamp-ids", {
       method: "POST", body: JSON.stringify({ path }),
     }),
-  noteAbsPath: (path: string) =>
-    req<{ path: string; abs_path: string; vim_cmd: string }>(
-      `/notes/abs-path?path=${encodeURIComponent(path)}`,
-    ),
   parsePreview: (body_md: string) => req("/parse", { method: "POST", body: JSON.stringify({ body_md }) }),
 
   tasks: (params: Record<string, string | string[] | boolean | undefined>) => {
