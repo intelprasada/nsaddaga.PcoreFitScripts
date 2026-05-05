@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { QUOTE_THEMES, type Quote } from "../../data/quotes";
 import { useQuotePrefs } from "../../store/quotePrefs";
+import { QuoteCustomizeDialog } from "./QuoteCustomizeDialog";
 
 const ROTATE_MS = 30_000;
 
@@ -12,24 +13,28 @@ function dayOfYear(d: Date): number {
 export function QuoteBar() {
   const enabled = useQuotePrefs((s) => s.enabled);
   const theme = useQuotePrefs((s) => s.theme);
+  const customQuotes = useQuotePrefs((s) => s.customQuotes);
   const toggle = useQuotePrefs((s) => s.toggle);
 
-  const quotes: Quote[] = QUOTE_THEMES[theme].quotes;
+  const quotes: Quote[] = useMemo(
+    () => [...QUOTE_THEMES[theme].quotes, ...customQuotes],
+    [theme, customQuotes],
+  );
   const startOffset = useMemo(
     () => (quotes.length === 0 ? 0 : dayOfYear(new Date()) % quotes.length),
     [quotes.length],
   );
   const [step, setStep] = useState(0);
   const [fading, setFading] = useState(false);
+  const [editing, setEditing] = useState(false);
 
-  // Reset step when theme changes so the new feed begins at its daily anchor.
   useEffect(() => {
     setStep(0);
     setFading(false);
   }, [theme]);
 
   useEffect(() => {
-    if (!enabled || quotes.length === 0) return;
+    if (!enabled || quotes.length === 0 || editing) return;
     const id = window.setInterval(() => {
       setFading(true);
       window.setTimeout(() => {
@@ -38,7 +43,7 @@ export function QuoteBar() {
       }, 600);
     }, ROTATE_MS);
     return () => window.clearInterval(id);
-  }, [enabled, quotes.length]);
+  }, [enabled, quotes.length, editing]);
 
   if (!enabled || quotes.length === 0) {
     if (!enabled) {
@@ -58,43 +63,55 @@ export function QuoteBar() {
   }
 
   const q = quotes[(startOffset + step) % quotes.length];
+  const isCustom = q.id.startsWith("custom-");
 
   return (
-    <div className="vega-quote-bar" role="region" aria-label="Inspirational quote">
-      <div className="vega-quote-bar__gradient" aria-hidden="true" />
+    <>
       <div
-        className={`vega-quote-bar__content${fading ? " is-fading" : ""}`}
-        key={q.id}
-        aria-live="polite"
+        className="vega-quote-bar"
+        role="region"
+        aria-label="Inspirational quote — click to add your own"
       >
-        <span className="vega-quote-bar__sparkle" aria-hidden="true">✦</span>
-        <span className="vega-quote-bar__text">
-          {q.original ? (
-            <>
-              <span lang={inferLang(q)} className="vega-quote-bar__original">
-                {q.original}
-              </span>
-              <span className="vega-quote-bar__sep">·</span>
-            </>
-          ) : null}
-          &ldquo;{q.text}&rdquo;
-        </span>
-        <span className="vega-quote-bar__attr">
-          — {q.attribution}
-          <span className="vega-quote-bar__culture">, {q.culture}</span>
-        </span>
-        <span className="vega-quote-bar__sparkle" aria-hidden="true">✦</span>
+        <div className="vega-quote-bar__gradient" aria-hidden="true" />
+        <button
+          type="button"
+          className={`vega-quote-bar__content${fading ? " is-fading" : ""}`}
+          key={q.id}
+          aria-live="polite"
+          onClick={() => setEditing(true)}
+          title="Click to add your own quote"
+        >
+          <span className="vega-quote-bar__sparkle" aria-hidden="true">✦</span>
+          <span className="vega-quote-bar__text">
+            {q.original ? (
+              <>
+                <span lang={inferLang(q)} className="vega-quote-bar__original">
+                  {q.original}
+                </span>
+                <span className="vega-quote-bar__sep">·</span>
+              </>
+            ) : null}
+            &ldquo;{q.text}&rdquo;
+          </span>
+          <span className="vega-quote-bar__attr">
+            — {q.attribution}
+            <span className="vega-quote-bar__culture">, {q.culture}</span>
+          </span>
+          {isCustom ? <span className="vega-quote-bar__pill">yours</span> : null}
+          <span className="vega-quote-bar__sparkle" aria-hidden="true">✦</span>
+        </button>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); toggle(); }}
+          title="Hide inspirational quotes"
+          aria-label="Hide inspirational quotes"
+          className="vega-quote-bar__close"
+        >
+          ×
+        </button>
       </div>
-      <button
-        type="button"
-        onClick={toggle}
-        title="Hide inspirational quotes"
-        aria-label="Hide inspirational quotes"
-        className="vega-quote-bar__close"
-      >
-        ×
-      </button>
-    </div>
+      {editing ? <QuoteCustomizeDialog onClose={() => setEditing(false)} /> : null}
+    </>
   );
 }
 
