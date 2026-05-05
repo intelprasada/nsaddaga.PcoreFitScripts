@@ -1,16 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import quotesData from "../../data/quotes.json";
+import { QUOTE_THEMES, type Quote } from "../../data/quotes";
 import { useQuotePrefs } from "../../store/quotePrefs";
 
-export interface Quote {
-  id: string;
-  text: string;
-  attribution: string;
-  culture: string;
-  original?: string;
-}
-
-const QUOTES: Quote[] = quotesData as Quote[];
 const ROTATE_MS = 30_000;
 
 function dayOfYear(d: Date): number {
@@ -20,14 +11,25 @@ function dayOfYear(d: Date): number {
 
 export function QuoteBar() {
   const enabled = useQuotePrefs((s) => s.enabled);
+  const theme = useQuotePrefs((s) => s.theme);
   const toggle = useQuotePrefs((s) => s.toggle);
 
-  const startOffset = useMemo(() => dayOfYear(new Date()) % QUOTES.length, []);
+  const quotes: Quote[] = QUOTE_THEMES[theme].quotes;
+  const startOffset = useMemo(
+    () => (quotes.length === 0 ? 0 : dayOfYear(new Date()) % quotes.length),
+    [quotes.length],
+  );
   const [step, setStep] = useState(0);
   const [fading, setFading] = useState(false);
 
+  // Reset step when theme changes so the new feed begins at its daily anchor.
   useEffect(() => {
-    if (!enabled) return;
+    setStep(0);
+    setFading(false);
+  }, [theme]);
+
+  useEffect(() => {
+    if (!enabled || quotes.length === 0) return;
     const id = window.setInterval(() => {
       setFading(true);
       window.setTimeout(() => {
@@ -36,23 +38,26 @@ export function QuoteBar() {
       }, 600);
     }, ROTATE_MS);
     return () => window.clearInterval(id);
-  }, [enabled]);
+  }, [enabled, quotes.length]);
 
-  if (!enabled) {
-    return (
-      <button
-        type="button"
-        onClick={toggle}
-        title="Show inspirational quotes"
-        aria-label="Show inspirational quotes"
-        className="vega-quote-toggle"
-      >
-        ✨
-      </button>
-    );
+  if (!enabled || quotes.length === 0) {
+    if (!enabled) {
+      return (
+        <button
+          type="button"
+          onClick={toggle}
+          title="Show inspirational quotes"
+          aria-label="Show inspirational quotes"
+          className="vega-quote-toggle"
+        >
+          ✨
+        </button>
+      );
+    }
+    return null;
   }
 
-  const q = QUOTES[(startOffset + step) % QUOTES.length];
+  const q = quotes[(startOffset + step) % quotes.length];
 
   return (
     <div className="vega-quote-bar" role="region" aria-label="Inspirational quote">
@@ -96,6 +101,7 @@ export function QuoteBar() {
 function inferLang(q: Quote): string | undefined {
   if (!q.original) return undefined;
   if (/[\u3040-\u30ff\u4e00-\u9faf]/.test(q.original)) return "ja";
+  if (/[\u0400-\u04ff]/.test(q.original)) return "ru";
   if (/^[A-Za-z\s,.'-]+$/.test(q.original)) return "la";
   return undefined;
 }
