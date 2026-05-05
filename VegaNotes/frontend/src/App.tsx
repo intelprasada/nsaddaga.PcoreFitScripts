@@ -18,7 +18,6 @@ import { ChangePasswordModal } from "./components/Auth/ChangePasswordModal";
 import { QuoteBar } from "./components/QuoteBar/QuoteBar";
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "./api/client";
-import { copyToClipboard } from "./lib/clipboard";
 
 const qc = new QueryClient();
 
@@ -448,7 +447,6 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
         <NewNoteButton selectedPath={selectedPath} onCreated={setSelectedPath} />
         <NextWeekButton selectedPath={selectedPath} entry={entry}
           flushSave={flushSave} onCreated={setSelectedPath} />
-        <EditInVimButton selectedPath={selectedPath} entry={entry} flushSave={flushSave} />
       </div>
     </div>
   );
@@ -550,86 +548,6 @@ function NextWeekButton({ selectedPath, entry, flushSave, onCreated }: {
   );
 }
 
-function EditInVimButton({ selectedPath, entry, flushSave }: {
-  selectedPath: string;
-  entry: { body: string; saved: string; savedAt: number } | undefined;
-  flushSave: (path: string, text: string) => Promise<void>;
-}) {
-  const [info, setInfo] = useState<{ abs_path: string; vim_cmd: string } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-
-  const open = async () => {
-    if (!selectedPath) return;
-    setErr(null); setBusy(true);
-    try {
-      // Flush any pending edits so vim opens the latest content.
-      if (entry && entry.body !== entry.saved) {
-        await flushSave(selectedPath, entry.body);
-      }
-      const r = await api.noteAbsPath(selectedPath);
-      setInfo(r);
-    } catch (e: any) {
-      setErr(String(e?.message ?? e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const copyCmd = async () => {
-    if (!info) return;
-    const ok = await copyToClipboard(info.vim_cmd);
-    if (ok) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } else {
-      setErr("Could not copy — select the command above and copy manually.");
-      setTimeout(() => setErr(null), 3000);
-    }
-  };
-
-  return (
-    <>
-      <button onClick={open} disabled={!selectedPath || busy}
-        title="Show absolute path so you can edit this note in your local vim with your own ftplugin/colorscheme"
-        className="rounded border border-violet-600 text-violet-700 px-3 py-1 text-sm disabled:opacity-40 hover:bg-violet-50">
-        Edit in Vim
-      </button>
-      {err && <span className="text-xs text-rose-600 self-center">{err}</span>}
-      {info && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center"
-          onClick={() => setInfo(null)}>
-          <div className="bg-white rounded shadow-lg p-4 max-w-2xl w-full mx-4 space-y-3"
-            onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between">
-              <h3 className="font-semibold">Edit in Vim</h3>
-              <button onClick={() => setInfo(null)} className="text-slate-500 hover:text-slate-700">✕</button>
-            </div>
-            <p className="text-sm text-slate-600">
-              Run this in any terminal on this host. Changes are auto-detected
-              and reindexed. Your <code>vim</code> ftplugin/colorscheme applies.
-            </p>
-            <pre className="bg-slate-900 text-slate-100 rounded p-3 text-xs overflow-x-auto select-all">
-{info.vim_cmd}
-            </pre>
-            <div className="flex gap-2 justify-end">
-              <button onClick={copyCmd}
-                className="rounded bg-violet-600 text-white px-3 py-1 text-sm hover:bg-violet-700">
-                {copied ? "Copied!" : "Copy command"}
-              </button>
-              <button onClick={() => setInfo(null)}
-                className="rounded border px-3 py-1 text-sm">Close</button>
-            </div>
-            <p className="text-xs text-slate-500">
-              Absolute path: <code className="break-all">{info.abs_path}</code>
-            </p>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
 
 function NavBar() {
   const { view, set } = useUI();
