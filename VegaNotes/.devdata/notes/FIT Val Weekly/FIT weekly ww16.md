@@ -149,8 +149,8 @@
 			!AR #id T-XTFDVA verify rtl signal names from .vs file @Gautham
 			!AR #id T-1ZDG4T add additional coverage for SMT @Gautham
 		!task #id T-TSRF81 IDQ Ramp up #status done 
-			!AR #id T-Q2F4T2 LSD, BIQ checker #eta ww18
-			!AR #id T-44JP6F create presentation @Gautham
+			!AR #id T-Q2F4T2 LSD, BIQ checker #eta ww18 #status done 
+			!AR #id T-44JP6F create presentation @Gautham #status done 
 @Yongxi
 	#project csk
 		!task #id T-JV6MZH MRQ (mop recover queue) preloader/injector #status done
