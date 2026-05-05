@@ -58,3 +58,164 @@
   .vega-status   { @apply text-emerald-700 font-semibold; }
   .vega-priority { @apply text-amber-700 font-semibold; }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Inspirational quote bar (#176)
+   Slow horizontal marquee with a vibrant, soothing aurora gradient.
+   The two-copy track + linear keyframes give a seamless infinite loop.
+   ───────────────────────────────────────────────────────────────────────── */
+.vega-quote-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 36px;
+  overflow: hidden;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  background: linear-gradient(
+    90deg,
+    #4338ca 0%,    /* indigo-700 */
+    #7c3aed 18%,   /* violet-600 */
+    #db2777 36%,   /* pink-600 */
+    #f59e0b 55%,   /* amber-500 */
+    #10b981 75%,   /* emerald-500 */
+    #0891b2 92%,   /* cyan-600 */
+    #4338ca 100%
+  );
+  background-size: 300% 100%;
+  animation: vega-quote-aurora 60s ease-in-out infinite;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.18);
+}
+
+.vega-quote-bar__gradient {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 20% 50%, rgba(255, 255, 255, 0.22), transparent 55%),
+    radial-gradient(ellipse at 80% 50%, rgba(255, 255, 255, 0.18), transparent 55%);
+  mix-blend-mode: overlay;
+}
+
+.vega-quote-bar__track {
+  display: flex;
+  align-items: center;
+  gap: 3.5rem;
+  white-space: nowrap;
+  /* slow scroll: 120s for one full loop of the duplicated stream */
+  animation: vega-quote-scroll 120s linear infinite;
+  will-change: transform;
+  padding-right: 3.5rem;
+}
+
+.vega-quote-bar:hover .vega-quote-bar__track {
+  animation-play-state: paused;
+}
+
+.vega-quote-bar__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding-left: 1.2rem;
+}
+
+.vega-quote-bar__sparkle {
+  font-size: 0.85em;
+  color: #fde68a; /* amber-200 */
+  text-shadow: 0 0 8px rgba(253, 224, 71, 0.7);
+}
+
+.vega-quote-bar__text {
+  font-style: italic;
+}
+
+.vega-quote-bar__original {
+  font-style: normal;
+  font-weight: 600;
+  margin-right: 0.4rem;
+  color: #fef3c7; /* amber-100 */
+}
+
+.vega-quote-bar__sep {
+  margin: 0 0.4rem;
+  opacity: 0.7;
+}
+
+.vega-quote-bar__attr {
+  margin-left: 0.6rem;
+  font-style: normal;
+  font-weight: 600;
+  opacity: 0.95;
+}
+
+.vega-quote-bar__culture {
+  font-weight: 400;
+  opacity: 0.8;
+}
+
+.vega-quote-bar__close {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.25);
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.15s;
+  z-index: 2;
+}
+
+.vega-quote-bar__close:hover {
+  background: rgba(0, 0, 0, 0.45);
+  transform: translateY(-50%) scale(1.08);
+}
+
+.vega-quote-toggle {
+  position: fixed;
+  bottom: 0.6rem;
+  right: 0.6rem;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #7c3aed 0%, #db2777 100%);
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(124, 58, 237, 0.45);
+  z-index: 50;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.vega-quote-toggle:hover {
+  transform: scale(1.1);
+  box-shadow: 0 6px 18px rgba(124, 58, 237, 0.6);
+}
+
+@keyframes vega-quote-scroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+@keyframes vega-quote-aurora {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+

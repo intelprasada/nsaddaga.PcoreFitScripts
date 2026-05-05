@@ -15,6 +15,7 @@ import { NoteEditor } from "./components/Editor/NoteEditor";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { AdminPanel } from "./components/Admin/AdminPanel";
 import { ChangePasswordModal } from "./components/Auth/ChangePasswordModal";
+import { QuoteBar } from "./components/QuoteBar/QuoteBar";
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "./api/client";
 import { copyToClipboard } from "./lib/clipboard";
@@ -727,6 +728,7 @@ export default function App() {
             <ViewSwitcher selectedPath={selectedPath} setSelectedPath={setSelectedPath} draft={draft} setDraft={setDraft} />
           </main>
         </div>
+        <QuoteBar />
         <CommandPalette />
         <UnlockToast />
       </div>
