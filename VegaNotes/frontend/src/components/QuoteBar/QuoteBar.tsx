@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import quotesData from "../../data/quotes.json";
 import { useQuotePrefs } from "../../store/quotePrefs";
 
@@ -11,26 +11,32 @@ export interface Quote {
 }
 
 const QUOTES: Quote[] = quotesData as Quote[];
+const ROTATE_MS = 30_000;
 
-// Deterministic daily seed: same day of year -> same starting quote
-// for everyone on the team (water-cooler effect).
 function dayOfYear(d: Date): number {
   const start = new Date(d.getFullYear(), 0, 0);
-  const diff = d.getTime() - start.getTime();
-  return Math.floor(diff / 86_400_000);
-}
-
-function rotated<T>(arr: T[], offset: number): T[] {
-  if (arr.length === 0) return arr;
-  const n = ((offset % arr.length) + arr.length) % arr.length;
-  return arr.slice(n).concat(arr.slice(0, n));
+  return Math.floor((d.getTime() - start.getTime()) / 86_400_000);
 }
 
 export function QuoteBar() {
   const enabled = useQuotePrefs((s) => s.enabled);
   const toggle = useQuotePrefs((s) => s.toggle);
 
-  const ordered = useMemo(() => rotated(QUOTES, dayOfYear(new Date())), []);
+  const startOffset = useMemo(() => dayOfYear(new Date()) % QUOTES.length, []);
+  const [step, setStep] = useState(0);
+  const [fading, setFading] = useState(false);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const id = window.setInterval(() => {
+      setFading(true);
+      window.setTimeout(() => {
+        setStep((s) => s + 1);
+        setFading(false);
+      }, 600);
+    }, ROTATE_MS);
+    return () => window.clearInterval(id);
+  }, [enabled]);
 
   if (!enabled) {
     return (
@@ -46,31 +52,33 @@ export function QuoteBar() {
     );
   }
 
-  // Duplicate the ordered list so the marquee animation seamlessly loops.
-  const stream = [...ordered, ...ordered];
+  const q = QUOTES[(startOffset + step) % QUOTES.length];
 
   return (
-    <div className="vega-quote-bar" role="region" aria-label="Inspirational quotes">
+    <div className="vega-quote-bar" role="region" aria-label="Inspirational quote">
       <div className="vega-quote-bar__gradient" aria-hidden="true" />
-      <div className="vega-quote-bar__track" aria-live="off">
-        {stream.map((q, i) => (
-          <span key={`${q.id}-${i}`} className="vega-quote-bar__item">
-            <span className="vega-quote-bar__sparkle" aria-hidden="true">✦</span>
-            <span className="vega-quote-bar__text">
-              {q.original ? (
-                <span lang={inferLang(q)} className="vega-quote-bar__original">
-                  {q.original}
-                </span>
-              ) : null}
-              {q.original ? <span className="vega-quote-bar__sep">·</span> : null}
-              &ldquo;{q.text}&rdquo;
-            </span>
-            <span className="vega-quote-bar__attr">
-              — {q.attribution}
-              <span className="vega-quote-bar__culture">, {q.culture}</span>
-            </span>
-          </span>
-        ))}
+      <div
+        className={`vega-quote-bar__content${fading ? " is-fading" : ""}`}
+        key={q.id}
+        aria-live="polite"
+      >
+        <span className="vega-quote-bar__sparkle" aria-hidden="true">✦</span>
+        <span className="vega-quote-bar__text">
+          {q.original ? (
+            <>
+              <span lang={inferLang(q)} className="vega-quote-bar__original">
+                {q.original}
+              </span>
+              <span className="vega-quote-bar__sep">·</span>
+            </>
+          ) : null}
+          &ldquo;{q.text}&rdquo;
+        </span>
+        <span className="vega-quote-bar__attr">
+          — {q.attribution}
+          <span className="vega-quote-bar__culture">, {q.culture}</span>
+        </span>
+        <span className="vega-quote-bar__sparkle" aria-hidden="true">✦</span>
       </div>
       <button
         type="button"

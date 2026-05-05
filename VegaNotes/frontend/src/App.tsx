@@ -707,6 +707,7 @@ export default function App() {
   return (
     <QueryClientProvider client={qc}>
       <div className="min-h-screen flex flex-col">
+        <QuoteBar />
         <NavBar />
         <FilterBar />
         <div className="flex-1 flex overflow-hidden">
@@ -728,7 +729,6 @@ export default function App() {
             <ViewSwitcher selectedPath={selectedPath} setSelectedPath={setSelectedPath} draft={draft} setDraft={setDraft} />
           </main>
         </div>
-        <QuoteBar />
         <CommandPalette />
         <UnlockToast />
       </div>
