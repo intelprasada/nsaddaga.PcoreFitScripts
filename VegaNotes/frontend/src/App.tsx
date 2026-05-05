@@ -15,6 +15,7 @@ import { NoteEditor } from "./components/Editor/NoteEditor";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { AdminPanel } from "./components/Admin/AdminPanel";
 import { ChangePasswordModal } from "./components/Auth/ChangePasswordModal";
+import { QuoteBar } from "./components/QuoteBar/QuoteBar";
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "./api/client";
 import { copyToClipboard } from "./lib/clipboard";
@@ -706,6 +707,7 @@ export default function App() {
   return (
     <QueryClientProvider client={qc}>
       <div className="min-h-screen flex flex-col">
+        <QuoteBar />
         <NavBar />
         <FilterBar />
         <div className="flex-1 flex overflow-hidden">
