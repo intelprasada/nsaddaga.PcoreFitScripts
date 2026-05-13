@@ -60,9 +60,9 @@
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
-   Inspirational quote bar (#176)
-   Single quote centered in a vibrant aurora bar, rotating every 30s
-   with a soft cross-fade. Mounted at the top of the app shell.
+   Inspirational quote bar (#176, restyled #187)
+   Single quote centered on a solid Intel-blue bar with a white "intel"
+   wordmark on the left.  Rotates every 30s with a soft cross-fade.
    ───────────────────────────────────────────────────────────────────────── */
 .vega-quote-bar {
   position: relative;
@@ -73,34 +73,17 @@
   padding: 12px 56px;
   overflow: hidden;
   border-bottom: 1px solid rgba(255, 255, 255, 0.18);
-  background: linear-gradient(
-    90deg,
-    #4338ca 0%,    /* indigo-700 */
-    #7c3aed 18%,   /* violet-600 */
-    #db2777 36%,   /* pink-600 */
-    #f59e0b 55%,   /* amber-500 */
-    #10b981 75%,   /* emerald-500 */
-    #0891b2 92%,   /* cyan-600 */
-    #4338ca 100%
-  );
-  background-size: 300% 100%;
-  animation: vega-quote-aurora 60s ease-in-out infinite;
+  background: #0071c5; /* Intel blue */
   color: #fff;
   font-size: 17px;
   font-weight: 500;
   letter-spacing: 0.01em;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.22);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
 }
 
 .vega-quote-bar__gradient {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(ellipse at 20% 50%, rgba(255, 255, 255, 0.22), transparent 55%),
-    radial-gradient(ellipse at 80% 50%, rgba(255, 255, 255, 0.18), transparent 55%);
-  mix-blend-mode: overlay;
+  display: none;
 }
 
 .vega-quote-bar__content {
@@ -134,6 +117,23 @@
 .vega-quote-bar__content.is-fading {
   opacity: 0;
   transform: translateY(-3px);
+}
+
+.vega-quote-bar__logo {
+  position: absolute;
+  left: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: "Intel Clear", "Helvetica Neue", Arial, sans-serif;
+  font-weight: 700;
+  font-size: 1.35em;
+  letter-spacing: -0.04em;
+  color: #fff;
+  text-transform: lowercase;
+  font-style: normal;
+  text-shadow: none;
+  z-index: 1;
+  pointer-events: none;
 }
 
 .vega-quote-bar__sparkle {
@@ -207,11 +207,11 @@
   justify-content: center;
   border: none;
   border-radius: 50%;
-  background: linear-gradient(135deg, #7c3aed 0%, #db2777 100%);
+  background: #0071c5; /* Intel blue */
   color: #fff;
   font-size: 16px;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(124, 58, 237, 0.45);
+  box-shadow: 0 4px 12px rgba(0, 113, 197, 0.45);
   z-index: 50;
   transition: transform 0.15s, box-shadow 0.15s;
 }
@@ -224,12 +224,6 @@
 @keyframes vega-quote-fade-in {
   from { opacity: 0; transform: translateY(3px); }
   to   { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes vega-quote-aurora {
-  0%   { background-position: 0% 50%; }
-  50%  { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
 }
 
 .vega-quote-bar__pill {

@@ -73,6 +73,7 @@ export function QuoteBar() {
         aria-label="Inspirational quote — click to add your own"
       >
         <div className="vega-quote-bar__gradient" aria-hidden="true" />
+        <span className="vega-quote-bar__logo" aria-label="Intel">intel</span>
         <button
           type="button"
           className={`vega-quote-bar__content${fading ? " is-fading" : ""}`}
@@ -81,7 +82,6 @@ export function QuoteBar() {
           onClick={() => setEditing(true)}
           title="Click to add your own quote"
         >
-          <span className="vega-quote-bar__sparkle" aria-hidden="true">✦</span>
           <span className="vega-quote-bar__text">
             {q.original ? (
               <>
@@ -98,7 +98,6 @@ export function QuoteBar() {
             <span className="vega-quote-bar__culture">, {q.culture}</span>
           </span>
           {isCustom ? <span className="vega-quote-bar__pill">yours</span> : null}
-          <span className="vega-quote-bar__sparkle" aria-hidden="true">✦</span>
         </button>
         <button
           type="button"
