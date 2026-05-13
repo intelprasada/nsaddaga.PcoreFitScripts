@@ -472,6 +472,11 @@ def _strip_attr_from_continuations(md: str, task_line_no: int, key: str) -> str:
         return md
     base = _line_indent(lines[task_line_no])
     pat = re.compile(rf"\s*#{re.escape(key)}\s+\S+", re.IGNORECASE)
+    # A nested `!task` / `!AR` declaration is a *child* task, not a
+    # continuation of the parent's note text. Stripping its attrs would
+    # silently nuke its own state (issue #199 — patching the parent's
+    # status was clobbering every child AR's `#status done` token).
+    decl_re = re.compile(r"^[\-*+]?\s*!(task|ar)\b", re.IGNORECASE)
     out: list[str] = list(lines[: task_line_no + 1])
     i = task_line_no + 1
     while i < len(lines):
@@ -484,6 +489,13 @@ def _strip_attr_from_continuations(md: str, task_line_no: int, key: str) -> str:
             out.append(raw)
             i += 1
             continue
+        if decl_re.match(stripped):
+            # Child task / AR — leave it AND every line beneath it
+            # (its own continuations) untouched. The strip block ends
+            # here — anything past a child decl is not "our"
+            # continuation either.
+            out.extend(lines[i:])
+            return "".join(out)
         nl = ""
         body = raw
         while body.endswith("\n") or body.endswith("\r"):

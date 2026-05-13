@@ -1079,3 +1079,81 @@ def test_notes_etag_endpoint_404(client):
 def test_notes_etag_endpoint_requires_auth(client):
     r = client.get("/api/notes/etag?path=etag-probe.md")
     assert r.status_code == 401
+
+
+def test_parent_done_with_all_ars_done_persists_after_reindex(client):
+    """Regression for #199: marking parent !task done and all child !ARs
+    done must survive a full reindex (page refresh / file watcher fire).
+
+    The bug was that the parser's _rollup_to_parents() mutated the parent
+    task's status in-place, and the indexer then persisted the mutated
+    value into the Task row, so a subsequent reparse "downgraded" a
+    legitimately-done parent and propagated stale status back to the UI.
+    """
+    from pathlib import Path as _P
+    from sqlmodel import Session as _S
+    from app.indexer import reindex_file
+    from app.db import get_engine
+
+    notes_dir = DATA / "notes" / "p199proj"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    canonical = (
+        "# ww16\n"
+        "@admin\n"
+        "\t!task #id T-P199AA Parent\n"
+    )
+    pr = client.put("/api/notes", json={"path": "p199proj/ww16.md", "body_md": canonical},
+               headers={"Authorization": AUTH})
+    assert pr.status_code in (200, 201), pr.text
+    note_id = pr.json()["id"]
+
+    # Read whatever the parser stamped (it may auto-generate UUIDs).
+    server_md = (DATA / "notes" / "p199proj" / "ww16.md").read_text(encoding="utf-8")
+    parent_id = next(
+        (tok for line in server_md.splitlines() if "!task" in line
+         for tok in line.split() if tok.startswith("T-")),
+        None,
+    )
+    assert parent_id, server_md
+    # Sanity: confirm the indexer registered this task before we proceed.
+    rcheck = client.get(f"/api/tasks/{parent_id}", headers={"Authorization": AUTH})
+    assert rcheck.status_code == 200, (
+        f"parent {parent_id} not in index after PUT; "
+        f"server_md={server_md!r}; rcheck={rcheck.text}"
+    )
+
+    # Add two ARs via the API so they get server-stamped UUIDs.
+    ars = []
+    for title in ("child one", "child two"):
+        r = client.post(f"/api/tasks/{parent_id}/ars",
+                        json={"title": title},
+                        headers={"Authorization": AUTH})
+        assert r.status_code == 201, r.text
+        ars.append(r.json()["task_uuid"])
+
+    # Mark both ARs done, then mark parent done.
+    for ref in ars + [parent_id]:
+        r = client.patch(f"/api/tasks/{ref}",
+                         json={"status": "done"},
+                         headers={"Authorization": AUTH})
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "done"
+
+    # Confirm markdown on disk is correct.
+    md_after = (DATA / "notes" / "p199proj" / "ww16.md").read_text(encoding="utf-8")
+    parent_line = next(l for l in md_after.splitlines() if parent_id in l)
+    assert "#status done" in parent_line, parent_line
+    for ref in ars:
+        ar_line = next(l for l in md_after.splitlines() if ref in l)
+        assert "#status done" in ar_line, ar_line
+
+    # Force a full reindex (simulates page refresh after watcher fires).
+    with _S(get_engine()) as s:
+        reindex_file(_P(DATA / "notes" / "p199proj" / "ww16.md"), s)
+        s.commit()
+
+    # All three should still report `done` from the API.
+    for ref in [parent_id] + ars:
+        r = client.get(f"/api/tasks/{ref}", headers={"Authorization": AUTH})
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "done", f"{ref} reverted: {r.json()}"

@@ -11,7 +11,8 @@
  * Pass canWrite={false} to render chips as static read-only badges.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type Task } from "../../api/client";
 import { formatIntelWw } from "@veganotes/parser";
@@ -62,19 +63,44 @@ export function StatusChip({ task, canWrite }: { task: Task; canWrite: boolean }
   const [status, setStatus] = useState(task.status);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const { mutate, isPending } = useTaskPatch(task.id);
 
   // Sync with authoritative server data after query refetch.
   useEffect(() => { setStatus(task.status); }, [task.status]);
 
-  // Close dropdown on outside click.
+  // Close dropdown on outside click. The popover is portaled, so the
+  // hit-test must include both the chip wrapper AND the popover node.
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (ref.current?.contains(t)) return;
+      if (popRef.current?.contains(t)) return;
+      setOpen(false);
     };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+
+  // Anchor the portaled popover to the chip button on open / scroll / resize.
+  // Portaling escapes ancestor `overflow-hidden` (issue #199 — the My-Tasks
+  // group card was clipping the dropdown).
+  useLayoutEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (r) setPos({ top: r.bottom + 4, left: r.left });
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
   }, [open]);
 
   const pick = (s: string, e: React.MouseEvent) => {
@@ -95,6 +121,7 @@ export function StatusChip({ task, canWrite }: { task: Task; canWrite: boolean }
   return (
     <div ref={ref} className="relative" onClick={(e) => e.stopPropagation()}>
       <button
+        ref={btnRef}
         onClick={() => setOpen((o) => !o)}
         className={`chip ${chipColor} cursor-pointer hover:opacity-80 transition-opacity`}
         title="Click to change status"
@@ -102,8 +129,13 @@ export function StatusChip({ task, canWrite }: { task: Task; canWrite: boolean }
       >
         {isPending ? <span className="animate-pulse">…</span> : status}
       </button>
-      {open && (
-        <div className="absolute z-30 top-full left-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg min-w-[130px] py-1 overflow-hidden">
+      {open && pos && createPortal(
+        <div
+          ref={popRef}
+          style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: 50 }}
+          className="bg-white border border-slate-200 rounded-lg shadow-lg min-w-[130px] py-1 overflow-hidden"
+          onClick={(e) => e.stopPropagation()}
+        >
           {STATUSES.map((s) => (
             <button
               key={s}
@@ -114,7 +146,8 @@ export function StatusChip({ task, canWrite }: { task: Task; canWrite: boolean }
               <span className={`chip ${STATUS_COLORS[s]} pointer-events-none`}>{s}</span>
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
