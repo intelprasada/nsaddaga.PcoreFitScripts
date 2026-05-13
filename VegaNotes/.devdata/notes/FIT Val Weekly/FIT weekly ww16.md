@@ -2,6 +2,16 @@
 
 #opens
 	How often are we syncing main branch into MT1 and vice versa(TD and BU) - Supposed to be daily
+
+	ww19:
+		GFC also needs code review for TI
+
+#project gfc
+	!task #id T-5GSQFQ IDQ coverage unmapped items to be reviwed #eta ww20  @Namratha #priority P0
+	!task #id T-HA0CP2 IFU coverage unmapped items to be reviwed #eta ww20  @Sachin   #priority P0
+	!task #id T-XB2SXT IDQ coverage unhit items to be reviwed #eta ww20     @Namratha #priority P0
+	!task #id T-AR27H5 IFU coverage unhit items to be reviwed #eta ww20     @Sachin   #priority P0
+
 @aboli
 	#project gfc
 		!task #id T-DVND79 MCA – Disable IDQ proof assertion failing during XLAT Error #priority P1 #eta 2026-W18 #status done
@@ -38,25 +48,29 @@
 	!task #id T-MM5T3Z IDQ weekly bucket debug #priority P2 #status wip
 		!AR #id T-BVF295 fe::Formal::Assert::cex::idq.fv_IDQ_RAT_intf_chk.idq_git_assume_uop_GatherScatter_window*.T_IDQ_RAT_FPV_MRN_Legal_Ld_mrn::gfc-a0 #status in-progress
 			#update waiting on OOO resource for updates to RTL
+			#note moved to Known FV and filed HSD
 		!AR #id T-2JDX8G fe::Formal::Assert::cex::idq.fv_idq_data_transfer._automatic_unique_case_LLJENG::gfc-a0 #status in-progress
 			Input signals is being used as sel of unique case
+			#note these automatic assertions need to be turned off when br not valid
+			#note when br valid is low uop loc signal can be random - assumption updated based on this spec
 		!AR #id T-0VER3C fe::Formal::Assert::cex::idq.fv_idq_global._automatic_unique_case_LLJENG::gfc-a0 #status in-progress
+			#note these automatic assertions need to be turned off when br not valid
+			#note when br valid is low uop loc signal can be random - assumption updated based on this spec
 			Input signals is being used as sel of unique case
 		!AR #id T-V4J20P fe::Formal::Assert::cex::idq.fv_IDQ_RAT_intf_chk.idq_rat_cover_uop_loop*.T_IDQ_RAT_FPV_No_TMUL_STA_uops_opcode::gfc-a0 #status done
-			failing since 12b
-			!AR #id T-8YJP85 why failing now? 
+			failing since 12b #status done
+			!AR #id T-8YJP85 why failing now? #note recent addition of assertion #status done
 		!AR #id T-KABQ7A fe::Assert::fv_idq_assume_mite_assert_legal_valid_ordid_range::msid_idq_fv_idq_dsbe_intf_inst_genblk::gfc-a0 #status done
 		!AR #id T-S9SGBC Idq.fv_idq_data_transfer.lsd_mite_port_loop[0].assert_IDQ_DT_lsd_mite_Biqid_check_basis @Namratha #status in-progress
-		!AR #id T-7XHJ4W fe::Formal::Assert::cex::idq.idqimmd._automatic_unique_case_KDFNEO::gfc-a0 @Namratha #status in-progress
+		!AR #id T-7XHJ4W fe::Formal::Assert::cex::idq.idqimmd._automatic_unique_case_KDFNEO::gfc-a0 @Namratha #status done
+		!AR #id T-GYCHRS fe::Formal::Assert::cex::idq.idqimmd._automatic_unique_case_KDFNEO::gfc-a0 @Namratha #status done
 	!task #id T-39NW4C SEC IDQ weekly failures to debug 
-		!AR #id T-1MW9C8 fe::Formal::Assert(sec)::cex::idq.idimmCM*H::gfc-a0 
+		!AR #id T-1MW9C8 fe::Formal::Assert(sec)::cex::idq.idimmCM*H::gfc-a0 #status done
 		!AR #id T-42QB7M fe::Formal::Assert(sec)::cex::idq.IDBiqWrEnBranchEventM*H::gfc-a0" 
 			#status blocked due to Jasper tool issue
-	!task #id T-MZ0P9M Prepare Presentation on IDQ Arch #status in-progress
-		!AR #id T-FVJTR5 IDQ arch - IDQ high level proof stucture
-		!AR #id T-NG1CV5 MRN deep dive #eta ww17.3
-	!task #id T-2BWVK1 Understand the MRN assertions present in proof and prepare a test plan to add more if needed. 
-		!AR #id T-K1CFFK quantitative data to be reported here #eta ww17.5 
+	!task #id T-MZ0P9M Prepare Presentation on IDQ Arch #status done
+		!AR #id T-FVJTR5 IDQ arch - IDQ high level proof stucture #status done
+		!AR #id T-NG1CV5 MRN deep dive #eta ww17.3 #status done
 	!task #id T-C0WWN0 Cover buckets debug 
 		!AR #id T-MJ453V 10 covers unreachable #eta ww19 
 	!task #id T-800631 JNC bucket debug 
@@ -95,10 +109,9 @@
 @Kelsey
 	#project jnc
 		!task #id T-TWDSX5 JNC work on MT1/ST1 bring up 
-			10/191  SMT MinTE 17/191  SMT MinTE
-			119/191 MT1 minTE 162/191 MT1 minTE
-			5/191   typ MT1   12/191  typ MT1
-			5/191   typ SMT   5/191   typ SMT? 
+			10/191  SMT MinTE | 17/191  SMT MinTE |  32/191  SMT MinTE
+			119/191 MT1 minTE | 162/191 MT1 minTE |  170/191 MT1 minTE
+			5/191   typ MT1   | 12/191  typ MT1   |  162/191  typ MT1
 		!task #id T-WAHSH6 JNC work on moving complex nukes from all thread to thread specific 
 			#eta ww17 #status done
 		!task #id T-1Q99SZ JNC CTE ready for all state transitions mentioned in UCODE HAS #status done 
@@ -113,8 +126,10 @@
 				#note fix in GFC, waiting for sync
 			!AR #id T-M2TRKN TXTE_MSG_TLB_LOOKUP_OUT_ItCacheableM122H_mismatch @Ragavi #status done
 		!task #id T-3CF48M ITLB preloader SMT coding and smart preloader #status in-progress
-			!AR #id T-WZW8XS smt coding
-			!AR #id T-022MGA smart preloader #eta ww18.4
+			#note smart preloader coding done. Testing in progress(Need to sync up with Husam to get shadow array fixes).
+			!AR #id T-WZW8XS smt coding #status done
+			!AR #id T-022MGA smart preloader #eta ww18.4 #status blocked
+				#note shadow arrays fixes required to TI
 			!AR #id T-E32SWW randomizing TIDs in preload #eta ww21
 		!task #id T-A7KC90 CB for tid based flush feature #status done 
 		!task #id T-EATM79 CR for forced partition CTE support #eta ww19 
@@ -123,9 +138,9 @@
 		!task #id T-NWXAKW Validation plan for SMT ITLB #eta ww21 #priority high 
 			!AR #id T-RDJYHX Internal review for val plan #eta ww20 
 		!task #id T-2953KW Snoop injector  SMT coding #eta ww19 #status in-progress
-			!AR #id T-XN2WQY further breakdown of tasks #eta ww18.2
-			!AR #id T-6XJAS5 Coding done #eta ww18
-			!AR #id T-R4HWHC Integration done #eta ww19
+			!AR #id T-XN2WQY further breakdown of tasks #eta ww18.2 #status done
+			!AR #id T-6XJAS5 Coding done #eta ww18 #status done
+			!AR #id T-R4HWHC Integration done #eta ww19 #status in-progress
 
 @Gautham
 	#project jnc
@@ -133,21 +148,25 @@
 		!task #id T-WCF4H6 updating coverage for fe_idq_tlm_cov.e for SMT #status wip
 			!AR #id T-PZQ4CK updated code to handle threads @Gautham #status done
 			!AR #id T-4SPN38 add missing signals to packet @Gautham #status done
-			!AR #id T-ZVSM2W verify cover groups collected @Gautham #status in-progress
-			!AR #id T-VFRC9F turn in without thread-aware 148h signals @Gautham
-		!task #id T-D3K2BP predq tracker #status wip #eta ww18
+			!AR #id T-ZVSM2W verify cover groups collected @Gautham #status done
+			!AR #id T-VFRC9F turn in without thread-aware 148h signals @Gautham #status done
+			!AR #id T-P51GT4 investigate 148H signals @Gautham #status in-progress
+			!AR #id T-Q1C4MS update coverage to handle 148h signals @Gautham
+		!task #id T-D3K2BP predq tracker #status done #eta ww18
 			!AR #id T-S3B7ZW created yaml packet, tlm infrastructure and tracker @Gautham #status done
 			!AR #id T-D6JB94 verified cycle accuracy of packet signals @Gautham #status done
 			!AR #id T-RZBY17 review and update with corrected signals and columns @Gautham #status done
-			!AR #id T-R6GWND Code review/ TI @Gautham #status in-progress
-			!AR #id T-8P8RPW core txte failed with merge from master. debug @Gautham #status in-progress
+			!AR #id T-R6GWND Code review/ TI @Gautham #status done
+			!AR #id T-8P8RPW core txte failed with merge from master. debug @Gautham #status done
 		!task #id T-VREJ1D updating coverage for fe_ifu_tlm_cov.e for SMT #status wip 
 			!AR #id T-4FEBGG verify covers being hit for smt_core_gating.list @Gautham #status in-progress
 			!AR #id T-31QEAV coded thread scoping @Gautham #status done
 			!AR #id T-GKDB9P verify if threads are being differentiated with core_gaitng.list @Gautham #status done
 			!AR #id T-Q1S4R7 revise val plan with thread-aware signals @Gautham #status in-progress
-			!AR #id T-XTFDVA verify rtl signal names from .vs file @Gautham
-			!AR #id T-1ZDG4T add additional coverage for SMT @Gautham
+			!AR #id T-XTFDVA verify rtl signal names from .vs file @Gautham #status done
+			!AR #id T-1ZDG4T add additional coverage for SMT @Gautham #status in-progress
+			!AR #id T-YNRAYB update logging for signals to verify thread usage @Gautham #status in-progress
+			!AR #id T-8AVCBP Pseudocode for cross thread coverage @Gautham #status done
 		!task #id T-TSRF81 IDQ Ramp up #status done 
 			!AR #id T-Q2F4T2 LSD, BIQ checker #eta ww18 #status done 
 			!AR #id T-44JP6F create presentation @Gautham #status done 
@@ -184,5 +203,10 @@
 	#note - in commands provided, switch OOO to FE
 	#note - simgress command update:
 	#note simregress -dut fe -cost_source ooo -reg_type debug_regression -l $MODEL_ROOT/core/ooo/reglist/gfc_weekly_regression.list -trex -cfg_sw COVERAGE=COLLECT -cfg_sw- -trex- -collect_coverage -trex -ms -vcs -cm fsm+assert+branch+line+tgl+cond -vcs- -ms- -vms_args -project gfc -stepping gfc-a0 -super_cluster ip -cluster ooo -te_platform sim -ind_scope fe_cc -vms_args- -trex- &
-	!AR #id T-FJ0M34 make required changes based off doc/email @Gautham
-	!AR #id T-G9W18Y run coverage @Gautham #status in-progress
+	!AR #id T-FJ0M34 make required changes based off doc/email @Gautham #status in-progress
+	!AR #id T-G9W18Y run coverage @Gautham #status done
+	!AR #id T-B28GKB run full regression suite @Gautham
+
+!task #id T-KP1PRW IDQ Ramp up: LSD checker @Gautham #status in-progress
+	!AR #id T-55E9FD review LSD checker related packets @Gautham #status in-progress
+	!AR #id T-34T7JK Understand high level of IDQ write side of LSD @Gautham
