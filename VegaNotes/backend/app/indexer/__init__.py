@@ -696,10 +696,50 @@ def remove_path(rel: str, session: Session) -> None:
 
 
 def reindex_all(session: Session) -> int:
+    """Walk the notes directory, (re)index every ``.md`` file, and reconcile
+    the DB against disk by sweeping orphan ``Note`` rows whose backing file
+    no longer exists.
+
+    Returns the number of files indexed.  Stores the orphan-sweep count on
+    ``WATCHER_STATE['orphans_swept_last']`` and ``['orphans_swept_total']``
+    for diagnostics (#207).
+    """
     n = 0
+    present: set[str] = set()
     for path in sorted(settings.notes_dir.rglob("*.md")):
+        # Skip the per-write backup tree — paths under any ``.trash`` segment
+        # are not real notes.  ``rglob('*.md')`` already excludes ``.bak``
+        # files but we also want to ignore any genuine ``.md`` someone may
+        # have dropped into ``.trash/`` for hand recovery.
+        try:
+            rel = str(path.relative_to(settings.notes_dir))
+        except ValueError:
+            continue
+        if rel.startswith(".trash/") or "/.trash/" in rel or "/." in "/" + rel:
+            # Skip dotfile dirs (.trash, .git, .vscode, etc.)
+            continue
         reindex_file(path, session)
+        present.add(rel)
         n += 1
+
+    # ── Reconcile: drop Note rows whose file is gone from disk ───────────
+    # Without this, a delete event missed by the watcher (common on NFS
+    # mounts where inotify is unreliable) leaves orphan tasks haunting the
+    # UI and search results forever.  remove_path() cascades through
+    # _delete_task_children + notes_fts.  See issue #207.
+    orphans = 0
+    all_notes = session.exec(select(Note)).all()
+    for note in all_notes:
+        if note.path not in present:
+            remove_path(note.path, session)
+            orphans += 1
+    if orphans:
+        log.info("reindex_all: swept %d orphan note row(s)", orphans)
+    WATCHER_STATE["orphans_swept_last"] = orphans
+    WATCHER_STATE["orphans_swept_total"] = (
+        WATCHER_STATE.get("orphans_swept_total", 0) + orphans
+    )
+
     _bootstrap_orphan_projects(session)
     return n
 
@@ -758,6 +798,8 @@ WATCHER_STATE: dict = {
     "notes_dir": None,
     "force_polling": None,
     "poll_delay_ms": None,
+    "orphans_swept_last": 0,
+    "orphans_swept_total": 0,
 }
 
 # Filesystems that do not deliver inotify events for off-host writes and
