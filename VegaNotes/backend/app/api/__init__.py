@@ -21,6 +21,7 @@ from ..indexer import (
     insert_single_task_into_index,
     reindex_all, reindex_file, remove_path,
     update_note_body_only,
+    WATCHER_STATE,
 )
 from ..markdown_ops import (
     inject_missing_ids, replace_attr, replace_multi_attr, replace_notes,
@@ -2241,9 +2242,14 @@ def admin_reindex(
     s: Session = Depends(get_session),
     _admin: str = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Re-scan all notes on disk, update the index, and auto-bootstrap orphan projects."""
+    """Re-scan all notes on disk, update the index, sweep orphans (#207),
+    and auto-bootstrap orphan projects."""
     n = reindex_all(s)
-    return {"status": "ok", "files_indexed": n}
+    return {
+        "status": "ok",
+        "files_indexed": n,
+        "orphans_swept": WATCHER_STATE.get("orphans_swept_last", 0),
+    }
 
 
 @router.get("/admin/watcher_status")

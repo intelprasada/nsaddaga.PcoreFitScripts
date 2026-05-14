@@ -190,9 +190,64 @@ def test_fs_project_bootstrap(client):
     _shutil.rmtree(proj_dir, ignore_errors=True)
 
 
+def test_reindex_sweeps_orphan_notes_when_file_deleted(client):
+    """A Note row whose .md file no longer exists must be cascade-deleted on
+    the next reindex_all() — guards against the NFS+inotify drift documented
+    in #207, where the user lost a file on disk but the DB kept serving its
+    tasks via /api/tasks (and `vn show task`).
+
+    We bypass the watcher entirely by injecting a phantom Note row that
+    points at a non-existent path: this is exactly the post-condition the
+    user hit (DB had note 22, disk did not).  reindex_all must clean it up.
+    """
+    from app.db import session_scope
+    from app.models import Note, Task
+    from app.indexer import reindex_all
+
+    fake_path = "phantom-orphan-proj/never_existed.md"
+    fake_disk_path = DATA / "notes" / fake_path
+    assert not fake_disk_path.exists(), "test precondition: file must NOT be on disk"
+
+    # Inject the phantom note + a task that depends on it, mimicking the
+    # state left behind when the watcher misses a delete.
+    with session_scope() as s:
+        n = Note(path=fake_path, title="Phantom", body_md="!task #title GhostTask\n")
+        s.add(n)
+        s.flush()
+        t = Task(note_id=n.id, line=1, indent=0, kind="task",
+                 title="GhostTask", status="todo",
+                 slug="ghosttask", task_uuid="T-PHANT0M")
+        s.add(t)
+        s.commit()
+        phantom_id = n.id
+
+    # Sanity: the phantom is visible until we sweep.
+    r = client.get(f"/api/notes/{phantom_id}", headers={"Authorization": AUTH})
+    assert r.status_code == 200, "phantom note should be reachable before reindex"
+
+    # Trigger reindex_all via the admin endpoint — it must reconcile the
+    # orphan even though nothing changed on disk and the watcher never
+    # fired.
+    r = client.post("/api/admin/reindex", headers={"Authorization": AUTH})
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("orphans_swept", 0) >= 1, body
+
+    # The phantom note row is gone.
+    r = client.get(f"/api/notes/{phantom_id}", headers={"Authorization": AUTH})
+    assert r.status_code == 404, r.text
+
+    # And so is its task — cascade through remove_path → _delete_task_children.
+    r = client.get("/api/tasks", headers={"Authorization": AUTH})
+    titles = [t.get("title") for t in r.json().get("tasks", r.json())] \
+             if isinstance(r.json(), dict) else [t.get("title") for t in r.json()]
+    assert "GhostTask" not in titles, "orphan task survived reindex sweep"
+
+
 # ---------------------------------------------------------------------------
 # Self-service password change (#66)
 # ---------------------------------------------------------------------------
+
 
 def test_change_own_password(client):
     """Any user can change their own password; wrong current password is rejected."""
