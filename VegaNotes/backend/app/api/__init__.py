@@ -39,6 +39,7 @@ from ..safe_io import (
     StaleWriteError, _safe_write_unlocked, etag_for, etag_for_bytes, safe_write, with_file_lock,
 )
 from .. import gamify
+from ..phonebook import get_phonebook
 
 router = APIRouter(dependencies=[Depends(require_user)])
 
@@ -1276,6 +1277,21 @@ def card_links(task_ref: str, s: Session = Depends(get_session)) -> dict[str, An
 
 
 # ---------- projects (folders) / tree / RBAC -------------------------------
+
+class PhonebookResolveRequest(BaseModel):
+    tokens: list[str]
+
+
+@router.post("/phonebook/resolve")
+def phonebook_resolve(body: PhonebookResolveRequest) -> dict[str, Any]:
+    """Bulk-resolve owner tokens (#174 / #210). Returns ``resolved``,
+    ``ambiguous``, and ``unresolved`` buckets keyed by the original token."""
+    if not body.tokens:
+        return {"resolved": {}, "ambiguous": {}, "unresolved": []}
+    if len(body.tokens) > 500:
+        raise HTTPException(status_code=400, detail="too many tokens (max 500)")
+    return get_phonebook().resolve_many(body.tokens)
+
 
 @router.get("/projects")
 def list_projects(

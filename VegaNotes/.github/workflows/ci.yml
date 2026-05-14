@@ -4,6 +4,13 @@ on:
   pull_request: { branches: [main] }
 
 jobs:
+  guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Module-resolution collision guard
+        run: python3 VegaNotes/scripts/check_module_collisions.py
+
   backend:
     runs-on: ubuntu-latest
     steps:

@@ -309,7 +309,28 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ tz }),
     }),
+
+  // ----- phonebook (#174 / #210 Phase 2) --------------------------------
+  phonebookResolve: (tokens: string[]) =>
+    req<PhonebookResolveResponse>("/phonebook/resolve", {
+      method: "POST",
+      body: JSON.stringify({ tokens }),
+    }),
 };
+
+export interface PhonebookEntry {
+  idsid: string;
+  display: string;
+  email: string;
+  aliases: string[];
+  manager_email: string | null;
+}
+
+export interface PhonebookResolveResponse {
+  resolved: Record<string, PhonebookEntry>;
+  ambiguous: Record<string, PhonebookEntry[]>;
+  unresolved: string[];
+}
 
 // ----- gamification response shapes (issue #137) --------------------------
 
