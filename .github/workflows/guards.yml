@@ -1,0 +1,12 @@
+name: guards
+on:
+  push: { branches: [main] }
+  pull_request: { branches: [main] }
+
+jobs:
+  module-collisions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tracked-file vs sibling-directory module collision check
+        run: python3 VegaNotes/scripts/check_module_collisions.py
