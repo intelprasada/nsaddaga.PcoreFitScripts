@@ -6,6 +6,7 @@ import { TaskEditPopover } from "../Tasks/TaskEditPopover";
 import { NewTaskComposer } from "../Tasks/NewTaskComposer";
 import { useUI, filtersToParams } from "../../store/ui";
 import { useFontScale, type FontScale } from "../../store/fontScale";
+import { KanbanEmailModal } from "./KanbanEmailModal";
 
 const SCALES: { value: FontScale; label: string; title: string }[] = [
   { value: "sm", label: "A",  title: "Small text"  },
@@ -26,6 +27,7 @@ export function KanbanBoard() {
   const { filters } = useUI();
   const [editing, setEditing] = useState<Task | null>(null);
   const [composerColumn, setComposerColumn] = useState<string | null>(null);
+  const [emailOpen, setEmailOpen] = useState(false);
   const { scale, setScale } = useFontScale();
   const { data } = useQuery({
     queryKey: ["tasks", filters, "kanban"],
@@ -49,6 +51,13 @@ export function KanbanBoard() {
     <>
       {/* toolbar */}
       <div className="flex items-center justify-end gap-1 px-4 pt-3 pb-1">
+        <button
+          onClick={() => setEmailOpen(true)}
+          title="Send a snapshot of the current Kanban view via email"
+          className="mr-3 px-2 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+        >
+          ✉ Send Email
+        </button>
         <span className="text-xs text-slate-400 mr-1">Card text</span>
         {SCALES.map(({ value, label, title }) => (
           <button
@@ -100,6 +109,15 @@ export function KanbanBoard() {
         ))}
       </div>
       {editing && <TaskEditPopover task={editing} onClose={() => setEditing(null)} />}
+      {emailOpen && (
+        <KanbanEmailModal
+          tasks={tasks}
+          grouped={grouped}
+          columns={COLUMNS}
+          filters={filters}
+          onClose={() => setEmailOpen(false)}
+        />
+      )}
     </>
   );
 }
