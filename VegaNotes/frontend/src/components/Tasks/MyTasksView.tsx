@@ -10,7 +10,7 @@
  * features edits.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { api, type ChildTask, type Task } from "../../api/client";
@@ -18,7 +18,15 @@ import { formatIntelWw } from "@veganotes/parser";
 import { TaskEditPopover } from "./TaskEditPopover";
 import { NewTaskComposer } from "./NewTaskComposer";
 import { StatusChip, PriorityChip, EtaChip, OwnersChips } from "./QuickChips";
+import { BulkEditBar } from "./BulkEditBar";
 import { useUI } from "../../store/ui";
+
+// ── selection helpers (issue #33) ─────────────────────────────────────────────
+
+/** Stable selection key. Prefer task_uuid over int id (DB rebuilds invalidate ids). */
+function refOf(t: { task_uuid: string | null; id: number }): string {
+  return t.task_uuid ?? String(t.id);
+}
 
 // ── grouping helpers ──────────────────────────────────────────────────────────
 
@@ -132,7 +140,17 @@ function ArRow({ ar, onCycle }: { ar: ChildTask; onCycle: () => void }) {
 
 // ── TaskRow ───────────────────────────────────────────────────────────────────
 
-function TaskRow({ task, onOpen }: { task: Task; onOpen: (t: Task) => void }) {
+function TaskRow({
+  task, onOpen,
+  selected, onSelect,
+}: {
+  task: Task;
+  onOpen: (t: Task) => void;
+  selected: boolean;
+  /** Called when user toggles selection (checkbox click OR modifier-click on row).
+   *  `shift` true → range-select from last clicked. */
+  onSelect: (taskRef: string, shift: boolean) => void;
+}) {
   const ars = (task.children ?? []).filter((c) => c.kind === "ar");
   const arDone = ars.filter((a) => a.status === "done").length;
   const [expanded, setExpanded] = useState(false);
@@ -149,14 +167,43 @@ function TaskRow({ task, onOpen }: { task: Task; onOpen: (t: Task) => void }) {
     },
   });
 
+  const handleRowClick = (e: React.MouseEvent) => {
+    // Modifier-click in the row body = select, not open popover (issue #33).
+    if (e.shiftKey || e.metaKey || e.ctrlKey) {
+      e.preventDefault();
+      onSelect(refOf(task), e.shiftKey);
+      return;
+    }
+    onOpen(task);
+  };
+
   return (
     <>
       <tr
-        onClick={() => onOpen(task)}
-        className="group hover:bg-sky-50/40 cursor-pointer border-b border-slate-100 transition-colors"
+        onClick={handleRowClick}
+        className={`group cursor-pointer border-b border-slate-100 transition-colors ${
+          selected ? "bg-sky-50" : "hover:bg-sky-50/40"
+        }`}
       >
+        {/* Selection checkbox (issue #33) */}
+        <td
+          className="py-2.5 pl-3 pr-1 align-middle w-7"
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect(refOf(task), e.shiftKey);
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={selected}
+            readOnly
+            className="rounded border-slate-300 cursor-pointer"
+            aria-label={`Select task ${task.title}`}
+          />
+        </td>
+
         {/* Title + project/feature chips + AR toggle */}
-        <td className="py-2.5 pl-4 pr-2 min-w-[200px]">
+        <td className="py-2.5 pl-1 pr-2 min-w-[200px]">
           <div className="font-medium text-slate-800 text-sm leading-snug group-hover:text-sky-800 transition-colors">
             {task.title}
           </div>
@@ -209,7 +256,7 @@ function TaskRow({ task, onOpen }: { task: Task; onOpen: (t: Task) => void }) {
       <AnimatePresence initial={false}>
         {expanded && ars.length > 0 && (
           <tr className="border-b border-slate-100">
-            <td colSpan={5} className="py-0 pl-6 pr-4 bg-amber-50/30">
+            <td colSpan={6} className="py-0 pl-6 pr-4 bg-amber-50/30">
               <motion.ul
                 initial={{ height: 0, opacity: 0 }}
                 animate={{ height: "auto", opacity: 1 }}
@@ -236,12 +283,15 @@ function TaskRow({ task, onOpen }: { task: Task; onOpen: (t: Task) => void }) {
 
 function GroupSection({
   group, onOpen, project, composerOpen, onComposerToggle,
+  selected, onSelect,
 }: {
   group: Group;
   onOpen: (t: Task) => void;
   project?: string;
   composerOpen: boolean;
   onComposerToggle: () => void;
+  selected: Set<string>;
+  onSelect: (taskRef: string, shift: boolean) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -283,6 +333,7 @@ function GroupSection({
         <table className="w-full">
           <thead className="sr-only">
             <tr>
+              <th>Select</th>
               <th>Title</th>
               <th>Status</th>
               <th>Priority</th>
@@ -292,7 +343,13 @@ function GroupSection({
           </thead>
           <tbody>
             {group.tasks.map((t) => (
-              <TaskRow key={t.id} task={t} onOpen={onOpen} />
+              <TaskRow
+                key={t.id}
+                task={t}
+                onOpen={onOpen}
+                selected={selected.has(refOf(t))}
+                onSelect={onSelect}
+              />
             ))}
           </tbody>
         </table>
@@ -327,6 +384,72 @@ export function MyTasksView() {
 
   const tasks  = data?.tasks ?? [];
   const groups = useMemo(() => groupTasks(tasks, groupBy), [tasks, groupBy]);
+
+  // ── Multi-select state (issue #33) ──────────────────────────────────────
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [lastClickedRef, setLastClickedRef] = useState<string | null>(null);
+
+  // Visible-row order for shift-range. Mirrors the rendered group order.
+  const visibleRefs = useMemo(
+    () => groups.flatMap((g) => g.tasks.map((t) => refOf(t))),
+    [groups],
+  );
+
+  // Prune selection of refs that no longer exist after a refetch (e.g. task
+  // deleted, hide-done toggled). Without this, "selected" can grow ghosts.
+  useEffect(() => {
+    const present = new Set(visibleRefs);
+    setSelected((prev) => {
+      const next = new Set<string>();
+      for (const r of prev) if (present.has(r)) next.add(r);
+      return next.size === prev.size ? prev : next;
+    });
+  }, [visibleRefs]);
+
+  // Esc clears selection.
+  useEffect(() => {
+    if (selected.size === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSelected(new Set());
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected.size]);
+
+  const handleSelect = (ref: string, shift: boolean) => {
+    if (shift && lastClickedRef && lastClickedRef !== ref) {
+      const a = visibleRefs.indexOf(lastClickedRef);
+      const b = visibleRefs.indexOf(ref);
+      if (a >= 0 && b >= 0) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        const range = visibleRefs.slice(lo, hi + 1);
+        // Range-extend in the same direction as the last click set the anchor.
+        // Default behavior is additive — matches mail clients / Linear.
+        setSelected((prev) => {
+          const next = new Set(prev);
+          for (const r of range) next.add(r);
+          return next;
+        });
+        setLastClickedRef(ref);
+        return;
+      }
+    }
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(ref)) next.delete(ref);
+      else next.add(ref);
+      return next;
+    });
+    setLastClickedRef(ref);
+  };
+
+  const selectedTasks = useMemo(() => {
+    if (selected.size === 0) return [];
+    const lookup = new Map(tasks.map((t) => [refOf(t), t]));
+    return Array.from(selected)
+      .map((r) => lookup.get(r))
+      .filter((t): t is Task => !!t);
+  }, [selected, tasks]);
 
   const totalOpen = tasks.filter((t) => t.status !== "done").length;
   const totalDone = tasks.filter((t) => t.status === "done").length;
@@ -428,11 +551,27 @@ export function MyTasksView() {
             onComposerToggle={() =>
               setComposerOpen(composerOpen === group.key ? null : group.key)
             }
+            selected={selected}
+            onSelect={handleSelect}
           />
         ))}
       </div>
 
       {editing && <TaskEditPopover task={editing} onClose={() => setEditing(null)} />}
+
+      <BulkEditBar
+        selectedTasks={selectedTasks}
+        onClear={() => setSelected(new Set())}
+        onApplied={(succeededRefs) => {
+          if (succeededRefs.length === 0) return;
+          const drop = new Set(succeededRefs);
+          setSelected((prev) => {
+            const next = new Set<string>();
+            for (const r of prev) if (!drop.has(r)) next.add(r);
+            return next;
+          });
+        }}
+      />
     </>
   );
 }

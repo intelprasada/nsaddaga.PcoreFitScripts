@@ -181,7 +181,7 @@ export const api = {
     }
     return req<TasksResponse>(`/tasks?${qs.toString()}`);
   },
-  updateTask: (id: number, patch: {
+  updateTask: (ref: number | string, patch: {
     status?: string;
     priority?: string;
     eta?: string;
@@ -190,7 +190,7 @@ export const api = {
     add_note?: string;
     notes?: string;
   }) =>
-    req<Task>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+    req<Task>(`/tasks/${ref}`, { method: "PATCH", body: JSON.stringify(patch) }),
 
   createTask: (body: {
     title: string;
