@@ -29,9 +29,13 @@
 			#status done
 		!task #id T-63C696 Review starvation covers. #status done 
 			!AR #id T-TC4QCP converted cover into assertion - found an RTL bug 
-		!task #id T-AX24MR RTL bug fix model has FV failures #status wip
+		!task #id T-AX24MR RTL bug fix model has FV failures #status blocked
+			#note test note
+			#note R_STSR_IDQ_ACC_PRE_ALLOC_OVERFLOW -
+			#note Apar will review the wave to confirm my rootcause and add more available credits once he is free. the speculative path for reserving DSB credits from stsriq is short of 3 credits in worse case scenario where idq does not read out for a long time without any stalls
 			!AR #id T-H66QC7 2 FV fixes #status done
-			!AR #id T-B45J4P 1 Jasper failure - details to be added #status todo
+			!AR #id T-B45J4P 1 Jasper failure - details to be added #status done
+			!AR #id T-WKYEQQ Followup with Apar about the fix once he is free @aboli
 		!task #id T-CV97FD Val Plan development and review #eta ww18 
 			!AR #id T-VG12T9 SMT related COI, assertions
 			!AR #id T-Y2A944 SEC for STSR?
