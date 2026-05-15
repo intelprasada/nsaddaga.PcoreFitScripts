@@ -476,6 +476,26 @@ def test_filter_by_first_name_case_insensitive_and_partial():
     assert len(phonebook_intel.filter_by_first_name(hits, "")) == len(hits)
 
 
+def test_filter_by_first_name_prefix_only_rejects_mid_name_substrings():
+    """Regression for #222: substring match was matching '@admin' against
+    'Padmini' (because 'admin' is a substring of 'padmini'). Switched to
+    prefix match so only first names starting with the query match."""
+    hits = [
+        phonebook_intel.IntelPhonebookHit(
+            display="Padmini Last", first_name="Padmini",
+            idsid="padminix", email="padmini@intel.com", wwid="W1",
+        ),
+        phonebook_intel.IntelPhonebookHit(
+            display="Diana Last", first_name="Diana",
+            idsid="dianax", email="diana@intel.com", wwid="W2",
+        ),
+    ]
+    assert phonebook_intel.filter_by_first_name(hits, "admin") == []
+    assert phonebook_intel.filter_by_first_name(hits, "ana") == []
+    assert [h.first_name for h in phonebook_intel.filter_by_first_name(hits, "Pad")] == ["Padmini"]
+    assert [h.first_name for h in phonebook_intel.filter_by_first_name(hits, "Dia")] == ["Diana"]
+
+
 def test_filter_by_first_name_keeps_no_comma_rows():
     """Some rows have no comma in the link text (lowercase contractor
     rows like 'pavel mikhlin'). Treat the whole string as the first

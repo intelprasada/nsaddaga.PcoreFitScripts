@@ -233,22 +233,22 @@ def cached_lookup(query: str) -> list[IntelPhonebookHit]:
 def filter_by_first_name(
     hits: list[IntelPhonebookHit], query: str,
 ) -> list[IntelPhonebookHit]:
-    """Drop candidates whose first name doesn't contain the query (#215).
+    """Drop candidates whose first name doesn't start with the query (#215, #222).
 
     Phonebook server-side substring-matches BookName *and* org-chart
     metadata, so a query like ``Pavel`` returns Ioana Pavel (lastname
     match) and Barak Agam (teammate-of-a-Pavel match). We only ever
     want first-name matches, so post-filter client-side.
 
-    Substring (not whole-word) so partial typing like ``@Niha`` still
-    matches Niharika. ``query`` is matched case-insensitively against
-    the captured ``first_name`` portion of each hit. Empty queries
-    return ``hits`` unchanged.
+    Prefix match (case-insensitive) so partial typing like ``@Niha``
+    still matches Niharika and ``@Pav`` matches Pavel — but mid-name
+    accidents like ``@admin`` matching "Padmini" or ``@ana`` matching
+    "Diana" are rejected. Empty queries return ``hits`` unchanged.
     """
     q = (query or "").strip().lower()
     if not q:
         return hits
-    return [h for h in hits if q in (h.first_name or "").lower()]
+    return [h for h in hits if (h.first_name or "").lower().startswith(q)]
 
 
 def cache_clear() -> None:
