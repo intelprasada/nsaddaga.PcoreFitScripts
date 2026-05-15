@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api, type Task } from "../../api/client";
 import type { FilterState } from "../../store/ui";
 import {
+  buildHtmlBody,
   buildMailto,
   buildPlainBody,
   countOpen,
@@ -133,6 +134,11 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
     [filters, grouped, columns, snapshotUrl, includeDone, phonebook],
   );
 
+  const htmlBody = useMemo(
+    () => buildHtmlBody({ filters, grouped, columns, snapshotUrl, includeDone, phonebook }),
+    [filters, grouped, columns, snapshotUrl, includeDone, phonebook],
+  );
+
   const mailto = useMemo(() => {
     const safeBody = truncateBodyForMailto(body);
     return buildMailto({ to: ownerInfo.resolved, cc, subject, body: safeBody });
@@ -143,17 +149,117 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
 
   const sendDisabled = ownerCount === 0 && cc.length === 0;
 
-  const onSend = () => {
+  // ClipboardItem is only available in secure contexts and on a recent
+  // browser. Detect once so we can fall back gracefully.
+  const canRichCopy = typeof window !== "undefined"
+    && typeof window.ClipboardItem !== "undefined"
+    && !!navigator.clipboard?.write;
+
+  const [toast, setToast] = useState<string | null>(null);
+  const flashToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 3500);
+  };
+
+  // Modern API + legacy execCommand fallback. The async navigator.clipboard
+  // path silently rejects with NotAllowedError when the document isn't
+  // focused (modal dialogs sometimes hit this in Firefox / older Chrome),
+  // so we always have a textarea/contenteditable fallback.
+  const copyTextRobust = async (text: string): Promise<boolean> => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (e) { console.warn("clipboard.writeText failed, falling back", e); }
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return ok;
+    } catch (e) {
+      console.error("copy fallback failed", e);
+      return false;
+    }
+  };
+
+  const writeRichClipboard = async (): Promise<boolean> => {
+    if (canRichCopy) {
+      try {
+        const item = new ClipboardItem({
+          "text/html": new Blob([htmlBody], { type: "text/html" }),
+          "text/plain": new Blob([body], { type: "text/plain" }),
+        });
+        await navigator.clipboard.write([item]);
+        return true;
+      } catch (e) {
+        console.warn("clipboard.write(rich) failed, falling back to execCommand", e);
+      }
+    }
+    // Legacy fallback: select a hidden contenteditable holding the HTML
+    // and execCommand("copy"). Most browsers preserve the rich format.
+    try {
+      const div = document.createElement("div");
+      div.contentEditable = "true";
+      div.innerHTML = htmlBody;
+      div.style.position = "fixed";
+      div.style.left = "-9999px";
+      div.style.opacity = "0";
+      document.body.appendChild(div);
+      const range = document.createRange();
+      range.selectNodeContents(div);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      const ok = document.execCommand("copy");
+      sel?.removeAllRanges();
+      document.body.removeChild(div);
+      return ok;
+    } catch (e) {
+      console.error("rich-copy fallback failed", e);
+      return false;
+    }
+  };
+
+  const onSend = async () => {
+    // Always open mailto with the plain-text body so the mail client is
+    // populated even if clipboard access is blocked. Additionally copy
+    // the rich HTML version to the clipboard so users can paste-replace
+    // for rich formatting if their mail client supports it.
+    const ok = await writeRichClipboard();
     window.location.href = mailto.url;
+    if (ok) {
+      flashToast("Opened mail client — paste (Ctrl/Cmd+V) to replace with rich HTML version");
+    } else {
+      flashToast("Opened mail client with plain-text body (clipboard blocked, no rich version copied)");
+    }
   };
 
   const onCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(body);
+    const ok = await copyTextRobust(body);
+    if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // fall through silently — clipboard not available
+    } else {
+      flashToast("Copy failed — your browser blocked clipboard access");
+    }
+  };
+
+  const [copiedHtml, setCopiedHtml] = useState(false);
+  const onCopyHtml = async () => {
+    const ok = await writeRichClipboard();
+    if (ok) {
+      setCopiedHtml(true);
+      setTimeout(() => setCopiedHtml(false), 1500);
+    } else {
+      flashToast("Copy failed — your browser blocked clipboard access");
     }
   };
 
@@ -262,11 +368,34 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
         </div>
 
         <div className="flex-1 overflow-auto p-5 text-sm">
-          <div className="text-xs text-slate-500 mb-1">Preview (plain text)</div>
-          <pre className="whitespace-pre-wrap font-mono text-xs bg-slate-50 border rounded p-3">
-            {body}
-          </pre>
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-xs text-slate-500">Preview (rich HTML — what your recipients will see after pasting)</div>
+            {!canRichCopy && (
+              <div className="text-xs text-amber-600">
+                Browser doesn't support rich clipboard — will fall back to plain-text body in mailto.
+              </div>
+            )}
+          </div>
+          <div
+            className="border rounded p-3 bg-white"
+            // The HTML is built locally from typed Task data with full
+            // escaping (escHtml on every interpolated string in
+            // buildHtmlBody) — XSS-safe to render here for preview.
+            dangerouslySetInnerHTML={{ __html: htmlBody }}
+          />
+          <details className="mt-3">
+            <summary className="text-xs text-slate-500 cursor-pointer">Plain-text fallback (used if rich clipboard fails)</summary>
+            <pre className="whitespace-pre-wrap font-mono text-xs bg-slate-50 border rounded p-3 mt-1">
+              {body}
+            </pre>
+          </details>
         </div>
+
+        {toast && (
+          <div className="mx-5 mb-2 px-3 py-2 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs">
+            {toast}
+          </div>
+        )}
 
         <div className="px-5 py-3 border-t flex items-center justify-between">
           <div className="text-xs text-slate-500">
@@ -276,8 +405,16 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
             <button
               onClick={onCopy}
               className="px-3 py-1.5 text-sm rounded border bg-white hover:bg-slate-50"
+              title="Copy plain-text body to clipboard"
             >
-              {copied ? "Copied!" : "Copy body"}
+              {copied ? "Copied!" : "Copy text"}
+            </button>
+            <button
+              onClick={onCopyHtml}
+              className="px-3 py-1.5 text-sm rounded border bg-white hover:bg-slate-50"
+              title="Copy rich HTML to clipboard — paste into Outlook/Gmail for formatted view"
+            >
+              {copiedHtml ? "Copied!" : "Copy HTML"}
             </button>
             <button
               onClick={onClose}
@@ -289,7 +426,7 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
               onClick={onSend}
               disabled={sendDisabled}
               className="px-3 py-1.5 text-sm rounded bg-sky-600 text-white hover:bg-sky-700 disabled:bg-slate-300"
-              title={sendDisabled ? "No resolved recipients (To or CC)" : "Open in mail client"}
+              title={sendDisabled ? "No resolved recipients (To or CC)" : "Copy formatted snapshot + open mail client"}
             >
               Open in mail client
             </button>

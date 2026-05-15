@@ -261,6 +261,17 @@ export function buildPlainBody(opts: BodyOptions): string {
   if (filters.where?.length) filterBits.push(`chips=[${filters.where.join(", ")}]`);
   lines.push(`Filters: ${filterBits.length ? filterBits.join(", ") : "(none)"}`);
   lines.push(`View: ${snapshotUrl}`);
+
+  const stats = computeArStats(grouped, columns, includeDone);
+  const statsBits = [
+    `total=${stats.total}`,
+    `todo=${stats.todo}`,
+    `in-progress=${stats.inProgress}`,
+    `blocked=${stats.blocked}`,
+    `done=${stats.done}`,
+  ];
+  if (stats.completionPct !== null) statsBits.push(`${stats.completionPct}% complete`);
+  lines.push(`AR stats: ${statsBits.join(", ")}`);
   lines.push("");
 
   // Per-owner status summary table (#210 Phase 2). Outlook-friendly fixed-width.
@@ -297,10 +308,13 @@ export function buildMailto(opts: {
 }): { url: string; tooLong: boolean; length: number } {
   const enc = (s: string) => encodeURIComponent(s);
   const params: string[] = [];
-  if (opts.cc.length) params.push(`cc=${opts.cc.map(enc).join(",")}`);
+  // Outlook on Windows requires ';' as the address separator. RFC 6068
+  // specifies ',' but every major client (Outlook, Gmail, Apple Mail,
+  // Thunderbird) accepts ';', so semicolon is the safer choice (#220).
+  if (opts.cc.length) params.push(`cc=${opts.cc.map(enc).join(";")}`);
   params.push(`subject=${enc(opts.subject)}`);
   params.push(`body=${enc(opts.body)}`);
-  const to = opts.to.map(enc).join(",");
+  const to = opts.to.map(enc).join(";");
   const url = `mailto:${to}?${params.join("&")}`;
   return { url, tooLong: url.length > 1800, length: url.length };
 }
@@ -309,10 +323,282 @@ export function countOpen(grouped: Record<string, Task[]>): number {
   return ["todo", "in-progress", "blocked"].reduce((n, c) => n + (grouped[c]?.length ?? 0), 0);
 }
 
+export interface ArStats {
+  total: number;
+  todo: number;
+  inProgress: number;
+  blocked: number;
+  done: number;
+  open: number;
+  /** done / (total considered) — null if total is 0. `done` is excluded from
+   *  the denominator when `includeDone` is false, in which case completion
+   *  cannot be computed and this is null. */
+  completionPct: number | null;
+}
+
+/** Compute aggregate AR (action-required) stats across the visible columns.
+ *  When `includeDone` is false, the done column is excluded from `total` but
+ *  `done` is still reported separately for context. */
+export function computeArStats(
+  grouped: Record<string, Task[]>,
+  columns: readonly string[],
+  includeDone: boolean,
+): ArStats {
+  const todo = grouped["todo"]?.length ?? 0;
+  const inProgress = grouped["in-progress"]?.length ?? 0;
+  const blocked = grouped["blocked"]?.length ?? 0;
+  const done = grouped["done"]?.length ?? 0;
+  let total = 0;
+  for (const col of columns) {
+    if (col === "done" && !includeDone) continue;
+    total += grouped[col]?.length ?? 0;
+  }
+  const open = todo + inProgress + blocked;
+  const denom = open + done;
+  const completionPct = includeDone && denom > 0 ? Math.round((done / denom) * 100) : null;
+  return { total, todo, inProgress, blocked, done, open, completionPct };
+}
+
 /** Truncate body to keep mailto under the safe URL length, preserving header lines. */
 export function truncateBodyForMailto(body: string, footer = "\n…(truncated — see snapshot link above)"): string {
   // Caller decides if truncation is needed; this is a safe utility.
   const MAX = 1400; // headroom for to/cc/subject + URL encoding overhead
   if (body.length <= MAX) return body;
   return body.slice(0, MAX - footer.length) + footer;
+}
+
+// ---------------------------------------------------------------------------
+// HTML body (#219). Outlook-safe: <table> layout, inline styles, web-safe
+// colors, no flexbox / CSS variables / background images. Designed to be
+// copied to the clipboard as a `text/html` blob via ClipboardItem so the
+// user pastes a formatted snapshot into Outlook/Gmail/etc.
+// ---------------------------------------------------------------------------
+
+const STATUS_COLORS: Record<string, { bg: string; fg: string }> = {
+  "blocked":     { bg: "#dc2626", fg: "#ffffff" }, // red-600
+  "in-progress": { bg: "#2563eb", fg: "#ffffff" }, // blue-600
+  "todo":        { bg: "#475569", fg: "#ffffff" }, // slate-600
+  "done":        { bg: "#16a34a", fg: "#ffffff" }, // green-600
+};
+
+const PRIORITY_COLORS: Record<number, string> = {
+  1: "#dc2626", // P1 red
+  2: "#ea580c", // P2 orange
+  3: "#ca8a04", // P3 amber
+  4: "#65a30d", // P4 lime
+  5: "#0891b2", // P5 cyan
+};
+
+function escHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function htmlOwnerLabels(t: Task, phonebook?: Record<string, PhonebookEntry>): string {
+  if (!t.owners?.length) return "";
+  const chips = t.owners.map((o) => {
+    const pb = phonebook ? lookupResolved(phonebook, o) : null;
+    const label = pb ? (pb.display || pb.idsid) : `@${o}`;
+    return `<span style="display:inline-block;padding:1px 6px;margin-right:4px;border-radius:10px;background:#e2e8f0;color:#0f172a;font-size:11px;">${escHtml(label)}</span>`;
+  });
+  return chips.join("");
+}
+
+function htmlOwnerStatusTable(rows: OwnerStatusRow[]): string {
+  if (rows.length === 0) return "";
+  const head = `
+    <tr style="background:#f1f5f9;">
+      <th align="left"  style="padding:6px 10px;font-size:12px;color:#334155;border-bottom:1px solid #cbd5e1;">Owner</th>
+      <th align="right" style="padding:6px 10px;font-size:12px;color:#334155;border-bottom:1px solid #cbd5e1;">Todo</th>
+      <th align="right" style="padding:6px 10px;font-size:12px;color:#334155;border-bottom:1px solid #cbd5e1;">WIP</th>
+      <th align="right" style="padding:6px 10px;font-size:12px;color:#334155;border-bottom:1px solid #cbd5e1;">Blkd</th>
+      <th align="right" style="padding:6px 10px;font-size:12px;color:#334155;border-bottom:1px solid #cbd5e1;">Done</th>
+      <th align="right" style="padding:6px 10px;font-size:12px;color:#334155;border-bottom:1px solid #cbd5e1;">Total</th>
+    </tr>`;
+  const body = rows.map((r, i) => {
+    const bg = i % 2 === 0 ? "#ffffff" : "#f8fafc";
+    return `
+      <tr style="background:${bg};">
+        <td style="padding:5px 10px;font-size:13px;color:#0f172a;">${escHtml(r.owner)}</td>
+        <td align="right" style="padding:5px 10px;font-size:13px;color:#475569;">${r.todo}</td>
+        <td align="right" style="padding:5px 10px;font-size:13px;color:#2563eb;">${r.inProgress}</td>
+        <td align="right" style="padding:5px 10px;font-size:13px;color:#dc2626;">${r.blocked}</td>
+        <td align="right" style="padding:5px 10px;font-size:13px;color:#16a34a;">${r.done}</td>
+        <td align="right" style="padding:5px 10px;font-size:13px;color:#0f172a;font-weight:600;">${r.total}</td>
+      </tr>`;
+  }).join("");
+  return `
+    <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;border:1px solid #cbd5e1;border-radius:4px;margin:0 0 16px 0;">
+      ${head}
+      ${body}
+    </table>`;
+}
+
+/** Render a per-task AR progress bar showing the proportion of AR sub-items
+ *  in each status. Returns "" if the task has no AR children. */
+function htmlArProgress(t: Task): string {
+  const ars = (t.children ?? []).filter((c) => c.kind === "ar");
+  if (ars.length === 0) return "";
+  const counts = { todo: 0, "in-progress": 0, blocked: 0, done: 0 } as Record<string, number>;
+  for (const a of ars) counts[a.status] = (counts[a.status] ?? 0) + 1;
+  const total = ars.length;
+  // Build segments in done/in-progress/blocked/todo order so finished work
+  // visually leads the bar (left → right).
+  const order: Array<keyof typeof counts> = ["done", "in-progress", "blocked", "todo"];
+  const segs = order
+    .filter((k) => counts[k] > 0)
+    .map((k) => {
+      const pct = Math.max(1, Math.round((counts[k] / total) * 100));
+      const bg = STATUS_COLORS[k]?.bg ?? "#94a3b8";
+      return `<td width="${pct}%" style="background:${bg};font-size:1px;line-height:1px;height:6px;">&nbsp;</td>`;
+    })
+    .join("");
+  const summaryParts: string[] = [`${counts.done}/${total} ARs done`];
+  if (counts.blocked > 0) summaryParts.push(`<span style="color:#dc2626;font-weight:600;">${counts.blocked} blocked</span>`);
+  if (counts["in-progress"] > 0) summaryParts.push(`${counts["in-progress"]} in-progress`);
+  if (counts.todo > 0) summaryParts.push(`${counts.todo} todo`);
+  return `
+    <div style="margin-top:6px;">
+      <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;border-radius:3px;overflow:hidden;background:#e2e8f0;">
+        <tr>${segs}</tr>
+      </table>
+      <div style="margin-top:3px;font-size:10px;color:#64748b;">${summaryParts.join(" · ")}</div>
+    </div>`;
+}
+
+function htmlColumnSection(col: string, items: Task[], snapshotUrl: string, phonebook?: Record<string, PhonebookEntry>): string {
+  if (!items.length) return "";
+  const c = STATUS_COLORS[col] ?? { bg: "#475569", fg: "#ffffff" };
+  const label = STATUS_LABELS[col] ?? col.toUpperCase();
+  // Each task is a stand-alone "card" mini-table with a colored left border
+  // by priority. Cards are stacked vertically inside a wrapper for the
+  // column. Outlook-safe: pure tables + inline styles.
+  const cards = items.map((t) => {
+    const prio = PRIORITY_LABELS[t.priority_rank];
+    const prioColor = PRIORITY_COLORS[t.priority_rank] ?? "#94a3b8";
+    const prioChip = prio
+      ? `<span style="display:inline-block;padding:1px 6px;border-radius:10px;background:${prioColor};color:#ffffff;font-size:11px;font-weight:600;margin-right:6px;">${prio}</span>`
+      : "";
+    const statusPill = `<span style="display:inline-block;padding:1px 7px;border-radius:10px;background:${c.bg};color:${c.fg};font-size:10px;font-weight:600;letter-spacing:0.3px;text-transform:uppercase;margin-right:6px;">${escHtml(label)}</span>`;
+    const eta = t.eta
+      ? `<span style="display:inline-block;padding:1px 6px;border-radius:3px;background:#fef3c7;color:#92400e;font-size:11px;white-space:nowrap;">ETA ${escHtml(t.eta)}</span>`
+      : "";
+    const owners = htmlOwnerLabels(t, phonebook);
+    const projects = (t.projects?.length ? t.projects.join(" / ") : "");
+    const path = projects ? `<div style="font-size:11px;color:#94a3b8;margin-top:3px;">${escHtml(projects)}</div>` : "";
+    const titleLink = t.task_uuid && snapshotUrl
+      ? `<a href="${escHtml(snapshotUrl)}#task=${escHtml(t.task_uuid)}" style="color:#0f172a;text-decoration:none;">${escHtml(t.title || "(no title)")}</a>`
+      : escHtml(t.title || "(no title)");
+    const arBar = htmlArProgress(t);
+    return `
+      <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:separate;background:#ffffff;border:1px solid #e2e8f0;border-left:4px solid ${prioColor};border-radius:4px;margin:0 0 8px 0;">
+        <tr>
+          <td style="padding:8px 12px;">
+            <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+              <tr>
+                <td style="vertical-align:top;">
+                  <div style="margin-bottom:4px;">${statusPill}${prioChip}</div>
+                  <div style="font-size:14px;font-weight:600;color:#0f172a;line-height:1.3;">${titleLink}</div>
+                </td>
+                <td align="right" style="vertical-align:top;white-space:nowrap;padding-left:8px;">
+                  ${eta}
+                </td>
+              </tr>
+            </table>
+            ${owners ? `<div style="margin-top:6px;">${owners}</div>` : ""}
+            ${path}
+            ${arBar}
+          </td>
+        </tr>
+      </table>`;
+  }).join("");
+  return `
+    <div style="margin:0 0 16px 0;">
+      <div style="background:${c.bg};color:${c.fg};padding:6px 12px;font-size:13px;font-weight:600;letter-spacing:0.3px;border-radius:4px 4px 0 0;">
+        ${escHtml(label)} <span style="opacity:0.85;font-weight:400;">(${items.length})</span>
+      </div>
+      <div style="background:#f8fafc;padding:8px;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 4px 4px;">
+        ${cards}
+      </div>
+    </div>`;
+}
+
+export function buildHtmlBody(opts: BodyOptions): string {
+  const { filters, grouped, columns, snapshotUrl, includeDone, phonebook } = opts;
+  const now = opts.generatedAt ?? new Date();
+  const project = filters.project?.trim() || "All projects";
+  const filterBits: string[] = [];
+  if (filters.owner)    filterBits.push(`owner=${filters.owner}`);
+  if (filters.feature)  filterBits.push(`feature=${filters.feature}`);
+  if (filters.priority) filterBits.push(`priority=${filters.priority}`);
+  if (filters.status)   filterBits.push(`status=${filters.status}`);
+  if (filters.q)        filterBits.push(`q="${filters.q}"`);
+  if (filters.where?.length) filterBits.push(`chips=[${filters.where.join(", ")}]`);
+  const filterTxt = filterBits.length ? filterBits.join(", ") : "(no filters)";
+  const openCount = countOpen(grouped);
+  const blockedCount = grouped["blocked"]?.length ?? 0;
+  const stats = computeArStats(grouped, columns, includeDone);
+
+  const statChip = (label: string, n: number, bg: string, fg: string) => `
+    <td style="padding:0 4px 0 0;">
+      <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+        <tr>
+          <td style="background:${bg};color:${fg};padding:4px 10px;font-size:12px;font-weight:600;border-radius:3px;white-space:nowrap;">
+            ${escHtml(label)}: ${n}
+          </td>
+        </tr>
+      </table>
+    </td>`;
+  const statBar = `
+    <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 0 14px 0;">
+      <tr>
+        ${statChip("Total", stats.total, "#0f172a", "#ffffff")}
+        ${statChip("To-do", stats.todo, STATUS_COLORS["todo"].bg, STATUS_COLORS["todo"].fg)}
+        ${statChip("In-progress", stats.inProgress, STATUS_COLORS["in-progress"].bg, STATUS_COLORS["in-progress"].fg)}
+        ${statChip("Blocked", stats.blocked, STATUS_COLORS["blocked"].bg, STATUS_COLORS["blocked"].fg)}
+        ${statChip("Done", stats.done, STATUS_COLORS["done"].bg, STATUS_COLORS["done"].fg)}
+        ${stats.completionPct !== null ? statChip(`${stats.completionPct}% complete`, 0, "#e2e8f0", "#0f172a").replace(": 0", "") : ""}
+      </tr>
+    </table>`;
+
+  const visibleTasks: Task[] = [];
+  for (const col of columns) {
+    if (col === "done" && !includeDone) continue;
+    visibleTasks.push(...(grouped[col] ?? []));
+  }
+  const ownerTable = visibleTasks.length > 0
+    ? htmlOwnerStatusTable(buildOwnerStatusRows(visibleTasks, phonebook))
+    : "";
+
+  const sections = columns
+    .filter((col) => col !== "done" || includeDone)
+    .map((col) => htmlColumnSection(col, grouped[col] ?? [], snapshotUrl, phonebook))
+    .join("");
+
+  const generated = now.toISOString().replace("T", " ").slice(0, 16);
+  const link = snapshotUrl
+    ? `<a href="${escHtml(snapshotUrl)}" style="color:#0369a1;">View live in VegaNotes</a>`
+    : "";
+
+  return `
+<div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#0f172a;max-width:640px;margin:0 auto;">
+  <div style="border-bottom:2px solid #0f172a;padding-bottom:8px;margin-bottom:14px;">
+    <div style="font-size:18px;font-weight:600;">${escHtml(project)} &mdash; Kanban snapshot</div>
+    <div style="font-size:12px;color:#64748b;margin-top:4px;">
+      ${openCount} open &middot; ${blockedCount} blocked &middot;
+      Filters: ${escHtml(filterTxt)} &middot;
+      Generated ${escHtml(generated)} UTC
+    </div>
+  </div>
+  ${statBar}
+  ${ownerTable ? `<div style="font-size:12px;font-weight:600;color:#334155;margin:0 0 6px 0;letter-spacing:0.4px;">STATUS BY OWNER</div>${ownerTable}` : ""}
+  ${sections}
+  <div style="margin-top:14px;padding-top:8px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;">
+    ${link} &middot; Sent from VegaNotes Kanban view
+  </div>
+</div>`.trim();
 }

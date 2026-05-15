@@ -199,7 +199,8 @@ describe("buildMailto", () => {
       subject: "hi & bye",
       body: "line1\nline2",
     });
-    expect(r.url).toMatch(/^mailto:a%40x\.com,b%40x\.com\?/);
+    // Outlook on Windows requires ';' as the separator between recipients.
+    expect(r.url).toMatch(/^mailto:a%40x\.com;b%40x\.com\?/);
     expect(r.url).toContain("cc=c%40x.com");
     expect(r.url).toContain("subject=hi%20%26%20bye");
     expect(r.url).toContain("body=line1%0Aline2");
@@ -306,5 +307,246 @@ describe("buildPlainBody with phonebook", () => {
     // Card line should use canonical idsid, not the original token.
     expect(body).toContain("@nsaddaga");
     expect(body).not.toContain("@@addagarla");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HTML body (#219).
+// ---------------------------------------------------------------------------
+import { buildHtmlBody, computeArStats } from "../src/components/Kanban/emailFormat";
+
+const baseFilters = { project: "Demo", owner: "", feature: "", priority: "", status: "", q: "", where: [] } as any;
+
+describe("buildHtmlBody", () => {
+  const cols = ["blocked", "in-progress", "todo", "done"] as const;
+
+  it("renders a project header with snapshot URL and filter summary", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters, grouped: { todo: [mkTask()] }, columns: cols,
+      snapshotUrl: "http://example/snap", includeDone: false,
+    });
+    expect(html).toContain("Demo");
+    expect(html).toContain("Kanban snapshot");
+    expect(html).toContain("http://example/snap");
+    expect(html).toContain("(no filters)");
+  });
+
+  it("renders columns in order with status-colored headers", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters,
+      grouped: {
+        blocked: [mkTask({ id: 1, title: "Blk task", status: "blocked" })],
+        "in-progress": [mkTask({ id: 2, title: "WIP task", status: "in-progress" })],
+        todo: [mkTask({ id: 3, title: "Todo task", status: "todo" })],
+      },
+      columns: cols, snapshotUrl: "", includeDone: false,
+    });
+    // Blocked appears before in-progress before todo in the output order.
+    const iBlocked = html.indexOf("BLOCKED");
+    const iWIP = html.indexOf("IN-PROGRESS");
+    const iTodo = html.indexOf("TODO");
+    expect(iBlocked).toBeGreaterThan(0);
+    expect(iWIP).toBeGreaterThan(iBlocked);
+    expect(iTodo).toBeGreaterThan(iWIP);
+    // Color tokens for each column header are present.
+    expect(html).toContain("#dc2626"); // blocked red
+    expect(html).toContain("#2563eb"); // in-progress blue
+    expect(html).toContain("#475569"); // todo slate
+  });
+
+  it("escapes HTML in task titles and owner tokens (XSS guard)", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters,
+      grouped: { todo: [mkTask({ title: "<script>x</script>", owners: ["<img onerror>"] })] },
+      columns: cols, snapshotUrl: "", includeDone: false,
+    });
+    expect(html).not.toContain("<script>x</script>");
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).toContain("&lt;img onerror&gt;");
+  });
+
+  it("excludes the Done column when includeDone=false, includes when true", () => {
+    const grouped = { done: [mkTask({ status: "done", title: "Closed item" })] };
+    const off = buildHtmlBody({ filters: baseFilters, grouped, columns: cols, snapshotUrl: "", includeDone: false });
+    const on  = buildHtmlBody({ filters: baseFilters, grouped, columns: cols, snapshotUrl: "", includeDone: true });
+    expect(off).not.toContain("Closed item");
+    expect(on).toContain("Closed item");
+    expect(on).toContain("DONE");
+  });
+
+  it("renders the per-owner status table when there are visible tasks", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters,
+      grouped: { todo: [mkTask({ owners: ["@alice"] }), mkTask({ owners: ["@alice"], status: "todo" })] },
+      columns: cols, snapshotUrl: "", includeDone: false,
+    });
+    expect(html).toContain("STATUS BY OWNER");
+    expect(html).toContain("@alice");
+  });
+
+  it("emits no STATUS BY OWNER section when there are zero visible tasks", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters, grouped: {}, columns: cols, snapshotUrl: "", includeDone: false,
+    });
+    expect(html).not.toContain("STATUS BY OWNER");
+  });
+
+  it("renders an AR stats chip bar with totals for each status", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters,
+      grouped: {
+        blocked: [mkTask({ id: 1, status: "blocked" })],
+        "in-progress": [mkTask({ id: 2, status: "in-progress" }), mkTask({ id: 3, status: "in-progress" })],
+        todo: [mkTask({ id: 4, status: "todo" })],
+        done: [mkTask({ id: 5, status: "done" }), mkTask({ id: 6, status: "done" })],
+      },
+      columns: [...cols], snapshotUrl: "", includeDone: true,
+    });
+    expect(html).toContain("Total: 6");
+    expect(html).toContain("To-do: 1");
+    expect(html).toContain("In-progress: 2");
+    expect(html).toContain("Blocked: 1");
+    expect(html).toContain("Done: 2");
+    // open=4, done=2 → 33% complete
+    expect(html).toContain("33% complete");
+  });
+
+  it("AR stats: total excludes done when includeDone=false; no completion %", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters,
+      grouped: {
+        todo: [mkTask({ id: 1, status: "todo" })],
+        done: [mkTask({ id: 2, status: "done" })],
+      },
+      columns: [...cols], snapshotUrl: "", includeDone: false,
+    });
+    expect(html).toContain("Total: 1");
+    expect(html).toContain("Done: 1"); // still surfaced for context
+    expect(html).not.toContain("% complete");
+  });
+});
+
+describe("computeArStats", () => {
+  const cols = ["blocked", "in-progress", "todo", "done"];
+  it("counts each status and computes completion when done is included", () => {
+    const s = computeArStats(
+      {
+        todo: [mkTask({ id: 1 }), mkTask({ id: 2 })],
+        "in-progress": [mkTask({ id: 3 })],
+        blocked: [mkTask({ id: 4 })],
+        done: [mkTask({ id: 5 }), mkTask({ id: 6 }), mkTask({ id: 7 })],
+      },
+      cols,
+      true,
+    );
+    expect(s).toEqual({
+      total: 7, todo: 2, inProgress: 1, blocked: 1, done: 3, open: 4, completionPct: 43,
+    });
+  });
+  it("excludes done from total and returns null completionPct when includeDone=false", () => {
+    const s = computeArStats(
+      { todo: [mkTask({ id: 1 })], done: [mkTask({ id: 2 })] },
+      cols,
+      false,
+    );
+    expect(s.total).toBe(1);
+    expect(s.done).toBe(1);
+    expect(s.completionPct).toBeNull();
+  });
+  it("returns zeros and null completion for empty input", () => {
+    const s = computeArStats({}, cols, true);
+    expect(s).toEqual({
+      total: 0, todo: 0, inProgress: 0, blocked: 0, done: 0, open: 0, completionPct: null,
+    });
+  });
+});
+
+describe("buildHtmlBody AR progress + cards (#221)", () => {
+  const cols = ["blocked", "in-progress", "todo", "done"] as const;
+
+  const mkAr = (over: any = {}) => ({
+    id: 100, task_uuid: "AR-1", slug: "ar", title: "ar", status: "todo",
+    kind: "ar", line: 1, eta: null, ...over,
+  });
+
+  it("renders an AR progress bar when the task has AR children", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters,
+      grouped: {
+        "in-progress": [mkTask({
+          id: 1, status: "in-progress",
+          children: [
+            mkAr({ id: 10, status: "done" }),
+            mkAr({ id: 11, status: "done" }),
+            mkAr({ id: 12, status: "in-progress" }),
+            mkAr({ id: 13, status: "blocked" }),
+          ],
+        } as any)],
+      },
+      columns: [...cols], snapshotUrl: "", includeDone: false,
+    });
+    expect(html).toContain("2/4 ARs done");
+    expect(html).toContain("1 blocked");
+    expect(html).toContain("1 in-progress");
+    // Bar uses the status colors as inline backgrounds.
+    expect(html).toContain("background:#16a34a"); // done segment
+    expect(html).toContain("background:#dc2626"); // blocked segment
+  });
+
+  it("emits no AR bar when the task has no AR children", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters,
+      grouped: { todo: [mkTask({ id: 1, children: [] } as any)] },
+      columns: [...cols], snapshotUrl: "", includeDone: false,
+    });
+    expect(html).not.toContain("ARs done");
+  });
+
+  it("ignores non-AR children (e.g. sub-tasks) when computing AR progress", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters,
+      grouped: {
+        todo: [mkTask({
+          id: 1,
+          children: [
+            { id: 10, task_uuid: null, slug: "s", title: "subtask", status: "todo", kind: "task", line: 1, eta: null },
+          ],
+        } as any)],
+      },
+      columns: [...cols], snapshotUrl: "", includeDone: false,
+    });
+    expect(html).not.toContain("ARs done");
+  });
+
+  it("renders each task as a card with priority left-border color", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters,
+      grouped: {
+        todo: [
+          mkTask({ id: 1, priority_rank: 1 }),
+          mkTask({ id: 2, priority_rank: 3 }),
+        ],
+      },
+      columns: [...cols], snapshotUrl: "", includeDone: false,
+    });
+    // Priority colors appear as left borders on cards.
+    expect(html).toContain("border-left:4px solid #dc2626"); // P1
+    expect(html).toContain("border-left:4px solid #ca8a04"); // P3
+  });
+});
+
+describe("buildPlainBody AR stats line", () => {
+  const cols = ["blocked", "in-progress", "todo", "done"];
+  it("includes an 'AR stats:' line with per-status counts and completion %", () => {
+    const body = buildPlainBody({
+      filters: baseFilters,
+      grouped: {
+        todo: [mkTask({ id: 1 })],
+        "in-progress": [mkTask({ id: 2, status: "in-progress" })],
+        done: [mkTask({ id: 3, status: "done" })],
+      },
+      columns: cols, snapshotUrl: "http://x", includeDone: true,
+    });
+    expect(body).toMatch(/AR stats: total=3, todo=1, in-progress=1, blocked=0, done=1, 33% complete/);
   });
 });
