@@ -438,46 +438,93 @@ function htmlOwnerStatusTable(rows: OwnerStatusRow[]): string {
     </table>`;
 }
 
+/** Render a per-task AR progress bar showing the proportion of AR sub-items
+ *  in each status. Returns "" if the task has no AR children. */
+function htmlArProgress(t: Task): string {
+  const ars = (t.children ?? []).filter((c) => c.kind === "ar");
+  if (ars.length === 0) return "";
+  const counts = { todo: 0, "in-progress": 0, blocked: 0, done: 0 } as Record<string, number>;
+  for (const a of ars) counts[a.status] = (counts[a.status] ?? 0) + 1;
+  const total = ars.length;
+  // Build segments in done/in-progress/blocked/todo order so finished work
+  // visually leads the bar (left → right).
+  const order: Array<keyof typeof counts> = ["done", "in-progress", "blocked", "todo"];
+  const segs = order
+    .filter((k) => counts[k] > 0)
+    .map((k) => {
+      const pct = Math.max(1, Math.round((counts[k] / total) * 100));
+      const bg = STATUS_COLORS[k]?.bg ?? "#94a3b8";
+      return `<td width="${pct}%" style="background:${bg};font-size:1px;line-height:1px;height:6px;">&nbsp;</td>`;
+    })
+    .join("");
+  const summaryParts: string[] = [`${counts.done}/${total} ARs done`];
+  if (counts.blocked > 0) summaryParts.push(`<span style="color:#dc2626;font-weight:600;">${counts.blocked} blocked</span>`);
+  if (counts["in-progress"] > 0) summaryParts.push(`${counts["in-progress"]} in-progress`);
+  if (counts.todo > 0) summaryParts.push(`${counts.todo} todo`);
+  return `
+    <div style="margin-top:6px;">
+      <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;border-radius:3px;overflow:hidden;background:#e2e8f0;">
+        <tr>${segs}</tr>
+      </table>
+      <div style="margin-top:3px;font-size:10px;color:#64748b;">${summaryParts.join(" · ")}</div>
+    </div>`;
+}
+
 function htmlColumnSection(col: string, items: Task[], snapshotUrl: string, phonebook?: Record<string, PhonebookEntry>): string {
   if (!items.length) return "";
   const c = STATUS_COLORS[col] ?? { bg: "#475569", fg: "#ffffff" };
   const label = STATUS_LABELS[col] ?? col.toUpperCase();
-  const rows = items.map((t) => {
+  // Each task is a stand-alone "card" mini-table with a colored left border
+  // by priority. Cards are stacked vertically inside a wrapper for the
+  // column. Outlook-safe: pure tables + inline styles.
+  const cards = items.map((t) => {
     const prio = PRIORITY_LABELS[t.priority_rank];
-    const prioColor = PRIORITY_COLORS[t.priority_rank] ?? "#64748b";
+    const prioColor = PRIORITY_COLORS[t.priority_rank] ?? "#94a3b8";
     const prioChip = prio
-      ? `<span style="display:inline-block;padding:1px 6px;border-radius:10px;background:${prioColor};color:#ffffff;font-size:11px;font-weight:600;">${prio}</span>`
+      ? `<span style="display:inline-block;padding:1px 6px;border-radius:10px;background:${prioColor};color:#ffffff;font-size:11px;font-weight:600;margin-right:6px;">${prio}</span>`
       : "";
+    const statusPill = `<span style="display:inline-block;padding:1px 7px;border-radius:10px;background:${c.bg};color:${c.fg};font-size:10px;font-weight:600;letter-spacing:0.3px;text-transform:uppercase;margin-right:6px;">${escHtml(label)}</span>`;
     const eta = t.eta
-      ? `<span style="display:inline-block;padding:1px 6px;border-radius:3px;background:#fef3c7;color:#92400e;font-size:11px;margin-left:6px;">ETA ${escHtml(t.eta)}</span>`
+      ? `<span style="display:inline-block;padding:1px 6px;border-radius:3px;background:#fef3c7;color:#92400e;font-size:11px;white-space:nowrap;">ETA ${escHtml(t.eta)}</span>`
       : "";
     const owners = htmlOwnerLabels(t, phonebook);
     const projects = (t.projects?.length ? t.projects.join(" / ") : "");
-    const path = projects ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px;">${escHtml(projects)}</div>` : "";
+    const path = projects ? `<div style="font-size:11px;color:#94a3b8;margin-top:3px;">${escHtml(projects)}</div>` : "";
     const titleLink = t.task_uuid && snapshotUrl
-      ? `<a href="${escHtml(snapshotUrl)}#task=${escHtml(t.task_uuid)}" style="color:#0f172a;text-decoration:none;font-weight:500;">${escHtml(t.title || "(no title)")}</a>`
-      : `<span style="color:#0f172a;font-weight:500;">${escHtml(t.title || "(no title)")}</span>`;
+      ? `<a href="${escHtml(snapshotUrl)}#task=${escHtml(t.task_uuid)}" style="color:#0f172a;text-decoration:none;">${escHtml(t.title || "(no title)")}</a>`
+      : escHtml(t.title || "(no title)");
+    const arBar = htmlArProgress(t);
     return `
-      <tr>
-        <td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;vertical-align:top;width:60px;">
-          ${prioChip}
-        </td>
-        <td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;">
-          ${titleLink}${eta}
-          ${owners ? `<div style="margin-top:4px;">${owners}</div>` : ""}
-          ${path}
-        </td>
-      </tr>`;
+      <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:separate;background:#ffffff;border:1px solid #e2e8f0;border-left:4px solid ${prioColor};border-radius:4px;margin:0 0 8px 0;">
+        <tr>
+          <td style="padding:8px 12px;">
+            <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+              <tr>
+                <td style="vertical-align:top;">
+                  <div style="margin-bottom:4px;">${statusPill}${prioChip}</div>
+                  <div style="font-size:14px;font-weight:600;color:#0f172a;line-height:1.3;">${titleLink}</div>
+                </td>
+                <td align="right" style="vertical-align:top;white-space:nowrap;padding-left:8px;">
+                  ${eta}
+                </td>
+              </tr>
+            </table>
+            ${owners ? `<div style="margin-top:6px;">${owners}</div>` : ""}
+            ${path}
+            ${arBar}
+          </td>
+        </tr>
+      </table>`;
   }).join("");
   return `
-    <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;border:1px solid #e2e8f0;border-radius:4px;margin:0 0 14px 0;">
-      <tr style="background:${c.bg};">
-        <td colspan="2" style="padding:6px 12px;color:${c.fg};font-size:13px;font-weight:600;letter-spacing:0.3px;">
-          ${label} <span style="opacity:0.85;font-weight:400;">(${items.length})</span>
-        </td>
-      </tr>
-      ${rows}
-    </table>`;
+    <div style="margin:0 0 16px 0;">
+      <div style="background:${c.bg};color:${c.fg};padding:6px 12px;font-size:13px;font-weight:600;letter-spacing:0.3px;border-radius:4px 4px 0 0;">
+        ${escHtml(label)} <span style="opacity:0.85;font-weight:400;">(${items.length})</span>
+      </div>
+      <div style="background:#f8fafc;padding:8px;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 4px 4px;">
+        ${cards}
+      </div>
+    </div>`;
 }
 
 export function buildHtmlBody(opts: BodyOptions): string {

@@ -461,6 +461,80 @@ describe("computeArStats", () => {
   });
 });
 
+describe("buildHtmlBody AR progress + cards (#221)", () => {
+  const cols = ["blocked", "in-progress", "todo", "done"] as const;
+
+  const mkAr = (over: any = {}) => ({
+    id: 100, task_uuid: "AR-1", slug: "ar", title: "ar", status: "todo",
+    kind: "ar", line: 1, eta: null, ...over,
+  });
+
+  it("renders an AR progress bar when the task has AR children", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters,
+      grouped: {
+        "in-progress": [mkTask({
+          id: 1, status: "in-progress",
+          children: [
+            mkAr({ id: 10, status: "done" }),
+            mkAr({ id: 11, status: "done" }),
+            mkAr({ id: 12, status: "in-progress" }),
+            mkAr({ id: 13, status: "blocked" }),
+          ],
+        } as any)],
+      },
+      columns: [...cols], snapshotUrl: "", includeDone: false,
+    });
+    expect(html).toContain("2/4 ARs done");
+    expect(html).toContain("1 blocked");
+    expect(html).toContain("1 in-progress");
+    // Bar uses the status colors as inline backgrounds.
+    expect(html).toContain("background:#16a34a"); // done segment
+    expect(html).toContain("background:#dc2626"); // blocked segment
+  });
+
+  it("emits no AR bar when the task has no AR children", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters,
+      grouped: { todo: [mkTask({ id: 1, children: [] } as any)] },
+      columns: [...cols], snapshotUrl: "", includeDone: false,
+    });
+    expect(html).not.toContain("ARs done");
+  });
+
+  it("ignores non-AR children (e.g. sub-tasks) when computing AR progress", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters,
+      grouped: {
+        todo: [mkTask({
+          id: 1,
+          children: [
+            { id: 10, task_uuid: null, slug: "s", title: "subtask", status: "todo", kind: "task", line: 1, eta: null },
+          ],
+        } as any)],
+      },
+      columns: [...cols], snapshotUrl: "", includeDone: false,
+    });
+    expect(html).not.toContain("ARs done");
+  });
+
+  it("renders each task as a card with priority left-border color", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters,
+      grouped: {
+        todo: [
+          mkTask({ id: 1, priority_rank: 1 }),
+          mkTask({ id: 2, priority_rank: 3 }),
+        ],
+      },
+      columns: [...cols], snapshotUrl: "", includeDone: false,
+    });
+    // Priority colors appear as left borders on cards.
+    expect(html).toContain("border-left:4px solid #dc2626"); // P1
+    expect(html).toContain("border-left:4px solid #ca8a04"); // P3
+  });
+});
+
 describe("buildPlainBody AR stats line", () => {
   const cols = ["blocked", "in-progress", "todo", "done"];
   it("includes an 'AR stats:' line with per-status counts and completion %", () => {
