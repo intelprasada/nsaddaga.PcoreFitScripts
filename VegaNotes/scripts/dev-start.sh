@@ -60,6 +60,15 @@ start_backend() {
   # Run uvicorn directly from the venv (no `source activate`) so a broken
   # site-packages can't poison this shell. Redirect stdin so setsid+nohup
   # don't trip the Node/Python ResetStdio assertion (issue #202).
+  # Phonebook scraper (#213/#215). Opt-in by default ON for local dev so
+  # owner-token resolution actually hits the Intel directory; users can
+  # disable by exporting VEGANOTES_PHONEBOOK_SCRAPER_ENABLED=false before
+  # invoking this script. Default the org-distance anchor to $USER so
+  # bare names like @Niharika rank against the developer's own subtree
+  # even when they're logged in as a non-Intel-idsid user (e.g. admin).
+  : "${VEGANOTES_PHONEBOOK_SCRAPER_ENABLED:=true}"
+  : "${VEGANOTES_PHONEBOOK_DEFAULT_ANCHOR:=${USER:-}}"
+  export VEGANOTES_PHONEBOOK_SCRAPER_ENABLED VEGANOTES_PHONEBOOK_DEFAULT_ANCHOR
   VEGANOTES_DATA_DIR="$DATA_DIR" setsid "$VENV/bin/uvicorn" app.main:app \
     --port 8000 --log-level warning > "$BACKEND_LOG" 2>&1 < /dev/null &
   local bpid=$!

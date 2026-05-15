@@ -7,6 +7,8 @@ import {
   buildPlainBody,
   countOpen,
   defaultSubject,
+  looksLikeEmail,
+  lookupResolved,
   parseCcList,
   partitionOwners,
   truncateBodyForMailto,
@@ -33,6 +35,7 @@ interface Props {
 export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: Props) {
   const [includeDone, setIncludeDone] = useState(false);
   const [ccRaw, setCcRaw] = useState("");
+  const [ccManagers, setCcManagers] = useState(false);
   const [subject, setSubject] = useState(() =>
     defaultSubject({
       project: filters.project,
@@ -63,10 +66,27 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
     return Array.from(s).sort();
   }, [visibleTasks]);
 
+  // Parse the CC textarea once (for both display and resolution lookup).
+  const ccPieces = useMemo(() => parseCcList(ccRaw), [ccRaw]);
+
+  // CC names need the same phonebook resolution as owners (#216).
+  // Send email-shaped pieces straight through; everything else goes to
+  // the resolver alongside the owner tokens. The single bulk call keeps
+  // requests batched and lets React Query cache by token-set.
+  const ccNameTokens = useMemo(
+    () => ccPieces.filter((p) => !looksLikeEmail(p)).map((p) => p),
+    [ccPieces],
+  );
+
+  const allTokens = useMemo(() => {
+    const merged = new Set<string>([...ownerTokens, ...ccNameTokens]);
+    return Array.from(merged).sort();
+  }, [ownerTokens, ccNameTokens]);
+
   const { data: pbData } = useQuery({
-    queryKey: ["phonebook", ownerTokens],
-    queryFn: () => api.phonebookResolve(ownerTokens),
-    enabled: ownerTokens.length > 0,
+    queryKey: ["phonebook", allTokens],
+    queryFn: () => api.phonebookResolve(allTokens),
+    enabled: allTokens.length > 0,
     staleTime: 5 * 60_000,
   });
 
@@ -78,7 +98,33 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
     return partitionOwners(all, phonebook);
   }, [visibleTasks, phonebook]);
 
-  const cc = useMemo(() => parseCcList(ccRaw), [ccRaw]);
+  // Apply phonebook resolution to CC tokens too — partitionOwners gives
+  // us the same resolved/unresolved buckets so the warning banner can
+  // call out unresolved CC names exactly like unresolved owners.
+  const ccInfo = useMemo(
+    () => partitionOwners(ccPieces, phonebook),
+    [ccPieces, phonebook],
+  );
+
+  // Optionally CC each unique manager_email of the resolved owners (#217).
+  const ownerManagers = useMemo(() => {
+    if (!ccManagers) return [] as string[];
+    const owners = new Set(ownerInfo.resolved);
+    const seen = new Set<string>();
+    for (const t of ownerTokens) {
+      const ent = lookupResolved(phonebook, t);
+      const me = (ent?.manager_email || "").trim().toLowerCase();
+      if (me && !owners.has(me)) seen.add(me);
+    }
+    return Array.from(seen).sort();
+  }, [ccManagers, ownerTokens, phonebook, ownerInfo.resolved]);
+
+  // Final CC = resolved CC names ∪ user-typed emails ∪ owner-managers.
+  const cc = useMemo(() => {
+    const out = new Set<string>(ccInfo.resolved);
+    for (const m of ownerManagers) out.add(m);
+    return Array.from(out).sort();
+  }, [ccInfo.resolved, ownerManagers]);
 
   const snapshotUrl = typeof window !== "undefined" ? window.location.href : "";
 
@@ -144,10 +190,10 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
             />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-slate-500 text-xs">CC (comma/space separated)</span>
+            <span className="text-slate-500 text-xs">CC (names or emails — comma/space separated)</span>
             <input
               className="border rounded px-2 py-1 text-sm font-mono"
-              placeholder="manager@intel.com, team-dl@intel.com"
+              placeholder="@niharika, manager@intel.com, Pavel"
               value={ccRaw}
               onChange={(e) => setCcRaw(e.target.value)}
             />
@@ -159,6 +205,19 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
               onChange={(e) => setIncludeDone(e.target.checked)}
             />
             Include Done column ({grouped["done"]?.length ?? 0} cards)
+          </label>
+          <label className="col-span-2 flex items-center gap-2 text-xs text-slate-600">
+            <input
+              type="checkbox"
+              checked={ccManagers}
+              onChange={(e) => setCcManagers(e.target.checked)}
+            />
+            CC managers of resolved owners
+            {ccManagers && ownerManagers.length > 0 && (
+              <span className="text-slate-500">
+                ({ownerManagers.length} added: {ownerManagers.join(", ")})
+              </span>
+            )}
           </label>
         </div>
 
@@ -175,6 +234,14 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
               {": "}
               {ownerInfo.unresolved.map((o) => `@${o}`).join(", ")}
               {" "}— add them to <code>backend/data/phonebook.json</code> to auto-route.
+            </div>
+          )}
+          {ccInfo.unresolved.length > 0 && (
+            <div className="mt-2 text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 text-xs">
+              <strong>{ccInfo.unresolved.length} CC name{ccInfo.unresolved.length === 1 ? "" : "s"} not in phonebook</strong>
+              {": "}
+              {ccInfo.unresolved.join(", ")}
+              {" "}— excluded from CC. Use full email or add to phonebook.
             </div>
           )}
           {ambiguousCount > 0 && (

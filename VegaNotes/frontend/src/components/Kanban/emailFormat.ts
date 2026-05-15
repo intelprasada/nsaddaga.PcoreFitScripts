@@ -45,7 +45,7 @@ export function partitionOwners(
     const t = (raw ?? "").trim();
     if (!t) continue;
     // 1. Phonebook hit (covers @nsaddaga, @Prasad, "Prasad Addagarla", ...).
-    const pbHit = phonebook ? lookupPhonebook(phonebook, t) : null;
+    const pbHit = phonebook ? lookupResolved(phonebook, t) : null;
     if (pbHit) {
       const em = pbHit.email.toLowerCase();
       resolved.add(em);
@@ -68,7 +68,7 @@ export function partitionOwners(
   };
 }
 
-function lookupPhonebook(
+export function lookupResolved(
   pb: Record<string, PhonebookEntry>,
   token: string,
 ): PhonebookEntry | null {
@@ -126,7 +126,7 @@ function formatTaskLine(t: Task, phonebook?: Record<string, PhonebookEntry>): st
   if (t.eta) tail.push(`eta ${t.eta}`);
   if (t.owners?.length) {
     const labels = t.owners.map((o) => {
-      const pb = phonebook ? lookupPhonebook(phonebook, o) : null;
+      const pb = phonebook ? lookupResolved(phonebook, o) : null;
       return pb ? `@${pb.idsid}` : `@${o}`;
     });
     tail.push(labels.join(" "));
@@ -185,7 +185,7 @@ export function buildOwnerStatusRows(
         bumpFor("__unassigned__", UNASSIGNED, null, t.status);
         continue;
       }
-      const pb = phonebook ? lookupPhonebook(phonebook, tok) : null;
+      const pb = phonebook ? lookupResolved(phonebook, tok) : null;
       if (pb) {
         bumpFor(pb.email.toLowerCase(), pb.display || pb.idsid, pb.email, t.status);
       } else if (looksLikeEmail(tok)) {

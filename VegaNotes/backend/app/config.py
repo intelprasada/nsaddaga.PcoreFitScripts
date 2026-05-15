@@ -35,6 +35,20 @@ class Settings(BaseSettings):
     watcher_force_polling: Optional[bool] = None
     watcher_poll_delay_ms: int = 2000
 
+    # Intel Phonebook scraper (#213) — tier-3 owner-token resolver.
+    # Defaults to OFF so K8s deployments behind firewalls never make
+    # outbound calls unless explicitly opted in.
+    phonebook_scraper_enabled: bool = False
+    phonebook_scraper_url: str = "https://phonebook.intel.com"
+    phonebook_scraper_timeout_s: float = 8.0
+    phonebook_cache_ttl_s: int = 86400
+    # Org-distance ranking anchor used when neither the request nor the
+    # authenticated user resolves to an Intel idsid (#215). For local
+    # dev where you log in as ``admin``, set this to your idsid so
+    # bare-name owner tokens like ``@Niharika`` still rank against your
+    # subtree instead of returning ambiguous.
+    phonebook_default_anchor: str | None = None
+
     @property
     def notes_dir(self) -> Path:
         return self.data_dir / self.notes_subdir

@@ -1280,17 +1280,102 @@ def card_links(task_ref: str, s: Session = Depends(get_session)) -> dict[str, An
 
 class PhonebookResolveRequest(BaseModel):
     tokens: list[str]
+    anchor: str | None = None
+
+
+def _pick_phonebook_anchor(req_anchor: str | None, user: str | None) -> str | None:
+    """Pick the best org-distance anchor (#215).
+
+    Prefers, in order: explicit request anchor → authenticated user →
+    ``settings.phonebook_default_anchor``. Returns the first candidate
+    that resolves to an Intel WWID via the scraper. If none resolve
+    (scraper off or all unknown), returns the first non-empty candidate
+    so logs/responses still echo a meaningful value — but downstream
+    ranking will then no-op.
+    """
+    from ..phonebook_intel import resolve_anchor_wwid
+    from ..config import settings as _s
+    candidates = [
+        req_anchor,
+        user,
+        getattr(_s, "phonebook_default_anchor", None),
+    ]
+    cleaned = [(c or "").strip() for c in candidates]
+    cleaned = [c for c in cleaned if c]
+    for c in cleaned:
+        try:
+            if resolve_anchor_wwid(c):
+                return c
+        except Exception:  # pragma: no cover — defensive
+            continue
+    return cleaned[0] if cleaned else None
 
 
 @router.post("/phonebook/resolve")
-def phonebook_resolve(body: PhonebookResolveRequest) -> dict[str, Any]:
+def phonebook_resolve(
+    body: PhonebookResolveRequest,
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
     """Bulk-resolve owner tokens (#174 / #210). Returns ``resolved``,
-    ``ambiguous``, and ``unresolved`` buckets keyed by the original token."""
+    ``ambiguous``, and ``unresolved`` buckets keyed by the original token.
+    ``anchor`` (idsid / email / wwid) is used to rank scraper hits by
+    org-tree distance — defaults to the authenticated user (#213)."""
     if not body.tokens:
         return {"resolved": {}, "ambiguous": {}, "unresolved": []}
     if len(body.tokens) > 500:
         raise HTTPException(status_code=400, detail="too many tokens (max 500)")
-    return get_phonebook().resolve_many(body.tokens)
+    anchor = _pick_phonebook_anchor(body.anchor, user)
+    return get_phonebook().resolve_many(body.tokens, anchor=anchor)
+
+
+class PhonebookLookupRequest(BaseModel):
+    q: str
+    anchor: str | None = None
+
+
+@router.post("/phonebook/lookup")
+def phonebook_lookup(
+    body: PhonebookLookupRequest,
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    """Live Intel Phonebook scraper lookup (#213). Returns raw candidates
+    so the UI can render a disambiguation picker. No-op (empty list) if
+    the scraper is disabled in settings or the query is empty.
+
+    When ``anchor`` is set (defaults to the authenticated user), each
+    candidate carries an ``org_distance`` integer (or ``null`` if no
+    common ancestor was found within the chain depth limit), and
+    candidates are returned sorted by that distance ascending."""
+    from ..phonebook_intel import (
+        cached_lookup, filter_by_first_name, rank_by_distance,
+        resolve_anchor_wwid,
+    )
+    from ..config import settings as _s
+    q = (body.q or "").strip()
+    enabled = bool(getattr(_s, "phonebook_scraper_enabled", False))
+    if not q:
+        return {"query": "", "candidates": [], "enabled": enabled}
+    if len(q) > 200:
+        raise HTTPException(status_code=400, detail="query too long (max 200)")
+    hits = cached_lookup(q)
+    # First-name-only filter (#215) — drop Pavel-as-lastname noise etc.
+    hits = filter_by_first_name(hits, q)
+    anchor = _pick_phonebook_anchor(body.anchor, user)
+    anchor_wwid = resolve_anchor_wwid(anchor) if anchor else None
+    ranked = rank_by_distance(hits, anchor_wwid) if anchor_wwid else \
+        [(h, None) for h in hits]
+    out = []
+    for h, dist in ranked:
+        d = h.to_dict()
+        d["org_distance"] = dist
+        out.append(d)
+    return {
+        "query": q,
+        "enabled": enabled,
+        "anchor": anchor,
+        "anchor_wwid": anchor_wwid,
+        "candidates": out,
+    }
 
 
 @router.get("/projects")
