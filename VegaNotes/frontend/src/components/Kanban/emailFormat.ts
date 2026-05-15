@@ -261,6 +261,17 @@ export function buildPlainBody(opts: BodyOptions): string {
   if (filters.where?.length) filterBits.push(`chips=[${filters.where.join(", ")}]`);
   lines.push(`Filters: ${filterBits.length ? filterBits.join(", ") : "(none)"}`);
   lines.push(`View: ${snapshotUrl}`);
+
+  const stats = computeArStats(grouped, columns, includeDone);
+  const statsBits = [
+    `total=${stats.total}`,
+    `todo=${stats.todo}`,
+    `in-progress=${stats.inProgress}`,
+    `blocked=${stats.blocked}`,
+    `done=${stats.done}`,
+  ];
+  if (stats.completionPct !== null) statsBits.push(`${stats.completionPct}% complete`);
+  lines.push(`AR stats: ${statsBits.join(", ")}`);
   lines.push("");
 
   // Per-owner status summary table (#210 Phase 2). Outlook-friendly fixed-width.
@@ -307,6 +318,42 @@ export function buildMailto(opts: {
 
 export function countOpen(grouped: Record<string, Task[]>): number {
   return ["todo", "in-progress", "blocked"].reduce((n, c) => n + (grouped[c]?.length ?? 0), 0);
+}
+
+export interface ArStats {
+  total: number;
+  todo: number;
+  inProgress: number;
+  blocked: number;
+  done: number;
+  open: number;
+  /** done / (total considered) — null if total is 0. `done` is excluded from
+   *  the denominator when `includeDone` is false, in which case completion
+   *  cannot be computed and this is null. */
+  completionPct: number | null;
+}
+
+/** Compute aggregate AR (action-required) stats across the visible columns.
+ *  When `includeDone` is false, the done column is excluded from `total` but
+ *  `done` is still reported separately for context. */
+export function computeArStats(
+  grouped: Record<string, Task[]>,
+  columns: readonly string[],
+  includeDone: boolean,
+): ArStats {
+  const todo = grouped["todo"]?.length ?? 0;
+  const inProgress = grouped["in-progress"]?.length ?? 0;
+  const blocked = grouped["blocked"]?.length ?? 0;
+  const done = grouped["done"]?.length ?? 0;
+  let total = 0;
+  for (const col of columns) {
+    if (col === "done" && !includeDone) continue;
+    total += grouped[col]?.length ?? 0;
+  }
+  const open = todo + inProgress + blocked;
+  const denom = open + done;
+  const completionPct = includeDone && denom > 0 ? Math.round((done / denom) * 100) : null;
+  return { total, todo, inProgress, blocked, done, open, completionPct };
 }
 
 /** Truncate body to keep mailto under the safe URL length, preserving header lines. */
@@ -444,6 +491,29 @@ export function buildHtmlBody(opts: BodyOptions): string {
   const filterTxt = filterBits.length ? filterBits.join(", ") : "(no filters)";
   const openCount = countOpen(grouped);
   const blockedCount = grouped["blocked"]?.length ?? 0;
+  const stats = computeArStats(grouped, columns, includeDone);
+
+  const statChip = (label: string, n: number, bg: string, fg: string) => `
+    <td style="padding:0 4px 0 0;">
+      <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+        <tr>
+          <td style="background:${bg};color:${fg};padding:4px 10px;font-size:12px;font-weight:600;border-radius:3px;white-space:nowrap;">
+            ${escHtml(label)}: ${n}
+          </td>
+        </tr>
+      </table>
+    </td>`;
+  const statBar = `
+    <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 0 14px 0;">
+      <tr>
+        ${statChip("Total", stats.total, "#0f172a", "#ffffff")}
+        ${statChip("To-do", stats.todo, STATUS_COLORS["todo"].bg, STATUS_COLORS["todo"].fg)}
+        ${statChip("In-progress", stats.inProgress, STATUS_COLORS["in-progress"].bg, STATUS_COLORS["in-progress"].fg)}
+        ${statChip("Blocked", stats.blocked, STATUS_COLORS["blocked"].bg, STATUS_COLORS["blocked"].fg)}
+        ${statChip("Done", stats.done, STATUS_COLORS["done"].bg, STATUS_COLORS["done"].fg)}
+        ${stats.completionPct !== null ? statChip(`${stats.completionPct}% complete`, 0, "#e2e8f0", "#0f172a").replace(": 0", "") : ""}
+      </tr>
+    </table>`;
 
   const visibleTasks: Task[] = [];
   for (const col of columns) {
@@ -474,6 +544,7 @@ export function buildHtmlBody(opts: BodyOptions): string {
       Generated ${escHtml(generated)} UTC
     </div>
   </div>
+  ${statBar}
   ${ownerTable ? `<div style="font-size:12px;font-weight:600;color:#334155;margin:0 0 6px 0;letter-spacing:0.4px;">STATUS BY OWNER</div>${ownerTable}` : ""}
   ${sections}
   <div style="margin-top:14px;padding-top:8px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;">

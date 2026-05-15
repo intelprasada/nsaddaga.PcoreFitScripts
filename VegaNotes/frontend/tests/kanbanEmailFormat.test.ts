@@ -312,7 +312,7 @@ describe("buildPlainBody with phonebook", () => {
 // ---------------------------------------------------------------------------
 // HTML body (#219).
 // ---------------------------------------------------------------------------
-import { buildHtmlBody } from "../src/components/Kanban/emailFormat";
+import { buildHtmlBody, computeArStats } from "../src/components/Kanban/emailFormat";
 
 const baseFilters = { project: "Demo", owner: "", feature: "", priority: "", status: "", q: "", where: [] } as any;
 
@@ -388,5 +388,90 @@ describe("buildHtmlBody", () => {
       filters: baseFilters, grouped: {}, columns: cols, snapshotUrl: "", includeDone: false,
     });
     expect(html).not.toContain("STATUS BY OWNER");
+  });
+
+  it("renders an AR stats chip bar with totals for each status", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters,
+      grouped: {
+        blocked: [mkTask({ id: 1, status: "blocked" })],
+        "in-progress": [mkTask({ id: 2, status: "in-progress" }), mkTask({ id: 3, status: "in-progress" })],
+        todo: [mkTask({ id: 4, status: "todo" })],
+        done: [mkTask({ id: 5, status: "done" }), mkTask({ id: 6, status: "done" })],
+      },
+      columns: [...cols], snapshotUrl: "", includeDone: true,
+    });
+    expect(html).toContain("Total: 6");
+    expect(html).toContain("To-do: 1");
+    expect(html).toContain("In-progress: 2");
+    expect(html).toContain("Blocked: 1");
+    expect(html).toContain("Done: 2");
+    // open=4, done=2 → 33% complete
+    expect(html).toContain("33% complete");
+  });
+
+  it("AR stats: total excludes done when includeDone=false; no completion %", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters,
+      grouped: {
+        todo: [mkTask({ id: 1, status: "todo" })],
+        done: [mkTask({ id: 2, status: "done" })],
+      },
+      columns: [...cols], snapshotUrl: "", includeDone: false,
+    });
+    expect(html).toContain("Total: 1");
+    expect(html).toContain("Done: 1"); // still surfaced for context
+    expect(html).not.toContain("% complete");
+  });
+});
+
+describe("computeArStats", () => {
+  const cols = ["blocked", "in-progress", "todo", "done"];
+  it("counts each status and computes completion when done is included", () => {
+    const s = computeArStats(
+      {
+        todo: [mkTask({ id: 1 }), mkTask({ id: 2 })],
+        "in-progress": [mkTask({ id: 3 })],
+        blocked: [mkTask({ id: 4 })],
+        done: [mkTask({ id: 5 }), mkTask({ id: 6 }), mkTask({ id: 7 })],
+      },
+      cols,
+      true,
+    );
+    expect(s).toEqual({
+      total: 7, todo: 2, inProgress: 1, blocked: 1, done: 3, open: 4, completionPct: 43,
+    });
+  });
+  it("excludes done from total and returns null completionPct when includeDone=false", () => {
+    const s = computeArStats(
+      { todo: [mkTask({ id: 1 })], done: [mkTask({ id: 2 })] },
+      cols,
+      false,
+    );
+    expect(s.total).toBe(1);
+    expect(s.done).toBe(1);
+    expect(s.completionPct).toBeNull();
+  });
+  it("returns zeros and null completion for empty input", () => {
+    const s = computeArStats({}, cols, true);
+    expect(s).toEqual({
+      total: 0, todo: 0, inProgress: 0, blocked: 0, done: 0, open: 0, completionPct: null,
+    });
+  });
+});
+
+describe("buildPlainBody AR stats line", () => {
+  const cols = ["blocked", "in-progress", "todo", "done"];
+  it("includes an 'AR stats:' line with per-status counts and completion %", () => {
+    const body = buildPlainBody({
+      filters: baseFilters,
+      grouped: {
+        todo: [mkTask({ id: 1 })],
+        "in-progress": [mkTask({ id: 2, status: "in-progress" })],
+        done: [mkTask({ id: 3, status: "done" })],
+      },
+      columns: cols, snapshotUrl: "http://x", includeDone: true,
+    });
+    expect(body).toMatch(/AR stats: total=3, todo=1, in-progress=1, blocked=0, done=1, 33% complete/);
   });
 });
