@@ -144,14 +144,6 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
     return buildMailto({ to: ownerInfo.resolved, cc, subject, body: safeBody });
   }, [ownerInfo.resolved, cc, subject, body]);
 
-  // Empty-body mailto used when we successfully copied HTML to the
-  // clipboard — the user pastes once and the formatted snapshot lands
-  // in the compose window without duplicating the plain body.
-  const mailtoEmpty = useMemo(
-    () => buildMailto({ to: ownerInfo.resolved, cc, subject, body: "" }),
-    [ownerInfo.resolved, cc, subject],
-  );
-
   const cardCount = visibleTasks.length;
   const ownerCount = ownerInfo.resolved.length;
 
@@ -237,13 +229,16 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
   };
 
   const onSend = async () => {
+    // Always open mailto with the plain-text body so the mail client is
+    // populated even if clipboard access is blocked. Additionally copy
+    // the rich HTML version to the clipboard so users can paste-replace
+    // for rich formatting if their mail client supports it.
     const ok = await writeRichClipboard();
+    window.location.href = mailto.url;
     if (ok) {
-      flashToast("Snapshot copied — paste into the email body (Ctrl/Cmd+V)");
-      window.location.href = mailtoEmpty.url;
+      flashToast("Opened mail client — paste (Ctrl/Cmd+V) to replace with rich HTML version");
     } else {
-      flashToast("Clipboard blocked — opening mailto with plain-text body instead");
-      window.location.href = mailto.url;
+      flashToast("Opened mail client with plain-text body (clipboard blocked, no rich version copied)");
     }
   };
 
