@@ -308,10 +308,13 @@ export function buildMailto(opts: {
 }): { url: string; tooLong: boolean; length: number } {
   const enc = (s: string) => encodeURIComponent(s);
   const params: string[] = [];
-  if (opts.cc.length) params.push(`cc=${opts.cc.map(enc).join(",")}`);
+  // Outlook on Windows requires ';' as the address separator. RFC 6068
+  // specifies ',' but every major client (Outlook, Gmail, Apple Mail,
+  // Thunderbird) accepts ';', so semicolon is the safer choice (#220).
+  if (opts.cc.length) params.push(`cc=${opts.cc.map(enc).join(";")}`);
   params.push(`subject=${enc(opts.subject)}`);
   params.push(`body=${enc(opts.body)}`);
-  const to = opts.to.map(enc).join(",");
+  const to = opts.to.map(enc).join(";");
   const url = `mailto:${to}?${params.join("&")}`;
   return { url, tooLong: url.length > 1800, length: url.length };
 }

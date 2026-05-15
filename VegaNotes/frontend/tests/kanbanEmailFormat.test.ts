@@ -199,7 +199,8 @@ describe("buildMailto", () => {
       subject: "hi & bye",
       body: "line1\nline2",
     });
-    expect(r.url).toMatch(/^mailto:a%40x\.com,b%40x\.com\?/);
+    // Outlook on Windows requires ';' as the separator between recipients.
+    expect(r.url).toMatch(/^mailto:a%40x\.com;b%40x\.com\?/);
     expect(r.url).toContain("cc=c%40x.com");
     expect(r.url).toContain("subject=hi%20%26%20bye");
     expect(r.url).toContain("body=line1%0Aline2");
