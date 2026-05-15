@@ -169,16 +169,69 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
     setTimeout(() => setToast(null), 3500);
   };
 
-  const writeRichClipboard = async (): Promise<boolean> => {
-    if (!canRichCopy) return false;
+  // Modern API + legacy execCommand fallback. The async navigator.clipboard
+  // path silently rejects with NotAllowedError when the document isn't
+  // focused (modal dialogs sometimes hit this in Firefox / older Chrome),
+  // so we always have a textarea/contenteditable fallback.
+  const copyTextRobust = async (text: string): Promise<boolean> => {
     try {
-      const item = new ClipboardItem({
-        "text/html": new Blob([htmlBody], { type: "text/html" }),
-        "text/plain": new Blob([body], { type: "text/plain" }),
-      });
-      await navigator.clipboard.write([item]);
-      return true;
-    } catch {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (e) { console.warn("clipboard.writeText failed, falling back", e); }
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return ok;
+    } catch (e) {
+      console.error("copy fallback failed", e);
+      return false;
+    }
+  };
+
+  const writeRichClipboard = async (): Promise<boolean> => {
+    if (canRichCopy) {
+      try {
+        const item = new ClipboardItem({
+          "text/html": new Blob([htmlBody], { type: "text/html" }),
+          "text/plain": new Blob([body], { type: "text/plain" }),
+        });
+        await navigator.clipboard.write([item]);
+        return true;
+      } catch (e) {
+        console.warn("clipboard.write(rich) failed, falling back to execCommand", e);
+      }
+    }
+    // Legacy fallback: select a hidden contenteditable holding the HTML
+    // and execCommand("copy"). Most browsers preserve the rich format.
+    try {
+      const div = document.createElement("div");
+      div.contentEditable = "true";
+      div.innerHTML = htmlBody;
+      div.style.position = "fixed";
+      div.style.left = "-9999px";
+      div.style.opacity = "0";
+      document.body.appendChild(div);
+      const range = document.createRange();
+      range.selectNodeContents(div);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      const ok = document.execCommand("copy");
+      sel?.removeAllRanges();
+      document.body.removeChild(div);
+      return ok;
+    } catch (e) {
+      console.error("rich-copy fallback failed", e);
       return false;
     }
   };
@@ -189,18 +242,18 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
       flashToast("Snapshot copied — paste into the email body (Ctrl/Cmd+V)");
       window.location.href = mailtoEmpty.url;
     } else {
-      // Plain-text fallback: prefilled body in the mailto, no clipboard.
+      flashToast("Clipboard blocked — opening mailto with plain-text body instead");
       window.location.href = mailto.url;
     }
   };
 
   const onCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(body);
+    const ok = await copyTextRobust(body);
+    if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // fall through silently — clipboard not available
+    } else {
+      flashToast("Copy failed — your browser blocked clipboard access");
     }
   };
 
@@ -211,14 +264,7 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
       setCopiedHtml(true);
       setTimeout(() => setCopiedHtml(false), 1500);
     } else {
-      // Last-resort: copy raw HTML markup as plain text.
-      try {
-        await navigator.clipboard.writeText(htmlBody);
-        setCopiedHtml(true);
-        setTimeout(() => setCopiedHtml(false), 1500);
-      } catch {
-        // ignore
-      }
+      flashToast("Copy failed — your browser blocked clipboard access");
     }
   };
 
