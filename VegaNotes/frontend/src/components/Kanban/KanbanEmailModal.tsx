@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api, type Task } from "../../api/client";
 import type { FilterState } from "../../store/ui";
 import {
+  buildHtmlBody,
   buildMailto,
   buildPlainBody,
   countOpen,
@@ -133,18 +134,64 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
     [filters, grouped, columns, snapshotUrl, includeDone, phonebook],
   );
 
+  const htmlBody = useMemo(
+    () => buildHtmlBody({ filters, grouped, columns, snapshotUrl, includeDone, phonebook }),
+    [filters, grouped, columns, snapshotUrl, includeDone, phonebook],
+  );
+
   const mailto = useMemo(() => {
     const safeBody = truncateBodyForMailto(body);
     return buildMailto({ to: ownerInfo.resolved, cc, subject, body: safeBody });
   }, [ownerInfo.resolved, cc, subject, body]);
+
+  // Empty-body mailto used when we successfully copied HTML to the
+  // clipboard — the user pastes once and the formatted snapshot lands
+  // in the compose window without duplicating the plain body.
+  const mailtoEmpty = useMemo(
+    () => buildMailto({ to: ownerInfo.resolved, cc, subject, body: "" }),
+    [ownerInfo.resolved, cc, subject],
+  );
 
   const cardCount = visibleTasks.length;
   const ownerCount = ownerInfo.resolved.length;
 
   const sendDisabled = ownerCount === 0 && cc.length === 0;
 
-  const onSend = () => {
-    window.location.href = mailto.url;
+  // ClipboardItem is only available in secure contexts and on a recent
+  // browser. Detect once so we can fall back gracefully.
+  const canRichCopy = typeof window !== "undefined"
+    && typeof window.ClipboardItem !== "undefined"
+    && !!navigator.clipboard?.write;
+
+  const [toast, setToast] = useState<string | null>(null);
+  const flashToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 3500);
+  };
+
+  const writeRichClipboard = async (): Promise<boolean> => {
+    if (!canRichCopy) return false;
+    try {
+      const item = new ClipboardItem({
+        "text/html": new Blob([htmlBody], { type: "text/html" }),
+        "text/plain": new Blob([body], { type: "text/plain" }),
+      });
+      await navigator.clipboard.write([item]);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const onSend = async () => {
+    const ok = await writeRichClipboard();
+    if (ok) {
+      flashToast("Snapshot copied — paste into the email body (Ctrl/Cmd+V)");
+      window.location.href = mailtoEmpty.url;
+    } else {
+      // Plain-text fallback: prefilled body in the mailto, no clipboard.
+      window.location.href = mailto.url;
+    }
   };
 
   const onCopy = async () => {
@@ -154,6 +201,24 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
       setTimeout(() => setCopied(false), 1500);
     } catch {
       // fall through silently — clipboard not available
+    }
+  };
+
+  const [copiedHtml, setCopiedHtml] = useState(false);
+  const onCopyHtml = async () => {
+    const ok = await writeRichClipboard();
+    if (ok) {
+      setCopiedHtml(true);
+      setTimeout(() => setCopiedHtml(false), 1500);
+    } else {
+      // Last-resort: copy raw HTML markup as plain text.
+      try {
+        await navigator.clipboard.writeText(htmlBody);
+        setCopiedHtml(true);
+        setTimeout(() => setCopiedHtml(false), 1500);
+      } catch {
+        // ignore
+      }
     }
   };
 
@@ -262,11 +327,34 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
         </div>
 
         <div className="flex-1 overflow-auto p-5 text-sm">
-          <div className="text-xs text-slate-500 mb-1">Preview (plain text)</div>
-          <pre className="whitespace-pre-wrap font-mono text-xs bg-slate-50 border rounded p-3">
-            {body}
-          </pre>
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-xs text-slate-500">Preview (rich HTML — what your recipients will see after pasting)</div>
+            {!canRichCopy && (
+              <div className="text-xs text-amber-600">
+                Browser doesn't support rich clipboard — will fall back to plain-text body in mailto.
+              </div>
+            )}
+          </div>
+          <div
+            className="border rounded p-3 bg-white"
+            // The HTML is built locally from typed Task data with full
+            // escaping (escHtml on every interpolated string in
+            // buildHtmlBody) — XSS-safe to render here for preview.
+            dangerouslySetInnerHTML={{ __html: htmlBody }}
+          />
+          <details className="mt-3">
+            <summary className="text-xs text-slate-500 cursor-pointer">Plain-text fallback (used if rich clipboard fails)</summary>
+            <pre className="whitespace-pre-wrap font-mono text-xs bg-slate-50 border rounded p-3 mt-1">
+              {body}
+            </pre>
+          </details>
         </div>
+
+        {toast && (
+          <div className="mx-5 mb-2 px-3 py-2 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs">
+            {toast}
+          </div>
+        )}
 
         <div className="px-5 py-3 border-t flex items-center justify-between">
           <div className="text-xs text-slate-500">
@@ -276,8 +364,16 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
             <button
               onClick={onCopy}
               className="px-3 py-1.5 text-sm rounded border bg-white hover:bg-slate-50"
+              title="Copy plain-text body to clipboard"
             >
-              {copied ? "Copied!" : "Copy body"}
+              {copied ? "Copied!" : "Copy text"}
+            </button>
+            <button
+              onClick={onCopyHtml}
+              className="px-3 py-1.5 text-sm rounded border bg-white hover:bg-slate-50"
+              title="Copy rich HTML to clipboard — paste into Outlook/Gmail for formatted view"
+            >
+              {copiedHtml ? "Copied!" : "Copy HTML"}
             </button>
             <button
               onClick={onClose}
@@ -289,7 +385,7 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
               onClick={onSend}
               disabled={sendDisabled}
               className="px-3 py-1.5 text-sm rounded bg-sky-600 text-white hover:bg-sky-700 disabled:bg-slate-300"
-              title={sendDisabled ? "No resolved recipients (To or CC)" : "Open in mail client"}
+              title={sendDisabled ? "No resolved recipients (To or CC)" : "Copy formatted snapshot + open mail client"}
             >
               Open in mail client
             </button>

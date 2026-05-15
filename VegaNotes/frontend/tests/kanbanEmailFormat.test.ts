@@ -308,3 +308,85 @@ describe("buildPlainBody with phonebook", () => {
     expect(body).not.toContain("@@addagarla");
   });
 });
+
+// ---------------------------------------------------------------------------
+// HTML body (#219).
+// ---------------------------------------------------------------------------
+import { buildHtmlBody } from "../src/components/Kanban/emailFormat";
+
+const baseFilters = { project: "Demo", owner: "", feature: "", priority: "", status: "", q: "", where: [] } as any;
+
+describe("buildHtmlBody", () => {
+  const cols = ["blocked", "in-progress", "todo", "done"] as const;
+
+  it("renders a project header with snapshot URL and filter summary", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters, grouped: { todo: [mkTask()] }, columns: cols,
+      snapshotUrl: "http://example/snap", includeDone: false,
+    });
+    expect(html).toContain("Demo");
+    expect(html).toContain("Kanban snapshot");
+    expect(html).toContain("http://example/snap");
+    expect(html).toContain("(no filters)");
+  });
+
+  it("renders columns in order with status-colored headers", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters,
+      grouped: {
+        blocked: [mkTask({ id: 1, title: "Blk task", status: "blocked" })],
+        "in-progress": [mkTask({ id: 2, title: "WIP task", status: "in-progress" })],
+        todo: [mkTask({ id: 3, title: "Todo task", status: "todo" })],
+      },
+      columns: cols, snapshotUrl: "", includeDone: false,
+    });
+    // Blocked appears before in-progress before todo in the output order.
+    const iBlocked = html.indexOf("BLOCKED");
+    const iWIP = html.indexOf("IN-PROGRESS");
+    const iTodo = html.indexOf("TODO");
+    expect(iBlocked).toBeGreaterThan(0);
+    expect(iWIP).toBeGreaterThan(iBlocked);
+    expect(iTodo).toBeGreaterThan(iWIP);
+    // Color tokens for each column header are present.
+    expect(html).toContain("#dc2626"); // blocked red
+    expect(html).toContain("#2563eb"); // in-progress blue
+    expect(html).toContain("#475569"); // todo slate
+  });
+
+  it("escapes HTML in task titles and owner tokens (XSS guard)", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters,
+      grouped: { todo: [mkTask({ title: "<script>x</script>", owners: ["<img onerror>"] })] },
+      columns: cols, snapshotUrl: "", includeDone: false,
+    });
+    expect(html).not.toContain("<script>x</script>");
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).toContain("&lt;img onerror&gt;");
+  });
+
+  it("excludes the Done column when includeDone=false, includes when true", () => {
+    const grouped = { done: [mkTask({ status: "done", title: "Closed item" })] };
+    const off = buildHtmlBody({ filters: baseFilters, grouped, columns: cols, snapshotUrl: "", includeDone: false });
+    const on  = buildHtmlBody({ filters: baseFilters, grouped, columns: cols, snapshotUrl: "", includeDone: true });
+    expect(off).not.toContain("Closed item");
+    expect(on).toContain("Closed item");
+    expect(on).toContain("DONE");
+  });
+
+  it("renders the per-owner status table when there are visible tasks", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters,
+      grouped: { todo: [mkTask({ owners: ["@alice"] }), mkTask({ owners: ["@alice"], status: "todo" })] },
+      columns: cols, snapshotUrl: "", includeDone: false,
+    });
+    expect(html).toContain("STATUS BY OWNER");
+    expect(html).toContain("@alice");
+  });
+
+  it("emits no STATUS BY OWNER section when there are zero visible tasks", () => {
+    const html = buildHtmlBody({
+      filters: baseFilters, grouped: {}, columns: cols, snapshotUrl: "", includeDone: false,
+    });
+    expect(html).not.toContain("STATUS BY OWNER");
+  });
+});
