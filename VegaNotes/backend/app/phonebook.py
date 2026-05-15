@@ -147,18 +147,31 @@ class Phonebook:
         self._by_alias = by_alias
         log.info("Phonebook loaded: %d entries from %s", len(by_idsid), self._path)
 
-    def resolve(self, token: str) -> tuple[PhonebookEntry | None, list[PhonebookEntry]]:
+    def resolve(
+        self,
+        token: str,
+        *,
+        anchor: str | None = None,
+    ) -> tuple[PhonebookEntry | None, list[PhonebookEntry]]:
         """Return ``(entry, candidates)``.
 
         - ``entry`` is the unambiguous match (or ``None`` if missing/ambiguous).
         - ``candidates`` is the full list of matches when ambiguous (>1).
           Empty when ``entry`` is set or when nothing matched.
 
+        ``anchor`` (idsid / email / wwid) is used as the perspective for
+        the org-distance ranking applied to scraper hits — if exactly one
+        candidate is strictly closest in the management tree it wins
+        outright, otherwise candidates are returned ranked-but-ambiguous.
+
         Match rules (case-insensitive, in order):
         1. Strip leading ``@``.
         2. Email-shaped tokens match by ``email`` field.
         3. Exact ``idsid`` match wins outright.
-        4. Otherwise alias map lookup. 1 hit → resolved. >1 hit → ambiguous.
+        4. Alias map lookup. 1 hit → resolved. >1 hit → ambiguous.
+        5. Tier-3 fallback (#213): if scraper is enabled, hit the Intel
+           Phonebook web app. 1 hit → resolved. >1 hits → optionally
+           ranked by org distance from ``anchor``; closest unique → resolved.
         """
         self._maybe_reload()
         if not token:
@@ -178,9 +191,81 @@ class Phonebook:
                 return self._by_idsid[hits[0]], []
             if len(hits) > 1:
                 return None, [self._by_idsid[h] for h in hits]
-            return None, []
+        # Tier-3: Intel phonebook scraper (no-op if disabled).
+        return self._scraper_resolve(t, anchor=anchor)
 
-    def resolve_many(self, tokens: Iterable[str]) -> dict:
+    def _scraper_resolve(
+        self,
+        query: str,
+        *,
+        anchor: str | None = None,
+    ) -> tuple[PhonebookEntry | None, list[PhonebookEntry]]:
+        # Imported lazily so the scraper module's settings access happens
+        # after any test monkeypatching of ``settings``.
+        from . import phonebook_intel
+        try:
+            hits = phonebook_intel.cached_lookup(query)
+        except Exception as e:  # pragma: no cover — defensive
+            log.warning("phonebook scraper raised on %r: %s", query, e)
+            return None, []
+        if not hits:
+            return None, []
+        # First-name-only filter (#215). Phonebook returns last-name
+        # matches and team-metadata matches too, which we never want for
+        # an owner token like ``@Pavel``. Filter before ranking so a
+        # mis-matched Ioana Pavel or Barak Agam can't accidentally be
+        # the unique closest candidate.
+        hits = phonebook_intel.filter_by_first_name(hits, query)
+        if not hits:
+            return None, []
+        if len(hits) == 1:
+            h = hits[0]
+            return PhonebookEntry(
+                idsid=h.idsid, display=h.display, email=h.email,
+                manager_email=phonebook_intel.manager_email_for_wwid(h.wwid),
+            ), []
+        # Multiple hits: try to disambiguate via org-distance from anchor.
+        ranked: list[tuple] = []
+        if anchor:
+            try:
+                anchor_wwid = phonebook_intel.resolve_anchor_wwid(anchor)
+                if anchor_wwid:
+                    ranked = phonebook_intel.rank_by_distance(hits, anchor_wwid)
+            except Exception as e:  # pragma: no cover — defensive
+                log.warning("phonebook anchor rank failed for %r: %s",
+                            anchor, e)
+                ranked = []
+        # If we got a strict winner (closest distance is unique among
+        # known distances), promote it to "resolved". Otherwise return
+        # the (ranked-or-original) list as ambiguous.
+        if ranked:
+            distances = [d for _, d in ranked if d is not None]
+            if distances:
+                best = min(distances)
+                winners = [h for h, d in ranked if d == best]
+                if len(winners) == 1:
+                    h = winners[0]
+                    return PhonebookEntry(
+                        idsid=h.idsid, display=h.display, email=h.email,
+                        manager_email=phonebook_intel.manager_email_for_wwid(h.wwid),
+                    ), []
+            ordered_hits = [h for h, _ in ranked]
+        else:
+            ordered_hits = hits
+        entries = [
+            PhonebookEntry(
+                idsid=h.idsid, display=h.display, email=h.email,
+            )
+            for h in ordered_hits
+        ]
+        return None, entries
+
+    def resolve_many(
+        self,
+        tokens: Iterable[str],
+        *,
+        anchor: str | None = None,
+    ) -> dict:
         """Bulk resolve. Returns:
             {
               "resolved":  {token: entry_dict, ...},
@@ -188,6 +273,8 @@ class Phonebook:
               "unresolved": [token, ...],
             }
         Tokens are returned in their original (untrimmed) form as keys.
+        ``anchor`` is forwarded to ``resolve()`` for org-distance ranking
+        of scraper hits — typically the requesting user's idsid/email.
         """
         resolved: dict[str, dict] = {}
         ambiguous: dict[str, list[dict]] = {}
@@ -197,7 +284,7 @@ class Phonebook:
             if tok in seen:
                 continue
             seen.add(tok)
-            entry, candidates = self.resolve(tok)
+            entry, candidates = self.resolve(tok, anchor=anchor)
             if entry is not None:
                 resolved[tok] = entry.to_dict()
             elif candidates:

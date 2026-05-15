@@ -500,6 +500,72 @@ def cmd_whoami(client: Client, args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# `vn phonebook` — owner-token resolution surface (#174 / #213)
+# ---------------------------------------------------------------------------
+def cmd_phonebook_resolve(client: Client, args: argparse.Namespace) -> int:
+    payload = {"tokens": list(args.tokens)}
+    if args.anchor:
+        payload["anchor"] = args.anchor
+    data = client.post("/api/phonebook/resolve", payload)
+    if args.json:
+        _print_json(data)
+        return 0
+    resolved = data.get("resolved", {}) if isinstance(data, dict) else {}
+    ambiguous = data.get("ambiguous", {}) if isinstance(data, dict) else {}
+    unresolved = data.get("unresolved", []) if isinstance(data, dict) else []
+    for tok, e in resolved.items():
+        print(f"{tok:20s} {e.get('email','?'):40s} {e.get('display','')}")
+    for tok, candidates in ambiguous.items():
+        emails = ", ".join(c.get("email", "?") for c in candidates[:3])
+        suffix = f" (+{len(candidates) - 3} more)" if len(candidates) > 3 else ""
+        print(f"{tok:20s} AMBIGUOUS ({len(candidates)}) -> {emails}{suffix}")
+    for tok in unresolved:
+        print(f"{tok:20s} UNRESOLVED")
+    return 0 if not unresolved and not ambiguous else 1
+
+
+def cmd_phonebook_lookup(client: Client, args: argparse.Namespace) -> int:
+    """Live lookup against the Intel Phonebook web app via /api/phonebook/lookup
+    (#213). Backend must have ``VEGANOTES_PHONEBOOK_SCRAPER_ENABLED=true``."""
+    payload = {"q": args.query}
+    if args.anchor:
+        payload["anchor"] = args.anchor
+    data = client.post("/api/phonebook/lookup", payload)
+    if args.json:
+        _print_json(data)
+        return 0
+    if not isinstance(data, dict):
+        print(data)
+        return 1
+    if not data.get("enabled"):
+        print("phonebook scraper disabled on backend "
+              "(set VEGANOTES_PHONEBOOK_SCRAPER_ENABLED=true)", file=sys.stderr)
+    candidates = data.get("candidates") or []
+    if not candidates:
+        print(f"no matches for {args.query!r}")
+        return 1
+    show_dist = any(c.get("org_distance") is not None for c in candidates)
+    if show_dist:
+        anc_wwid = data.get("anchor_wwid") or "?"
+        print(f"# anchor={data.get('anchor','?')} (wwid={anc_wwid})")
+        print(f"{'DIST':>4s}  {'EMAIL':45s} {'IDSID':25s} DISPLAY")
+        for c in candidates:
+            d = c.get("org_distance")
+            d_str = "?" if d is None else str(d)
+            print(f"{d_str:>4s}  "
+                  f"{c.get('email',''):45s} "
+                  f"{c.get('idsid',''):25s} "
+                  f"{c.get('display','')}")
+    else:
+        print(f"{'EMAIL':45s} {'IDSID':25s} DISPLAY")
+        for c in candidates:
+            print(f"{c.get('email',''):45s} "
+                  f"{c.get('idsid',''):25s} "
+                  f"{c.get('display','')}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # `vn me <subcommand>` — gamification surface (Phase 2: stats/streak/history)
 # ---------------------------------------------------------------------------
 #
@@ -1210,6 +1276,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     pw = sub.add_parser("whoami", help="show authenticated user")
     pw.set_defaults(func=cmd_whoami)
+
+    # `vn phonebook <subcommand>` — owner-token resolution (#174 / #213).
+    ppb = sub.add_parser("phonebook", help="resolve owner tokens / scrape Intel Phonebook")
+    pbsub = ppb.add_subparsers(dest="phonebook_command", required=True)
+    pbr = pbsub.add_parser("resolve", help="resolve one or more @owner tokens via JSON+scraper")
+    pbr.add_argument("tokens", nargs="+", help="tokens like '@nsaddaga' or 'prasad'")
+    pbr.add_argument("--anchor", help="idsid/email/wwid used as the perspective for org-distance ranking (defaults to the authenticated user)")
+    pbr.set_defaults(func=cmd_phonebook_resolve)
+    pbl = pbsub.add_parser("lookup", help="live Intel Phonebook web lookup (#213; scraper must be enabled)")
+    pbl.add_argument("query", help="name or substring (e.g. 'Niharika')")
+    pbl.add_argument("--anchor", help="idsid/email/wwid for org-distance ranking (defaults to the authenticated user)")
+    pbl.set_defaults(func=cmd_phonebook_lookup)
 
     # `vn me <subcommand>` — gamification surface (Phase 2: read-only).
     pme = sub.add_parser(
