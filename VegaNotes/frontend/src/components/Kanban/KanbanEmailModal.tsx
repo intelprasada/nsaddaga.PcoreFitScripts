@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api, type Task } from "../../api/client";
+import type { Task } from "../../api/client";
 import type { FilterState } from "../../store/ui";
 import {
   buildMailto,
@@ -53,38 +52,18 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
     return tasks.filter((t) => t.status !== "done");
   }, [tasks, includeDone]);
 
-  // Bulk-resolve owner tokens via the phonebook (#174 / #210 Phase 2).
-  const ownerTokens = useMemo(() => {
-    const s = new Set<string>();
-    for (const t of visibleTasks) for (const o of t.owners ?? []) {
-      const v = (o ?? "").trim();
-      if (v) s.add(v);
-    }
-    return Array.from(s).sort();
-  }, [visibleTasks]);
-
-  const { data: pbData } = useQuery({
-    queryKey: ["phonebook", ownerTokens],
-    queryFn: () => api.phonebookResolve(ownerTokens),
-    enabled: ownerTokens.length > 0,
-    staleTime: 5 * 60_000,
-  });
-
-  const phonebook = pbData?.resolved ?? {};
-  const ambiguousCount = Object.keys(pbData?.ambiguous ?? {}).length;
-
   const ownerInfo = useMemo(() => {
     const all = visibleTasks.flatMap((t) => t.owners ?? []);
-    return partitionOwners(all, phonebook);
-  }, [visibleTasks, phonebook]);
+    return partitionOwners(all);
+  }, [visibleTasks]);
 
   const cc = useMemo(() => parseCcList(ccRaw), [ccRaw]);
 
   const snapshotUrl = typeof window !== "undefined" ? window.location.href : "";
 
   const body = useMemo(
-    () => buildPlainBody({ filters, grouped, columns, snapshotUrl, includeDone, phonebook }),
-    [filters, grouped, columns, snapshotUrl, includeDone, phonebook],
+    () => buildPlainBody({ filters, grouped, columns, snapshotUrl, includeDone }),
+    [filters, grouped, columns, snapshotUrl, includeDone],
   );
 
   const mailto = useMemo(() => {
@@ -171,19 +150,10 @@ export function KanbanEmailModal({ tasks, grouped, columns, filters, onClose }: 
           </div>
           {ownerInfo.unresolved.length > 0 && (
             <div className="mt-2 text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 text-xs">
-              <strong>{ownerInfo.unresolved.length} owner token{ownerInfo.unresolved.length === 1 ? "" : "s"} not in phonebook</strong>
+              <strong>{ownerInfo.unresolved.length} owner token{ownerInfo.unresolved.length === 1 ? "" : "s"} not resolvable as email</strong>
               {": "}
               {ownerInfo.unresolved.map((o) => `@${o}`).join(", ")}
-              {" "}— add them to <code>backend/data/phonebook.json</code> to auto-route.
-            </div>
-          )}
-          {ambiguousCount > 0 && (
-            <div className="mt-2 text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 text-xs">
-              <strong>{ambiguousCount} owner token{ambiguousCount === 1 ? "" : "s"} ambiguous</strong>
-              {" — "}
-              {Object.entries(pbData?.ambiguous ?? {}).map(([tok, ents]) =>
-                `${tok} → ${ents.map((e) => e.idsid).join(" | ")}`).join("; ")}
-              {" "}— qualify with full IDSID to disambiguate.
+              {" "}— will appear in body only. Phonebook resolution lands in Phase 2 (#210).
             </div>
           )}
           {mailto.tooLong && (

@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   buildMailto,
-  buildOwnerStatusRows,
   buildPlainBody,
   countOpen,
   defaultSubject,
@@ -9,10 +8,9 @@ import {
   looksLikeEmail,
   parseCcList,
   partitionOwners,
-  renderOwnerStatusTable,
   truncateBodyForMailto,
 } from "../src/components/Kanban/emailFormat";
-import type { PhonebookEntry, Task } from "../src/api/client";
+import type { Task } from "../src/api/client";
 
 const mkTask = (over: Partial<Task> = {}): Task => ({
   id: 1,
@@ -53,28 +51,6 @@ describe("partitionOwners", () => {
   });
   it("ignores empty/whitespace tokens", () => {
     expect(partitionOwners(["", "  ", "x@y.com"]).resolved).toEqual(["x@y.com"]);
-  });
-  it("phonebook resolves bare tokens to email", () => {
-    const pb: Record<string, PhonebookEntry> = {
-      "@nsaddaga": {
-        idsid: "nsaddaga", display: "Prasad Addagarla",
-        email: "prasad.addagarla@intel.com", aliases: [], manager_email: null,
-      },
-    };
-    const r = partitionOwners(["@nsaddaga", "alice"], pb);
-    expect(r.resolved).toEqual(["prasad.addagarla@intel.com"]);
-    expect(r.unresolved).toEqual(["alice"]);
-    expect(r.displayByEmail["prasad.addagarla@intel.com"]).toBe("Prasad Addagarla");
-  });
-  it("phonebook lookup is case-insensitive on the bare token", () => {
-    const pb: Record<string, PhonebookEntry> = {
-      nsaddaga: {
-        idsid: "nsaddaga", display: "Prasad", email: "p@x.com",
-        aliases: [], manager_email: null,
-      },
-    };
-    const r = partitionOwners(["NSADDAGA"], pb);
-    expect(r.resolved).toEqual(["p@x.com"]);
   });
 });
 
@@ -227,84 +203,5 @@ describe("truncateBodyForMailto", () => {
     const out = truncateBodyForMailto("a".repeat(5000));
     expect(out.length).toBeLessThanOrEqual(1400);
     expect(out).toContain("truncated");
-  });
-});
-
-describe("buildOwnerStatusRows + renderOwnerStatusTable", () => {
-  const tasks: Task[] = [
-    mkTask({ owners: ["alice"], status: "todo" }),
-    mkTask({ owners: ["alice"], status: "in-progress" }),
-    mkTask({ owners: ["alice", "bob"], status: "done" }),
-    mkTask({ owners: ["bob"], status: "blocked" }),
-    mkTask({ owners: [], status: "todo" }),
-  ];
-
-  it("aggregates per owner including unassigned", () => {
-    const rows = buildOwnerStatusRows(tasks);
-    const byOwner = Object.fromEntries(rows.map((r) => [r.owner, r]));
-    expect(byOwner["@alice"].todo).toBe(1);
-    expect(byOwner["@alice"].inProgress).toBe(1);
-    expect(byOwner["@alice"].done).toBe(1);
-    expect(byOwner["@alice"].total).toBe(3);
-    expect(byOwner["@bob"].blocked).toBe(1);
-    expect(byOwner["@bob"].done).toBe(1);
-    expect(byOwner["@bob"].total).toBe(2);
-    expect(byOwner["(unassigned)"].todo).toBe(1);
-  });
-
-  it("uses phonebook display name + canonical email key", () => {
-    const pb: Record<string, PhonebookEntry> = {
-      alice: { idsid: "alice", display: "Alice Smith", email: "alice@x.com", aliases: [], manager_email: null },
-    };
-    const rows = buildOwnerStatusRows(tasks, pb);
-    const alice = rows.find((r) => r.owner === "Alice Smith");
-    expect(alice).toBeDefined();
-    expect(alice!.email).toBe("alice@x.com");
-    expect(alice!.total).toBe(3);
-  });
-
-  it("renders ASCII table with header, separator, totals", () => {
-    const rows = buildOwnerStatusRows(tasks);
-    const table = renderOwnerStatusTable(rows);
-    expect(table).toContain("Owner");
-    expect(table).toContain("Todo");
-    expect(table).toContain("WIP");
-    expect(table).toContain("Total");
-    // Last row totals all tasks (alice 3 + bob 2 + unassigned 1 = 6)
-    expect(table.split("\n").pop()).toContain("6");
-    // Sorted by total desc → alice first.
-    expect(table).toMatch(/@alice[^\n]*3/);
-  });
-
-  it("returns '(no tasks)' for empty input", () => {
-    expect(renderOwnerStatusTable([])).toBe("(no tasks)");
-  });
-});
-
-describe("buildPlainBody with phonebook", () => {
-  it("includes status-by-owner table and uses canonical IDSID in card lines", () => {
-    const pb: Record<string, PhonebookEntry> = {
-      "@addagarla": {
-        idsid: "nsaddaga", display: "Prasad Addagarla",
-        email: "prasad@intel.com", aliases: ["addagarla"], manager_email: null,
-      },
-    };
-    const grouped = {
-      todo: [mkTask({ title: "X", owners: ["@addagarla"], task_uuid: "T-X" })],
-      "in-progress": [], blocked: [], done: [],
-    };
-    const body = buildPlainBody({
-      filters: {},
-      grouped,
-      columns: ["todo", "in-progress", "blocked", "done"] as const,
-      snapshotUrl: "url",
-      includeDone: false,
-      phonebook: pb,
-    });
-    expect(body).toContain("== STATUS BY OWNER ==");
-    expect(body).toContain("Prasad Addagarla");
-    // Card line should use canonical idsid, not the original token.
-    expect(body).toContain("@nsaddaga");
-    expect(body).not.toContain("@@addagarla");
   });
 });
