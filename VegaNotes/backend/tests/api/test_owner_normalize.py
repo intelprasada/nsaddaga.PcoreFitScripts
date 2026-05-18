@@ -283,3 +283,47 @@ def test_reindex_sweeps_orphan_users(curated_pb, client):
         "password-bearing legacy account must NOT be auto-deleted"
     assert "nsaddaga" in names, "real owner must survive"
     assert "admin" in names, "admin must survive"
+
+
+def test_ar_endpoint_dedupes_owner_aliases(curated_pb, client):
+    """Regression: when a task ends up with multiple aliases of the same
+    person (e.g. @Gautham + @gajith both → gajith) the indexer must
+    collapse them to a single TaskOwner row. Without this, POST /tasks/
+    {ref}/ars (and any reindex path that re-writes TaskOwner edges)
+    blew up with `UNIQUE constraint failed: taskowner.task_id,
+    taskowner.user_id`. See the gajith 500 reported 2026-05-18."""
+    # Create a parent task owned by nsaddaga, then add an AR with two
+    # aliases of the SAME person (canonical idsid: nsaddaga) in owners.
+    r = client.put("/api/notes", json={
+        "path": "ardup/wk01.md",
+        "body_md": "- !task ParentTask @nsaddaga #id T-ARDUP1\n",
+    }, headers={"Authorization": AUTH})
+    assert r.status_code in (200, 201), r.text
+
+    r = client.post(
+        "/api/tasks/T-ARDUP1/ars",
+        json={
+            "title": "ChildAR",
+            # Two spellings of the same person — must NOT cause UNIQUE
+            # constraint failure when inserted.
+            "owners": ["nsaddaga", "Addagarla"],
+        },
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code in (200, 201), r.text
+
+    # Verify exactly one TaskOwner edge for the new AR.
+    from app.db import get_engine
+    from app.models import Task, TaskOwner, User
+    from sqlmodel import Session, select
+    with Session(get_engine()) as s:
+        ar = s.exec(select(Task).where(Task.title == "ChildAR")).first()
+        assert ar is not None
+        owners = s.exec(
+            select(User.name)
+            .join(TaskOwner, TaskOwner.user_id == User.id)
+            .where(TaskOwner.task_id == ar.id)
+        ).all()
+    assert sorted(owners) == ["nsaddaga"], (
+        f"expected exactly one canonical owner edge, got {owners!r}"
+    )
