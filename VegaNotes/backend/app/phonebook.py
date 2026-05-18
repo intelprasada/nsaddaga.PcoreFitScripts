@@ -46,6 +46,11 @@ class PhonebookEntry:
     email: str
     aliases: tuple[str, ...] = field(default_factory=tuple)
     manager_email: str | None = None
+    # Per-user preferred org subtrees (#225). Each entry is an idsid or
+    # numeric WWID; candidates whose manager-chain passes through any of
+    # these (or whose own WWID matches one) get a score discount during
+    # scraper-based resolution. Resolution from idsid → WWID is lazy.
+    prefer_subtrees: tuple[str, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict:
         return {
@@ -54,6 +59,7 @@ class PhonebookEntry:
             "email": self.email,
             "aliases": list(self.aliases),
             "manager_email": self.manager_email,
+            "prefer_subtrees": list(self.prefer_subtrees),
         }
 
 
@@ -125,9 +131,17 @@ class Phonebook:
             )
             mgr = val.get("manager_email")
             mgr = mgr.strip().lower() if isinstance(mgr, str) and mgr.strip() else None
+            prefer_raw = val.get("prefer_subtrees") or []
+            if not isinstance(prefer_raw, list):
+                prefer_raw = []
+            prefer = tuple(
+                p.strip() for p in prefer_raw
+                if isinstance(p, str) and p.strip()
+            )
             entry = PhonebookEntry(
                 idsid=idsid, display=display, email=email,
                 aliases=aliases, manager_email=mgr,
+                prefer_subtrees=prefer,
             )
             by_idsid[idsid] = entry
             # Auto-register canonical lookups.
@@ -152,6 +166,7 @@ class Phonebook:
         token: str,
         *,
         anchor: str | None = None,
+        local_only: bool = False,
     ) -> tuple[PhonebookEntry | None, list[PhonebookEntry]]:
         """Return ``(entry, candidates)``.
 
@@ -163,6 +178,10 @@ class Phonebook:
         the org-distance ranking applied to scraper hits — if exactly one
         candidate is strictly closest in the management tree it wins
         outright, otherwise candidates are returned ranked-but-ambiguous.
+
+        ``local_only=True`` skips the Tier-3 scraper fallback. Used by
+        the indexer / parser canonicalization path (#174) which must be
+        deterministic, fast and offline-safe.
 
         Match rules (case-insensitive, in order):
         1. Strip leading ``@``.
@@ -191,8 +210,53 @@ class Phonebook:
                 return self._by_idsid[hits[0]], []
             if len(hits) > 1:
                 return None, [self._by_idsid[h] for h in hits]
+        if local_only:
+            return None, []
         # Tier-3: Intel phonebook scraper (no-op if disabled).
         return self._scraper_resolve(t, anchor=anchor)
+
+    @staticmethod
+    def _split_compound_token(token: str) -> tuple[str, str | None]:
+        """Parse a lookup token into ``(given_name, surname)`` (#226).
+
+        - GAL form ``"Last, First[ Middle...]"`` → ``(First, Last)``.
+          The first comma splits surname (left) from given (right).
+        - Two-token form ``"First Last"`` (no comma, exactly 2 tokens) →
+          ``(First, Last)``.
+        - Single token, three+ tokens, or empty/falsy → ``(token, None)``
+          so the legacy single-name path is preserved unchanged.
+
+        Multi-token last names (e.g. "van der Berg") aren't disambiguated
+        further — we send the first token as given and the *rest* joined
+        as surname for the GAL form, but for the no-comma form we only
+        accept exactly two tokens to avoid mangling free-text like
+        ``"Niharika Sanjay Kamath"``.
+        """
+        t = (token or "").strip()
+        if not t:
+            return t, None
+        if "," in t:
+            last, _, first = t.partition(",")
+            last = last.strip()
+            first = first.strip()
+            if first and last:
+                # First word of the right-of-comma side is the given
+                # name; ignore middle names for the scraper query.
+                given = first.split()[0]
+                # Outlook GAL adds a numeric disambiguation suffix when
+                # multiple people share a name (e.g. "Niharika1"). The
+                # phonebook server's BookName has no such suffix, so the
+                # substring search would miss. Strip trailing digits when
+                # an explicit surname is present — the surname filter
+                # narrows further so this can't broaden ambiguity.
+                given = re.sub(r"\d+$", "", given) or given
+                return given, last
+            return t, None
+        parts = t.split()
+        if len(parts) == 2:
+            given = re.sub(r"\d+$", "", parts[0]) or parts[0]
+            return given, parts[1]
+        return t, None
 
     def _scraper_resolve(
         self,
@@ -203,8 +267,13 @@ class Phonebook:
         # Imported lazily so the scraper module's settings access happens
         # after any test monkeypatching of ``settings``.
         from . import phonebook_intel
+        # #226: pre-parse compound tokens into (given, surname).
+        # GAL form "Last, First"  -> surname=Last,  given=First
+        # Two-token "First Last"  -> given=First,   surname=Last
+        # Single token            -> given=token,   surname=None (legacy path)
+        given, surname = self._split_compound_token(query)
         try:
-            hits = phonebook_intel.cached_lookup(query)
+            hits = phonebook_intel.cached_lookup(given)
         except Exception as e:  # pragma: no cover — defensive
             log.warning("phonebook scraper raised on %r: %s", query, e)
             return None, []
@@ -215,50 +284,116 @@ class Phonebook:
         # an owner token like ``@Pavel``. Filter before ranking so a
         # mis-matched Ioana Pavel or Barak Agam can't accidentally be
         # the unique closest candidate.
-        hits = phonebook_intel.filter_by_first_name(hits, query)
+        hits = phonebook_intel.filter_by_first_name(hits, given)
+        # Surname filter (#226) — only when token carried an explicit
+        # surname. Single-token path skips this so behavior is unchanged.
+        if surname:
+            hits = phonebook_intel.filter_by_last_name(hits, surname)
         if not hits:
             return None, []
         if len(hits) == 1:
             h = hits[0]
             return PhonebookEntry(
-                idsid=h.idsid, display=h.display, email=h.email,
+                idsid=(h.linux_idsid or h.idsid),
+                display=h.display, email=h.email,
                 manager_email=phonebook_intel.manager_email_for_wwid(h.wwid),
             ), []
-        # Multiple hits: try to disambiguate via org-distance from anchor.
-        ranked: list[tuple] = []
+        # Multiple hits: try to disambiguate via seniority-weighted distance.
+        ranked_full: list[tuple] = []
         if anchor:
             try:
                 anchor_wwid = phonebook_intel.resolve_anchor_wwid(anchor)
                 if anchor_wwid:
-                    ranked = phonebook_intel.rank_by_distance(hits, anchor_wwid)
+                    from .config import settings as _s
+                    pen = int(getattr(_s, "phonebook_seniority_penalty", 3))
+                    bias_score = int(getattr(_s, "phonebook_subtree_bias", 0))
+                    bias_wwids = self._anchor_bias_wwids(anchor) if bias_score else []
+                    ranked_full = phonebook_intel.rank_by_distance_full(
+                        hits, anchor_wwid, seniority_penalty=pen,
+                        subtree_bias_wwids=bias_wwids,
+                        subtree_bias_score=bias_score,
+                    )
             except Exception as e:  # pragma: no cover — defensive
                 log.warning("phonebook anchor rank failed for %r: %s",
                             anchor, e)
-                ranked = []
-        # If we got a strict winner (closest distance is unique among
-        # known distances), promote it to "resolved". Otherwise return
-        # the (ranked-or-original) list as ambiguous.
-        if ranked:
-            distances = [d for _, d in ranked if d is not None]
-            if distances:
-                best = min(distances)
-                winners = [h for h, d in ranked if d == best]
+                ranked_full = []
+        # Pick a strict winner if the lowest score is unique (#224 — uses
+        # the seniority-weighted score, not raw LCA distance).
+        if ranked_full:
+            scores = [s for _, _u, _d, _r, s in ranked_full if s is not None]
+            if scores:
+                best = min(scores)
+                winners = [h for h, _u, _d, _r, s in ranked_full if s == best]
                 if len(winners) == 1:
                     h = winners[0]
                     return PhonebookEntry(
-                        idsid=h.idsid, display=h.display, email=h.email,
+                        idsid=(h.linux_idsid or h.idsid),
+                        display=h.display, email=h.email,
                         manager_email=phonebook_intel.manager_email_for_wwid(h.wwid),
                     ), []
-            ordered_hits = [h for h, _ in ranked]
+            ordered_hits = [h for h, _u, _d, _r, _s in ranked_full]
         else:
             ordered_hits = hits
         entries = [
             PhonebookEntry(
-                idsid=h.idsid, display=h.display, email=h.email,
+                idsid=(h.linux_idsid or h.idsid),
+                display=h.display, email=h.email,
             )
             for h in ordered_hits
         ]
         return None, entries
+
+    def _anchor_entry(self, anchor: str) -> "PhonebookEntry | None":
+        """Find the curated phonebook entry matching ``anchor`` (idsid,
+        email, or alias). Used by the subtree-bias ranker (#225) to look
+        up the anchor's preferred subtrees."""
+        if not anchor:
+            return None
+        a = anchor.strip().lstrip("@").lower()
+        if not a:
+            return None
+        self._maybe_reload()
+        with self._lock:
+            if a in self._by_idsid:
+                return self._by_idsid[a]
+            hits = self._by_alias.get(a, [])
+            if len(hits) == 1:
+                return self._by_idsid[hits[0]]
+        return None
+
+    def _anchor_bias_wwids(self, anchor: str) -> list[str]:
+        """Resolve the anchor's ``prefer_subtrees`` list (mix of idsids
+        and WWIDs) to a flat list of WWIDs (#225). Numeric tokens are
+        passed through; idsids are looked up via the scraper. Failures
+        are logged and skipped — bias is best-effort, never fatal."""
+        entry = self._anchor_entry(anchor)
+        if not entry or not entry.prefer_subtrees:
+            return []
+        from . import phonebook_intel
+        out: list[str] = []
+        for tok in entry.prefer_subtrees:
+            t = (tok or "").strip()
+            if not t:
+                continue
+            if t.isdigit():
+                out.append(t)
+                continue
+            try:
+                wwid = phonebook_intel.resolve_anchor_wwid(t)
+            except Exception as e:  # pragma: no cover — defensive
+                log.warning("bias subtree %r failed to resolve: %s", t, e)
+                wwid = None
+            if wwid:
+                out.append(wwid)
+            else:
+                log.info("bias subtree %r did not resolve for anchor=%s",
+                         t, entry.idsid)
+        # Dedupe while preserving order.
+        seen, dedup = set(), []
+        for w in out:
+            if w not in seen:
+                seen.add(w); dedup.append(w)
+        return dedup
 
     def resolve_many(
         self,

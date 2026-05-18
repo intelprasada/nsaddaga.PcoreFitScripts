@@ -42,6 +42,87 @@ def pb_file(tmp_path: Path) -> Path:
     return p
 
 
+def test_prefer_subtrees_loaded_from_json(tmp_path: Path):
+    p = tmp_path / "phonebook.json"
+    p.write_text(json.dumps({
+        "nsaddaga": {
+            "idsid": "nsaddaga",
+            "display": "Prasad Addagarla",
+            "email": "prasad.addagarla@intel.com",
+            "prefer_subtrees": ["yitav", "11578900", "  ", ""],
+        },
+        "jdoe": {
+            "idsid": "jdoe",
+            "display": "Jane Doe",
+            "email": "jane.doe@intel.com",
+            # no field => empty tuple
+        },
+        "bad": {
+            "idsid": "bad",
+            "display": "B",
+            "email": "b@intel.com",
+            "prefer_subtrees": "not-a-list",  # ignored
+        },
+    }), encoding="utf-8")
+    pb = Phonebook(p)
+    pb._maybe_reload()
+    e1 = pb._by_idsid["nsaddaga"]
+    assert e1.prefer_subtrees == ("yitav", "11578900")
+    assert pb._by_idsid["jdoe"].prefer_subtrees == ()
+    assert pb._by_idsid["bad"].prefer_subtrees == ()
+    # to_dict round-trips.
+    assert e1.to_dict()["prefer_subtrees"] == ["yitav", "11578900"]
+
+
+def test_anchor_bias_wwids_resolves_idsid_and_passes_through_wwid(
+    monkeypatch, tmp_path: Path,
+):
+    p = tmp_path / "phonebook.json"
+    p.write_text(json.dumps({
+        "nsaddaga": {
+            "idsid": "nsaddaga",
+            "display": "Prasad",
+            "email": "p@intel.com",
+            "prefer_subtrees": ["yitav", "11578900", "yitav"],  # dup
+        },
+    }), encoding="utf-8")
+    pb = Phonebook(p)
+    # Stub out the scraper resolver — pretend "yitav" -> wwid 22222.
+    from app import phonebook_intel as pi
+    monkeypatch.setattr(pi, "resolve_anchor_wwid",
+                        lambda t: "22222" if t.lower() == "yitav" else None)
+    out = pb._anchor_bias_wwids("nsaddaga")
+    # Numeric passes through, idsid resolved, dups dropped, order preserved.
+    assert out == ["22222", "11578900"]
+    # Unknown anchor -> empty.
+    assert pb._anchor_bias_wwids("nobody") == []
+    # No prefer_subtrees -> empty.
+    p.write_text(json.dumps({
+        "nsaddaga": {"idsid": "nsaddaga", "display": "P", "email": "p@intel.com"},
+    }), encoding="utf-8")
+    # Force reload.
+    import os; os.utime(p, None)
+    pb._mtime = None
+    pb._maybe_reload()
+    assert pb._anchor_bias_wwids("nsaddaga") == []
+
+
+def test_anchor_bias_wwids_handles_unresolvable_idsid(
+    monkeypatch, tmp_path: Path,
+):
+    p = tmp_path / "phonebook.json"
+    p.write_text(json.dumps({
+        "nsaddaga": {
+            "idsid": "nsaddaga", "display": "P", "email": "p@intel.com",
+            "prefer_subtrees": ["ghost"],
+        },
+    }), encoding="utf-8")
+    pb = Phonebook(p)
+    from app import phonebook_intel as pi
+    monkeypatch.setattr(pi, "resolve_anchor_wwid", lambda t: None)
+    assert pb._anchor_bias_wwids("nsaddaga") == []
+
+
 def test_resolve_idsid_wins(pb_file):
     pb = Phonebook(pb_file)
     e, cands = pb.resolve("nsaddaga")

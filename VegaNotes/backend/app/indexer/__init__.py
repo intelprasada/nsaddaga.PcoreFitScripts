@@ -22,6 +22,7 @@ from ..models import (
     Feature, Link, Note, Project, ProjectMember, Task, TaskAttr, TaskFeature,
     TaskOwner, TaskProject, User,
 )
+from ..owner_normalize import canonical_idsid
 from ..parser import parse
 
 log = logging.getLogger(__name__)
@@ -82,10 +83,20 @@ def _upsert_task_attrs(session: Session, tid: int, pt: dict, folder_project: str
         norms_list = norms if isinstance(norms, list) else [norms] * len(values)
         for v, n in zip(values, norms_list):
             norm_str = None if n is None else str(n)
-            session.add(TaskAttr(task_id=tid, key=key, value=str(v), value_norm=norm_str))
+            vstr = str(v)
+            if key == "owner":
+                # Canonicalize owner attr value via the curated phonebook
+                # (#174) so My Tasks / owner-filter queries see one
+                # identity per person regardless of spelling.
+                canonical, _status = canonical_idsid(vstr)
+                if canonical:
+                    vstr = canonical
+                    norm_str = canonical.lower()
+            session.add(TaskAttr(task_id=tid, key=key, value=vstr, value_norm=norm_str))
 
     for name in (pt["attrs"].get("owner", []) if isinstance(pt["attrs"].get("owner"), list) else []):
-        user = _get_or_create(session, User, name=name)
+        canonical, _status = canonical_idsid(name)
+        user = _get_or_create(session, User, name=canonical or name)
         session.add(TaskOwner(task_id=tid, user_id=user.id))
     for name in (pt["attrs"].get("project", []) if isinstance(pt["attrs"].get("project"), list) else []):
         proj = _get_or_create(session, Project, name=name)
@@ -261,10 +272,12 @@ def apply_single_task_patch_to_index(
             .bindparams(tid=task_id)
         )
         for name in cleaned:
-            user = _get_or_create(session, User, name=name)
+            canonical, _status = canonical_idsid(name)
+            uname = canonical or name
+            user = _get_or_create(session, User, name=uname)
             session.add(TaskOwner(task_id=task_id, user_id=user.id))
             session.add(TaskAttr(
-                task_id=task_id, key="owner", value=name, value_norm=name.lower(),
+                task_id=task_id, key="owner", value=uname, value_norm=uname.lower(),
             ))
 
     if features is not None:
@@ -656,10 +669,14 @@ def _apply_ref_rows(session: Session, ref_rows: list[dict]) -> None:
                 tgt.status = normalize_status(str(val))
             if isinstance(val, list):
                 for v in val:
-                    session.add(TaskAttr(task_id=tgt_id, key=key, value=str(v), value_norm=str(v).lower()))
+                    vstr = str(v)
+                    if key == "owner":
+                        canonical, _status = canonical_idsid(vstr)
+                        vstr = canonical or vstr
+                    session.add(TaskAttr(task_id=tgt_id, key=key, value=vstr, value_norm=vstr.lower()))
                     # Also sync join tables so filter queries work correctly.
                     if key == "owner":
-                        u = _get_or_create(session, User, name=str(v))
+                        u = _get_or_create(session, User, name=vstr)
                         existing_to = session.exec(
                             select(TaskOwner).where(
                                 TaskOwner.task_id == tgt_id,
@@ -740,6 +757,36 @@ def reindex_all(session: Session) -> int:
         WATCHER_STATE.get("orphans_swept_total", 0) + orphans
     )
 
+    # ── Reconcile: drop User rows that have no tasks AND no password ─────
+    # After canonicalization (#174, #226) rekeys (e.g. email-lp → linux
+    # idsid in commit 608486b), old "spelling-variant" User rows become
+    # orphans: no TaskOwner edges, no curated alias still pointing at
+    # them, and importantly no password (so they were never login
+    # accounts). Safe to delete — admins still see only meaningful
+    # rows in the admin tab. Login accounts (has_password=True) and
+    # admin rows are NEVER auto-deleted to avoid silent data loss;
+    # admins must explicitly DELETE those via /api/admin/users/{name}.
+    user_orphans = 0
+    candidate_users = session.exec(
+        select(User).where(User.is_admin == False)  # noqa: E712
+    ).all()
+    for u in candidate_users:
+        if u.pass_hash:
+            continue
+        owned = session.exec(
+            select(TaskOwner).where(TaskOwner.user_id == u.id).limit(1)
+        ).first()
+        if owned is not None:
+            continue
+        session.delete(u)
+        user_orphans += 1
+    if user_orphans:
+        log.info("reindex_all: swept %d orphan user row(s)", user_orphans)
+    WATCHER_STATE["user_orphans_swept_last"] = user_orphans
+    WATCHER_STATE["user_orphans_swept_total"] = (
+        WATCHER_STATE.get("user_orphans_swept_total", 0) + user_orphans
+    )
+
     _bootstrap_orphan_projects(session)
     return n
 
@@ -800,6 +847,8 @@ WATCHER_STATE: dict = {
     "poll_delay_ms": None,
     "orphans_swept_last": 0,
     "orphans_swept_total": 0,
+    "user_orphans_swept_last": 0,
+    "user_orphans_swept_total": 0,
 }
 
 # Filesystems that do not deliver inotify events for off-host writes and

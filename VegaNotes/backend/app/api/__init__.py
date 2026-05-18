@@ -40,8 +40,62 @@ from ..safe_io import (
 )
 from .. import gamify
 from ..phonebook import get_phonebook
+from ..owner_normalize import canonical_idsid
 
 router = APIRouter(dependencies=[Depends(require_user)])
+
+
+def _canon_owner_filter(values: list[str]) -> list[str]:
+    """Expand an owner-filter list to include canonical idsids (#174 follow-up).
+
+    The indexer rewrites task owners to canonical idsids via the local
+    phonebook. Filter callers (``/tasks?owner=admin``, ``MyTasksView``
+    which passes ``me.name``) may still send the *login* username or
+    any curated alias. Without expansion, ``?owner=admin`` matches zero
+    rows because the DB stores ``nsaddaga``.
+
+    For each input we include both the canonical idsid (when an alias
+    matches a curated entry) **and** the original value. The original
+    is kept as a defensive fallback so any non-canonical row that
+    slipped through (e.g. pre-#174 data, ambiguous tokens, local seed
+    accounts) still matches. Order is preserved, duplicates removed.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for v in values:
+        if not v:
+            continue
+        if v not in seen:
+            seen.add(v)
+            out.append(v)
+        try:
+            canon, status = canonical_idsid(v)
+        except Exception:
+            continue
+        if status == "resolved" and canon and canon not in seen:
+            seen.add(canon)
+            out.append(canon)
+    return out
+
+
+def _owner_display_map(names: list[str]) -> dict[str, str]:
+    """Map owner User.name → friendly display name from the phonebook
+    (#226 follow-up). Names not in the phonebook map to themselves so
+    callers can render uniformly without null-checking. Result is
+    deterministic and side-effect-free; safe to call per-request."""
+    out: dict[str, str] = {}
+    if not names:
+        return out
+    pb = get_phonebook()
+    for n in names:
+        if not n:
+            continue
+        try:
+            entry, _ = pb.resolve(n, local_only=True)
+        except Exception:
+            entry = None
+        out[n] = (entry.display if entry and entry.display else n)
+    return out
 
 _PRIORITY_LABELS = {"p0": 0, "p1": 1, "p2": 2, "p3": 3, "high": 1, "med": 2, "medium": 2, "low": 3}
 
@@ -927,7 +981,7 @@ def list_tasks(
         params[f"{alias}_names"] = tuple(names)
         expanding.append(f"{alias}_names")
 
-    _join_multi("taskowner", "user", _split(owner), "u")
+    _join_multi("taskowner", "user", _canon_owner_filter(_split(owner)), "u")
     _join_multi("taskproject", "project", _split(project), "p")
     _join_multi("taskfeature", "feature", _split(feature), "f")
 
@@ -978,7 +1032,7 @@ def list_tasks(
         params[slot] = tuple(names)
         expanding.append(slot)
 
-    _exclude("user",    "taskowner",   "user_id",    _split(not_owner),   "not_u_names")
+    _exclude("user",    "taskowner",   "user_id",    _canon_owner_filter(_split(not_owner)),   "not_u_names")
     _exclude("project", "taskproject", "project_id", _split(not_project), "not_p_names")
     _exclude("feature", "taskfeature", "feature_id", _split(not_feature), "not_f_names")
 
@@ -1136,6 +1190,7 @@ def list_tasks(
         "limit": limit,
         "aggregations": {
             "owners": agg_owners,
+            "owner_displays": _owner_display_map(agg_owners),
             "projects": agg_projects,
             "features": agg_features,
             "status_breakdown": status_bd,
@@ -1211,17 +1266,24 @@ def agenda(
     """
     params: dict[str, Any] = {"start": today.isoformat(), "end": end_d.isoformat()}
     if owner:
+        owners_expanded = _canon_owner_filter([owner])
         sql += (
             " JOIN taskowner o ON o.task_id = t.id "
-            " JOIN user u ON u.id = o.user_id AND u.name = :owner "
+            " JOIN user u ON u.id = o.user_id AND u.name IN :owners "
         )
-        params["owner"] = owner
+        params["owners"] = tuple(owners_expanded)
+        # bindparam expansion needs the key listed alongside other expanding
+        # binds below; agenda uses text() with explicit bindparams instead.
     sql += """
     WHERE t.status != 'done'
       AND ea.value_norm BETWEEN :start AND :end
     ORDER BY ea.value_norm ASC, pri_rank ASC, t.id ASC
     """
-    rows = s.exec(text(sql).bindparams(**params)).all()
+    stmt = text(sql)
+    if owner:
+        from sqlalchemy import bindparam
+        stmt = stmt.bindparams(bindparam("owners", expanding=True))
+    rows = s.exec(stmt.bindparams(**params)).all()
     grouped: dict[str, list[dict]] = {}
     for tid, eta, _pri in rows:
         grouped.setdefault(eta, []).append(_task_to_dict(s, s.get(Task, tid)))
@@ -1245,11 +1307,13 @@ def feature_tasks(name: str, s: Session = Depends(get_session)) -> dict[str, Any
         .where(TaskFeature.feature_id == feat.id)
     ).all()
     tasks = [_task_to_dict(s, s.get(Task, r[0] if isinstance(r, tuple) else r)) for r in rows]
+    agg_o = sorted({o for t in tasks for o in t["owners"]})
     return {
         "feature": name,
         "tasks": tasks,
         "aggregations": {
-            "owners": sorted({o for t in tasks for o in t["owners"]}),
+            "owners": agg_o,
+            "owner_displays": _owner_display_map(agg_o),
             "projects": sorted({p for t in tasks for p in t["projects"]}),
             "status_breakdown": {st: sum(1 for t in tasks if t["status"] == st) for st in {t["status"] for t in tasks}},
             "eta_range": [
@@ -1347,9 +1411,10 @@ def phonebook_lookup(
     common ancestor was found within the chain depth limit), and
     candidates are returned sorted by that distance ascending."""
     from ..phonebook_intel import (
-        cached_lookup, filter_by_first_name, rank_by_distance,
-        resolve_anchor_wwid,
+        cached_lookup, filter_by_first_name, filter_by_last_name,
+        rank_by_distance_full, resolve_anchor_wwid,
     )
+    from ..phonebook import Phonebook
     from ..config import settings as _s
     q = (body.q or "").strip()
     enabled = bool(getattr(_s, "phonebook_scraper_enabled", False))
@@ -1357,23 +1422,49 @@ def phonebook_lookup(
         return {"query": "", "candidates": [], "enabled": enabled}
     if len(q) > 200:
         raise HTTPException(status_code=400, detail="query too long (max 200)")
-    hits = cached_lookup(q)
+    # #226: support GAL "Last, First" and two-token "First Last" forms.
+    given, surname = Phonebook._split_compound_token(q)
+    hits = cached_lookup(given)
     # First-name-only filter (#215) — drop Pavel-as-lastname noise etc.
-    hits = filter_by_first_name(hits, q)
+    hits = filter_by_first_name(hits, given)
+    if surname:
+        hits = filter_by_last_name(hits, surname)
     anchor = _pick_phonebook_anchor(body.anchor, user)
     anchor_wwid = resolve_anchor_wwid(anchor) if anchor else None
-    ranked = rank_by_distance(hits, anchor_wwid) if anchor_wwid else \
-        [(h, None) for h in hits]
+    pen = int(getattr(_s, "phonebook_seniority_penalty", 3))
+    bias_score = int(getattr(_s, "phonebook_subtree_bias", 0))
+    bias_wwids: list[str] = []
+    if anchor and bias_score:
+        from ..phonebook import get_phonebook as _get_pb
+        try:
+            bias_wwids = _get_pb()._anchor_bias_wwids(anchor)
+        except Exception:  # pragma: no cover — defensive
+            bias_wwids = []
+    ranked = rank_by_distance_full(
+        hits, anchor_wwid, seniority_penalty=pen,
+        subtree_bias_wwids=bias_wwids,
+        subtree_bias_score=bias_score,
+    ) if anchor_wwid else [(h, None, None, None, None) for h in hits]
     out = []
-    for h, dist in ranked:
+    bias_set = set(bias_wwids)
+    for h, up, down, raw, score in ranked:
         d = h.to_dict()
-        d["org_distance"] = dist
+        d["up_hops"] = up
+        d["down_hops"] = down
+        d["org_distance"] = raw
+        d["score"] = score
+        if bias_set and h.wwid:
+            from ..phonebook_intel import chain_passes_through
+            d["bias_applied"] = chain_passes_through(h.wwid, bias_set)
         out.append(d)
     return {
         "query": q,
         "enabled": enabled,
         "anchor": anchor,
         "anchor_wwid": anchor_wwid,
+        "seniority_penalty": pen,
+        "subtree_bias": bias_score,
+        "subtree_bias_wwids": bias_wwids,
         "candidates": out,
     }
 
@@ -1941,8 +2032,30 @@ def delete_task(
 
 # ---------- users / search -------------------------------------------------
 @router.get("/users")
-def list_users(s: Session = Depends(get_session)) -> list[str]:
-    return [u.name for u in s.exec(select(User).order_by(User.name)).all()]
+def list_users(
+    s: Session = Depends(get_session),
+    with_display: bool = False,
+) -> list[Any]:
+    """List User.name values. When ``with_display=1`` returns a richer
+    shape ``[{"name": "nsaddaga", "display": "Prasad Addagarla"}, ...]``
+    so the FilterBar dropdown can render the friendly display name while
+    still keying the option value on the canonical idsid.
+
+    With the flag, the result is also restricted to users that own at
+    least one task — keeps the FilterBar dropdown free of orphan rows
+    left behind by pre-canonicalization (#174) reindexes.
+
+    Without the flag, returns a plain string list including all User
+    rows (used by admin / member-management UIs that need every user)."""
+    if not with_display:
+        return [u.name for u in s.exec(select(User).order_by(User.name)).all()]
+    rows = s.exec(
+        select(User.name).join(TaskOwner, TaskOwner.user_id == User.id)
+        .group_by(User.name).order_by(User.name)
+    ).all()
+    names = [r if isinstance(r, str) else r[0] for r in rows]
+    disp = _owner_display_map(names)
+    return [{"name": n, "display": disp.get(n, n)} for n in names]
 
 
 @router.get("/me")
@@ -2350,6 +2463,7 @@ def admin_reindex(
         "status": "ok",
         "files_indexed": n,
         "orphans_swept": WATCHER_STATE.get("orphans_swept_last", 0),
+        "user_orphans_swept": WATCHER_STATE.get("user_orphans_swept_last", 0),
     }
 
 

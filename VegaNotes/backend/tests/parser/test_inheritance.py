@@ -158,3 +158,39 @@ def test_sibling_context_lines_at_same_indent_replace_each_other():
     # AND replace the prior @aboli frame at the same indent.
     assert "project" not in by_title["C"]["attrs"]
     assert by_title["C"]["attrs"].get("owner") == ["namratha"]
+
+
+# ---------------------------------------------------------------------------
+# #226 — GAL "Last, First" support and quoted @"..." form.
+# ---------------------------------------------------------------------------
+
+def test_at_gal_form_lastname_first():
+    md = "- !task Foo @Chatla, Niharika\n"
+    out = parse(md)
+    assert out["tasks"][0]["attrs"]["owner"] == ["Chatla, Niharika"]
+
+
+def test_at_gal_form_with_outlook_digit_suffix():
+    md = "- !task Foo @Chatla, Niharika1\n"
+    out = parse(md)
+    assert out["tasks"][0]["attrs"]["owner"] == ["Chatla, Niharika1"]
+
+
+def test_at_gal_form_does_not_eat_lowercase_prose():
+    """`@john, can you ...` must NOT be treated as compound — the second
+    word is lowercase, so it's prose."""
+    md = "- !task Foo @john, can you check?\n"
+    out = parse(md)
+    assert out["tasks"][0]["attrs"]["owner"] == ["john"]
+
+
+def test_at_quoted_form():
+    md = '- !task Foo @"Chatla, Niharika"\n'
+    out = parse(md)
+    assert out["tasks"][0]["attrs"]["owner"] == ["Chatla, Niharika"]
+
+
+def test_at_quoted_form_two_token():
+    md = '- !task Foo @"Niharika Chatla"\n'
+    out = parse(md)
+    assert out["tasks"][0]["attrs"]["owner"] == ["Niharika Chatla"]

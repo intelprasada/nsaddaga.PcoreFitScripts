@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import html as _html
 import logging
+import os
 import re
+import subprocess
 import time
 import threading
 import urllib.parse
@@ -88,12 +90,28 @@ class IntelPhonebookHit:
     # Pavel) or with Pavel only in their team metadata (Barak Agam).
     # Falls back to ``display`` when the source had no comma.
     first_name: str = ""
+    # Last-name portion of the original "LASTNAME, Firstname" BookName
+    # (#226). Used by ``filter_by_last_name`` so GAL "Last, First"
+    # tokens and compound "First Last" tokens can be disambiguated by
+    # surname. Empty when source had no comma.
+    last_name: str = ""
+    # True Linux/Unix login idsid for the user, resolved via NIS
+    # (``ypcat passwd``) from the WWID. For some users this differs
+    # from the email local-part (e.g. ``sachin.bhattad`` email →
+    # ``sbhattad`` login). Empty when NIS lookup is unavailable
+    # (off-corp-network, container without NIS, etc.) or when the
+    # WWID isn't in the passwd map. When non-empty, callers should
+    # prefer it as the canonical ``User.name`` so login ids line up
+    # with task ownership.
+    linux_idsid: str = ""
 
     def to_dict(self) -> dict:
         # Match the shape of PhonebookEntry.to_dict so callers can splice
         # results into the existing /api/phonebook/resolve response.
         return {
-            "idsid": self.idsid,
+            "idsid": self.linux_idsid or self.idsid,
+            "email_idsid": self.idsid,  # email local-part, kept for back-compat
+            "linux_idsid": self.linux_idsid,
             "display": self.display,
             "email": self.email,
             "aliases": [],
@@ -101,6 +119,78 @@ class IntelPhonebookHit:
             "wwid": self.wwid,
             "source": "intel_phonebook",
         }
+
+
+# ────────────────────────── NIS / Linux idsid lookup ───────────────────────
+# Many Intel users have a Linux login id that differs from their email
+# local-part (e.g. ``sachin.bhattad`` email → ``sbhattad`` login). The NIS
+# passwd map exposes the WWID→login mapping in the GECOS field, so a
+# single ``ypcat passwd`` call gives us a full WWID→login table.
+#
+# Cached for the process lifetime — the NIS map changes rarely and the
+# fetch is ~50ms for ~100K entries. Disable via VEGANOTES_NIS_DISABLED=1
+# for tests / offline / non-corp environments where ``ypcat`` is missing.
+
+_NIS_WWID_TO_LOGIN_LOCK = threading.Lock()
+_NIS_WWID_TO_LOGIN: dict[str, str] | None = None
+
+
+def _load_nis_passwd_map() -> dict[str, str]:
+    """Return ``{wwid: linux_login}`` from ``ypcat passwd``.
+
+    Cached after the first successful call. Returns ``{}`` on any error
+    so callers degrade gracefully to email-local-part as the idsid.
+
+    The passwd line format on VAS is::
+
+        login:VAS:wwid:gid:fullname,wwid[,...]:homedir:shell
+    """
+    global _NIS_WWID_TO_LOGIN
+    with _NIS_WWID_TO_LOGIN_LOCK:
+        if _NIS_WWID_TO_LOGIN is not None:
+            return _NIS_WWID_TO_LOGIN
+        if os.environ.get("VEGANOTES_NIS_DISABLED") == "1":
+            _NIS_WWID_TO_LOGIN = {}
+            return _NIS_WWID_TO_LOGIN
+        try:
+            proc = subprocess.run(
+                ["ypcat", "passwd"],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+        except (FileNotFoundError, subprocess.SubprocessError) as e:
+            log.warning("NIS lookup unavailable (ypcat passwd failed): %s", e)
+            _NIS_WWID_TO_LOGIN = {}
+            return _NIS_WWID_TO_LOGIN
+        out: dict[str, str] = {}
+        for line in proc.stdout.splitlines():
+            parts = line.split(":")
+            if len(parts) < 7:
+                continue
+            login = parts[0]
+            gecos = parts[4]
+            fields = gecos.split(",")
+            if len(fields) < 2:
+                continue
+            wwid = fields[1].strip()
+            if wwid.isdigit():
+                out.setdefault(wwid, login)
+        log.info("NIS passwd map loaded: %d WWID→login entries", len(out))
+        _NIS_WWID_TO_LOGIN = out
+        return _NIS_WWID_TO_LOGIN
+
+
+def reset_nis_cache_for_test() -> None:
+    """Clear the in-process NIS cache. Test-only."""
+    global _NIS_WWID_TO_LOGIN
+    with _NIS_WWID_TO_LOGIN_LOCK:
+        _NIS_WWID_TO_LOGIN = None
+
+
+def linux_idsid_for_wwid(wwid: str) -> str:
+    """Return the Linux login idsid for ``wwid``, or ``""`` if unknown."""
+    if not wwid:
+        return ""
+    return _load_nis_passwd_map().get(wwid, "")
 
 
 def _parse_html(body: str) -> list[IntelPhonebookHit]:
@@ -152,12 +242,14 @@ def _parse_html(body: str) -> list[IntelPhonebookHit]:
         if "," in display:
             last, _, first = display.partition(",")
             first_name = first.strip()
+            last_name = last.strip()
             display = f"{first.strip()} {last.strip()}".strip()
         else:
             # No comma — either fallback display from the email local-part
             # or a non-standard row. Treat the whole string as the first
             # name so we don't over-filter rare formats.
             first_name = display.strip()
+            last_name = ""
         seen.add(email)
         out.append(IntelPhonebookHit(
             display=display,
@@ -165,6 +257,8 @@ def _parse_html(body: str) -> list[IntelPhonebookHit]:
             idsid=email.split("@", 1)[0].lower(),
             wwid=wwid,
             first_name=first_name,
+            last_name=last_name,
+            linux_idsid=linux_idsid_for_wwid(wwid),
         ))
     return out
 
@@ -249,6 +343,29 @@ def filter_by_first_name(
     if not q:
         return hits
     return [h for h in hits if (h.first_name or "").lower().startswith(q)]
+
+
+def filter_by_last_name(
+    hits: list[IntelPhonebookHit], surname: str,
+) -> list[IntelPhonebookHit]:
+    """Drop candidates whose last name doesn't start with ``surname`` (#226).
+
+    Companion to :func:`filter_by_first_name`. Used by the resolver when
+    the lookup token carries an explicit surname — either as GAL form
+    (``"Last, First"``) or as a two-token compound (``"First Last"``).
+    Hits with no recorded ``last_name`` (rare fallback rows that had no
+    comma in BookName) are kept so we don't over-filter unusual data.
+
+    Empty ``surname`` returns ``hits`` unchanged.
+    """
+    s = (surname or "").strip().lower()
+    if not s:
+        return hits
+    return [
+        h for h in hits
+        if not (h.last_name or "")
+        or (h.last_name or "").lower().startswith(s)
+    ]
 
 
 def cache_clear() -> None:
@@ -355,48 +472,133 @@ def manager_chain(wwid: str, *, max_depth: int = MAX_CHAIN_DEPTH) -> list[str]:
 
 def org_distance(a_wwid: str, b_wwid: str,
                  *, max_depth: int = MAX_CHAIN_DEPTH) -> int | None:
-    """Distance between two people in the management tree.
+    """Symmetric LCA distance — kept for back-compat callers and the
+    /phonebook/lookup ``org_distance`` field. New code should prefer
+    ``org_distance_weighted`` (#224) which surfaces the up/down split."""
+    r = org_distance_weighted(a_wwid, b_wwid, max_depth=max_depth)
+    return None if r is None else r[2]
 
-    Returns:
-      0 if same person.
-      depth(a→LCA) + depth(b→LCA) when an LCA exists within ``max_depth``.
-      None if no common ancestor was found (chain too long, or one side
-      missing — in which case "distance" is undefined and the caller
-      should treat the candidate as worst-ranked).
+
+def org_distance_weighted(
+    a_wwid: str, b_wwid: str,
+    *, max_depth: int = MAX_CHAIN_DEPTH,
+) -> tuple[int, int, int] | None:
+    """Distance between two people, split into up/down components (#224).
+
+    Returns ``(up, down, raw)`` where:
+      - ``up``   = depth(``a_wwid`` → LCA), i.e. how many levels you climb
+                   from the anchor to reach the lowest common ancestor.
+      - ``down`` = depth(LCA → ``b_wwid``), i.e. how many levels you
+                   descend from the LCA into the candidate's subtree.
+      - ``raw``  = ``up + down`` (the symmetric LCA distance).
+
+    ``(0, 0, 0)`` if same person. ``None`` if no common ancestor found
+    within ``max_depth`` (or if either WWID is missing).
     """
     if not a_wwid or not b_wwid:
         return None
     if a_wwid == b_wwid:
-        return 0
+        return (0, 0, 0)
     chain_a = manager_chain(a_wwid, max_depth=max_depth)
     chain_b = manager_chain(b_wwid, max_depth=max_depth)
-    # Index a's chain so b can probe in O(1).
     pos_in_a = {w: i for i, w in enumerate(chain_a)}
-    best: int | None = None
+    best: tuple[int, int, int] | None = None
     for j, w in enumerate(chain_b):
         i = pos_in_a.get(w)
         if i is not None:
-            d = i + j
-            if best is None or d < best:
-                best = d
+            cand = (i, j, i + j)
+            if best is None or cand[2] < best[2]:
+                best = cand
     return best
+
+
+def seniority_score(up: int, down: int, *, penalty: int = 3) -> int:
+    """Weighted distance from #224. ``score = (up + down) + (up - down) * penalty``.
+
+    Negative ``sd`` (junior candidates) reduces the score; positive
+    (senior) increases it. With penalty=3:
+      - reportee (up=0, down=1) → -2 (cheapest, always wins among same-name)
+      - same-level peer (up=k, down=k) → 2k
+      - direct manager (up=1, down=0) → 4
+      - senior-leader 5-up (up=5, down=0) → 20
+    """
+    return (up + down) + (up - down) * penalty
 
 
 def rank_by_distance(
     candidates: list[IntelPhonebookHit],
     anchor_wwid: str | None,
+    *,
+    seniority_penalty: int = 3,
 ) -> list[tuple[IntelPhonebookHit, int | None]]:
-    """Return ``(candidate, distance)`` pairs sorted by distance ascending
-    (``None`` distances sorted last). Stable for ties — original order
-    preserved within the same bucket."""
+    """Sort candidates by the seniority-weighted score (#224). Returned as
+    ``(candidate, raw_distance)`` for back-compat with existing callers
+    (the raw LCA distance is what the API has historically surfaced).
+
+    Sort key: ``(score, raw, display.lower())``. ``None``-distance
+    candidates (no common ancestor / missing WWID) sorted last.
+
+    For full per-candidate detail (up/down/score), use
+    ``rank_by_distance_full`` directly.
+    """
+    full = rank_by_distance_full(candidates, anchor_wwid,
+                                 seniority_penalty=seniority_penalty)
+    return [(c, raw) for c, _up, _down, raw, _score in full]
+
+
+def chain_passes_through(wwid: str, ancestors: Iterable[str]) -> bool:
+    """True if ``wwid``'s manager chain (including itself) contains any
+    WWID in ``ancestors``. Used by the subtree-bias ranker (#225).
+
+    Empty ``ancestors`` or empty/unknown ``wwid`` returns False.
+    """
+    if not wwid:
+        return False
+    anc = {a for a in ancestors if a}
+    if not anc:
+        return False
+    chain = manager_chain(wwid)
+    return any(w in anc for w in chain)
+
+
+def rank_by_distance_full(
+    candidates: list[IntelPhonebookHit],
+    anchor_wwid: str | None,
+    *,
+    seniority_penalty: int = 3,
+    subtree_bias_wwids: Iterable[str] | None = None,
+    subtree_bias_score: int = 0,
+) -> list[tuple[IntelPhonebookHit, int | None, int | None, int | None, int | None]]:
+    """Same as ``rank_by_distance`` but returns ``(c, up, down, raw, score)``.
+    All four ints are ``None`` when no common ancestor exists.
+
+    If ``subtree_bias_wwids`` is provided, ``subtree_bias_score`` is added
+    to the score of any candidate whose manager chain passes through one
+    of those WWIDs (#225). Use a negative value to *prefer* those
+    candidates."""
     if not anchor_wwid:
-        return [(c, None) for c in candidates]
-    out: list[tuple[IntelPhonebookHit, int | None]] = []
+        return [(c, None, None, None, None) for c in candidates]
+    bias_set = {w for w in (subtree_bias_wwids or []) if w}
+    rows: list[tuple[IntelPhonebookHit, int | None, int | None, int | None, int | None]] = []
     for c in candidates:
-        d = org_distance(anchor_wwid, c.wwid) if c.wwid else None
-        out.append((c, d))
-    out.sort(key=lambda p: (p[1] is None, p[1] if p[1] is not None else 0))
-    return out
+        if not c.wwid:
+            rows.append((c, None, None, None, None)); continue
+        r = org_distance_weighted(anchor_wwid, c.wwid)
+        if r is None:
+            rows.append((c, None, None, None, None)); continue
+        up, down, raw = r
+        score = seniority_score(up, down, penalty=seniority_penalty)
+        if bias_set and subtree_bias_score and chain_passes_through(c.wwid, bias_set):
+            score += subtree_bias_score
+        rows.append((c, up, down, raw, score))
+    # Sort: resolved before unresolved; then (score, raw, name).
+    rows.sort(key=lambda p: (
+        p[4] is None,
+        p[4] if p[4] is not None else 0,
+        p[3] if p[3] is not None else 0,
+        (p[0].display or "").lower(),
+    ))
+    return rows
 
 
 def resolve_anchor_wwid(anchor: str | None) -> str | None:

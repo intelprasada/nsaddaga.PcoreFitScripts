@@ -48,6 +48,17 @@ class Settings(BaseSettings):
     # bare-name owner tokens like ``@Niharika`` still rank against your
     # subtree instead of returning ambiguous.
     phonebook_default_anchor: str | None = None
+    # Penalty per level of seniority delta in the phonebook ranker (#224).
+    # `score = raw_distance + (up - down) * penalty`. Higher = stronger
+    # preference for peers/reportees over senior leaders. 0 = back to
+    # the original symmetric LCA distance.
+    phonebook_seniority_penalty: int = 3
+    # Score delta applied when a candidate's manager-chain passes through
+    # any of the anchor's preferred subtrees (#225). Negative discounts;
+    # a -5 default is large enough to break ties (which are typically 1-3
+    # apart on score) but small enough that a far-away non-preferred
+    # candidate doesn't beat a near-perfect non-preferred match.
+    phonebook_subtree_bias: int = -5
 
     @property
     def notes_dir(self) -> Path:

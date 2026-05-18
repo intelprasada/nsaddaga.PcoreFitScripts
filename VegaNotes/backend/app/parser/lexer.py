@@ -35,10 +35,19 @@ _TOKEN_RE = re.compile(
     \#(?P<name>[a-zA-Z][\w-]*)            # #attribute
     |
     (?P<at_pre>(?<=^)|(?<=[\s(\[]))       # word boundary so emails (a@b.c) don't match
-    @(?P<at>[a-zA-Z][\w.-]*)              # @user (sugar for #owner)
+    (?:
+      @"(?P<at_quoted>[^"\n]+)"            # @"Last, First"  (quoted)
+      |
+      @(?P<at>[a-zA-Z][\w.-]*)            # @user (sugar for #owner)
+    )
     """,
     re.VERBOSE | re.MULTILINE,
 )
+
+# #226: GAL-style "@Last, First" without quotes — only consume the
+# trailing ", Capitalized" when it directly follows an @-name and the
+# next word is Capitalized (so prose like "@john, can you..." is safe).
+_GAL_TAIL_RE = re.compile(r",\s+(?P<sur>[A-Z][\w.-]*)")
 
 _TOKEN_NAMES_NEEDING_VALUE = {"task"}  # !task always takes a value (the title)
 
@@ -76,7 +85,7 @@ def _read_value(s: str, i: int, *, until_hash: bool = False) -> tuple[str, int]:
                     # later drop empty-value attrs so prose hashtags
                     # (`#urgent` at EOL) are unaffected.
                     break
-            if s[j] == "@" and (j == 0 or s[j - 1] in " \t([") and j + 1 < n and (s[j + 1].isalpha() or s[j + 1] == "_"):
+            if s[j] == "@" and (j == 0 or s[j - 1] in " \t([") and j + 1 < n and (s[j + 1].isalpha() or s[j + 1] == "_" or s[j + 1] == '"'):
                 break
             j += 1
         return s[i:j].rstrip(), j
@@ -107,9 +116,30 @@ def lex(line: str) -> List[Union[TextChunk, Token]]:
             out.append(Token(kind="task_decl", name=kind_name, value=value, raw=raw, col=start))
             i = end
             last = end
+        elif m.group("at_quoted") is not None:
+            user = m.group("at_quoted").strip()
+            end = m.end()
+            raw = line[start:end]
+            out.append(Token(kind="attr", name="owner", value=user, raw=raw, col=start))
+            i = end
+            last = end
         elif m.group("at"):
             user = m.group("at")
             end = m.end()
+            # #226: opportunistically extend a bare @First into a GAL
+            # "@First, Last" form when the next chars are ", " followed
+            # by a capitalized word. The full token then becomes
+            # "First Last" (which Phonebook._split_compound_token will
+            # treat as a two-token form). Required because the GAL
+            # display form Outlook produces is "Last, First" — we
+            # support both orderings symmetrically.
+            tail = _GAL_TAIL_RE.match(line, end)
+            if tail:
+                # Keep the comma so _split_compound_token recognises
+                # this as GAL form (surname=First, given=Second word),
+                # which is what Outlook emits for "Last, First".
+                user = f"{user}, {tail.group('sur')}"
+                end = tail.end()
             raw = line[start:end]
             out.append(Token(kind="attr", name="owner", value=user, raw=raw, col=start))
             i = end
