@@ -36,6 +36,7 @@ export interface TasksResponse {
   tasks: Task[];
   aggregations: {
     owners: string[];
+    owner_displays: Record<string, string>;
     projects: string[];
     features: string[];
     status_breakdown: Record<string, number>;
@@ -252,6 +253,8 @@ export const api = {
     }),
 
   users: () => req<string[]>("/users"),
+  usersWithDisplay: () =>
+    req<{ name: string; display: string }[]>("/users?with_display=1"),
   me: () => req<{ name: string; is_admin: boolean; tz?: string }>("/me"),
   changeMyPassword: (current_password: string, new_password: string) =>
     req<{ status: string }>("/me/password", {

@@ -324,6 +324,183 @@ def test_rank_by_distance_no_anchor(org_tree):
     assert phonebook_intel.rank_by_distance(candidates, None) == [(candidates[0], None)]
 
 
+def test_seniority_score_formula():
+    s = phonebook_intel.seniority_score
+    # Direct reportee — best (negative).
+    assert s(0, 1) == 1 - 1*3  # raw=1, sd=-1 → -2
+    # Same-level peer — neutral.
+    assert s(1, 1) == 2  # raw=2, sd=0 → 2
+    # Direct manager — penalized.
+    assert s(1, 0) == 1 + 1*3  # 4
+    # Senior leader 5 up — heavily penalized.
+    assert s(5, 0) == 5 + 5*3  # 20
+    # Tunable penalty.
+    assert s(3, 4, penalty=5) == 7 + (-1)*5  # 2
+
+
+def test_org_distance_weighted_returns_up_down_split(org_tree):
+    # 2110 → 2111: up=1 (climb to 2100 LCA), down=1.
+    assert phonebook_intel.org_distance_weighted("2110", "2111") == (1, 1, 2)
+    # 2110 → 2100: candidate IS the LCA, up=1, down=0.
+    assert phonebook_intel.org_distance_weighted("2110", "2100") == (1, 0, 1)
+    # Same person: (0,0,0).
+    assert phonebook_intel.org_distance_weighted("2110", "2110") == (0, 0, 0)
+    # Cross-org: 2110 → 3110, LCA=1000. up=3, down=3.
+    assert phonebook_intel.org_distance_weighted("2110", "3110") == (3, 3, 6)
+
+
+def test_rank_by_distance_full_prefers_peer_over_senior_at_same_raw():
+    """Synthetic: anchor at 2110. Candidate A = own manager (2100, up=1,down=0).
+    Candidate B = peer (2111, up=1,down=1). Both have raw <=2 but the peer
+    should rank ahead of the manager under the seniority-weighted score."""
+    phonebook_intel.detail_cache_clear()
+    phonebook_intel.detail_cache_seed(ORG.items())
+    cands = [
+        phonebook_intel.IntelPhonebookHit(
+            display="Manager", email="m@i.com", idsid="mgr", wwid="2100",
+        ),
+        phonebook_intel.IntelPhonebookHit(
+            display="Peer", email="p@i.com", idsid="peer", wwid="2111",
+        ),
+    ]
+    rows = phonebook_intel.rank_by_distance_full(cands, "2110")
+    # Peer score=2, Manager score=4 — Peer wins.
+    assert [r[0].idsid for r in rows] == ["peer", "mgr"]
+    assert [(r[1], r[2], r[3], r[4]) for r in rows] == [(1, 1, 2, 2), (1, 0, 1, 4)]
+    phonebook_intel.detail_cache_clear()
+
+
+def test_rank_by_distance_full_prefers_reportee_over_peer():
+    """A reportee (sd=-1) beats a same-level peer (sd=0) even at higher raw."""
+    org = dict(ORG)
+    org["2112"] = {"wwid": "2112", "mgr_wwid": "2110", "email": "report@intel.com"}
+    phonebook_intel.detail_cache_clear()
+    phonebook_intel.detail_cache_seed(org.items())
+    cands = [
+        phonebook_intel.IntelPhonebookHit(
+            display="Peer", email="p@i.com", idsid="peer", wwid="2111",
+        ),
+        phonebook_intel.IntelPhonebookHit(
+            display="Reportee", email="r@i.com", idsid="report", wwid="2112",
+        ),
+    ]
+    rows = phonebook_intel.rank_by_distance_full(cands, "2110")
+    # Reportee: up=0, down=1, raw=1, score = 1 + (-1)*3 = -2
+    # Peer:     up=1, down=1, raw=2, score = 2
+    assert [r[0].idsid for r in rows] == ["report", "peer"]
+    assert rows[0][4] == -2
+    assert rows[1][4] == 2
+    phonebook_intel.detail_cache_clear()
+
+
+def test_rank_by_distance_full_breaks_score_ties_alphabetically(org_tree):
+    """Two candidates with identical (score, raw) — break by display name."""
+    cands = [
+        phonebook_intel.IntelPhonebookHit(
+            display="Zara", email="z@i.com", idsid="z", wwid="2111",
+        ),
+        phonebook_intel.IntelPhonebookHit(
+            display="Aaron", email="a@i.com", idsid="a", wwid="2111",
+        ),
+    ]
+    rows = phonebook_intel.rank_by_distance_full(cands, "2110")
+    # Same WWID → identical score; tiebreak is name lowercased.
+    assert [r[0].display for r in rows] == ["Aaron", "Zara"]
+
+
+def test_chain_passes_through_basic(org_tree):
+    # 2110's chain: [2110, 2100, 2000, 1000]. So 2100 is on the chain.
+    assert phonebook_intel.chain_passes_through("2110", ["2100"]) is True
+    assert phonebook_intel.chain_passes_through("2110", ["1000"]) is True
+    # Self counts.
+    assert phonebook_intel.chain_passes_through("2110", ["2110"]) is True
+    # Sibling subtree does not.
+    assert phonebook_intel.chain_passes_through("2110", ["2200"]) is False
+    # Empty / unknown.
+    assert phonebook_intel.chain_passes_through("", ["2100"]) is False
+    assert phonebook_intel.chain_passes_through("2110", []) is False
+    assert phonebook_intel.chain_passes_through("2110", [None, ""]) is False  # type: ignore[list-item]
+
+
+def test_rank_by_distance_full_subtree_bias_breaks_ties(org_tree):
+    """Two candidates tie on score (both peers, sd=0). Bias toward the
+    subtree of one of their managers should make that candidate win."""
+    cands = [
+        phonebook_intel.IntelPhonebookHit(
+            display="Peer", email="p@i.com", idsid="peer", wwid="2111",
+        ),
+        phonebook_intel.IntelPhonebookHit(
+            display="Cousin", email="c@i.com", idsid="cousin", wwid="2210",
+        ),
+    ]
+    # Without bias: 2111 (raw=2) wins over 2210 (raw=4) by score.
+    rows = phonebook_intel.rank_by_distance_full(cands, "2110")
+    assert [r[0].idsid for r in rows] == ["peer", "cousin"]
+    # With cousin's branch boosted, cousin still loses (-5 brings 4 -> -1
+    # vs peer's 2; cousin wins now).
+    rows = phonebook_intel.rank_by_distance_full(
+        cands, "2110",
+        subtree_bias_wwids=["2200"], subtree_bias_score=-5,
+    )
+    assert rows[0][0].idsid == "cousin"
+    assert rows[0][4] == 4 - 5  # raw=4, sd=0 -> score=4 then -5 = -1
+    # Self-WWID also counts as "in subtree".
+    rows = phonebook_intel.rank_by_distance_full(
+        cands, "2110",
+        subtree_bias_wwids=["2210"], subtree_bias_score=-5,
+    )
+    assert rows[0][0].idsid == "cousin"
+
+
+def test_rank_by_distance_full_subtree_bias_ignores_unknown(org_tree):
+    """Unknown / non-existent WWIDs in the bias list are silently ignored."""
+    cands = [phonebook_intel.IntelPhonebookHit(
+        display="Peer", email="p@i.com", idsid="peer", wwid="2111",
+    )]
+    rows = phonebook_intel.rank_by_distance_full(
+        cands, "2110",
+        subtree_bias_wwids=["9999", ""], subtree_bias_score=-5,
+    )
+    # No candidate touched 9999, so score is unchanged from the no-bias case.
+    assert rows[0][4] == 2  # raw=2, sd=0
+
+
+def test_rank_by_distance_full_subtree_bias_zero_score_noop(org_tree):
+    cands = [phonebook_intel.IntelPhonebookHit(
+        display="Peer", email="p@i.com", idsid="peer", wwid="2111",
+    )]
+    rows = phonebook_intel.rank_by_distance_full(
+        cands, "2110",
+        subtree_bias_wwids=["2100"], subtree_bias_score=0,
+    )
+    assert rows[0][4] == 2
+
+
+def test_rank_by_distance_full_no_anchor():
+    cands = [phonebook_intel.IntelPhonebookHit(
+        display="X", email="x@i.com", idsid="x", wwid="2110",
+    )]
+    rows = phonebook_intel.rank_by_distance_full(cands, None)
+    assert rows == [(cands[0], None, None, None, None)]
+
+
+def test_rank_by_distance_back_compat_returns_raw_distance(org_tree):
+    """The old rank_by_distance signature still works and returns raw distance
+    (not the score) — but ordering uses the new score under the hood."""
+    cands = [
+        phonebook_intel.IntelPhonebookHit(
+            display="Peer", email="p@i.com", idsid="peer", wwid="2111",
+        ),
+        phonebook_intel.IntelPhonebookHit(
+            display="Stranger", email="s@i.com", idsid="stranger", wwid="3110",
+        ),
+    ]
+    ranked = phonebook_intel.rank_by_distance(cands, "2110")
+    assert [r[0].idsid for r in ranked] == ["peer", "stranger"]
+    # Raw distance returned (not score) for back-compat.
+    assert [r[1] for r in ranked] == [2, 6]
+
+
 def test_resolver_picks_closest_when_anchor_set(monkeypatch, tmp_path, org_tree):
     """Phonebook.resolve(token, anchor=...) should auto-pick the
     org-tree-closest candidate when the scraper returns multiple hits."""
@@ -578,3 +755,248 @@ def test_resolver_populates_manager_email(monkeypatch, tmp_path):
     entry, _ = pb.resolve("@pavel")
     assert entry is not None
     assert entry.manager_email == "elad.yitav@intel.com"
+
+
+# ---------------------------------------------------------------------------
+# #226 — GAL "Last, First" and two-token "First Last" lookup support.
+# ---------------------------------------------------------------------------
+
+def test_filter_by_last_name_prefix_match():
+    hits = [
+        phonebook_intel.IntelPhonebookHit(
+            display="Niharika Chatla", email="niharika1.chatla@intel.com",
+            idsid="niharika1.chatla", wwid="11627027",
+            first_name="Niharika", last_name="Chatla",
+        ),
+        phonebook_intel.IntelPhonebookHit(
+            display="Niharika Sathish", email="niharika.sathish@intel.com",
+            idsid="niharika.sathish", wwid="12270606",
+            first_name="Niharika", last_name="Sathish",
+        ),
+    ]
+    out = phonebook_intel.filter_by_last_name(hits, "chat")
+    assert [h.idsid for h in out] == ["niharika1.chatla"]
+
+
+def test_filter_by_last_name_empty_surname_noop():
+    hits = [
+        phonebook_intel.IntelPhonebookHit(
+            display="X Y", email="x@i.com", idsid="x", wwid="1",
+            first_name="X", last_name="Y",
+        ),
+    ]
+    assert phonebook_intel.filter_by_last_name(hits, "") == hits
+    assert phonebook_intel.filter_by_last_name(hits, "   ") == hits
+
+
+def test_filter_by_last_name_keeps_blank_lastname_rows():
+    """Fallback rows that had no comma in BookName carry last_name=""
+    and must not be filtered out — we'd be over-filtering rare formats."""
+    hits = [
+        phonebook_intel.IntelPhonebookHit(
+            display="Solo", email="s@i.com", idsid="s", wwid="1",
+            first_name="Solo", last_name="",
+        ),
+    ]
+    assert phonebook_intel.filter_by_last_name(hits, "anything") == hits
+
+
+def test_parse_html_captures_last_name(monkeypatch):
+    body = (
+        '<pre>\n'
+        '-<input type="checkbox" name="cookie" value="11627027">'
+        '<a href="phonebook?e=&k=11627027">Chatla, Niharika</a>'
+        '<a href="mailto:niharika1.chatla@intel.com">x</a>\n'
+        '</pre>'
+    )
+    hits = phonebook_intel._parse_html(body)
+    assert len(hits) == 1
+    assert hits[0].first_name == "Niharika"
+    assert hits[0].last_name == "Chatla"
+    assert hits[0].display == "Niharika Chatla"
+
+
+# ---------------------------------------------------------------------------
+# Compound-token routing through Phonebook.resolve (#226).
+# ---------------------------------------------------------------------------
+
+CHATLA_HTML = (
+    '<pre>\n'
+    '-<input type="checkbox" name="cookie" value="11627027">'
+    '<a href="phonebook?e=&k=11627027">Chatla, Niharika</a>'
+    '<a href="mailto:niharika1.chatla@intel.com">x</a>\n'
+    '-<input type="checkbox" name="cookie" value="12270606">'
+    '<a href="phonebook?e=&k=12270606">Sathish, Niharika</a>'
+    '<a href="mailto:niharika.sathish@intel.com">x</a>\n'
+    '-<input type="checkbox" name="cookie" value="11576058">'
+    '<a href="phonebook?e=&k=11576058">Arlagadda Narasimharaju, Niharika</a>'
+    '<a href="mailto:niharika.arlagadda@intel.com">x</a>\n'
+    '</pre>'
+)
+
+
+def test_split_compound_token_variants():
+    from app.phonebook import Phonebook
+    sct = Phonebook._split_compound_token
+    assert sct("Niharika") == ("Niharika", None)
+    assert sct("Chatla, Niharika") == ("Niharika", "Chatla")
+    assert sct("Chatla, Niharika S") == ("Niharika", "Chatla")
+    assert sct("Niharika Chatla") == ("Niharika", "Chatla")
+    # 3+ tokens with no comma: don't guess — single-name path.
+    assert sct("Niharika Sanjay Kamath") == ("Niharika Sanjay Kamath", None)
+    assert sct("") == ("", None)
+    # Only a comma with empty side → fall back to whole token.
+    assert sct(", Niharika") == (", Niharika", None)
+    assert sct("Chatla,") == ("Chatla,", None)
+
+
+def test_resolve_gal_form_picks_chatla(monkeypatch, tmp_path):
+    from app.phonebook import Phonebook
+    monkeypatch.setattr(settings, "phonebook_scraper_enabled", True, raising=False)
+    pb_file = tmp_path / "pb.json"
+    pb_file.write_text("{}")
+    pb = Phonebook(path=pb_file)
+    # Always return the same body — the surname filter must narrow to
+    # Niharika Chatla even though the scraper offered three Niharikas.
+    monkeypatch.setattr(phonebook_intel, "_fetch", lambda u, t: CHATLA_HTML)
+    phonebook_intel.cache_clear()
+    phonebook_intel.detail_cache_clear()
+    entry, candidates = pb.resolve("@Chatla, Niharika")
+    assert entry is not None, candidates
+    assert entry.idsid == "niharika1.chatla"
+
+
+def test_resolve_two_token_form_picks_chatla(monkeypatch, tmp_path):
+    from app.phonebook import Phonebook
+    monkeypatch.setattr(settings, "phonebook_scraper_enabled", True, raising=False)
+    pb_file = tmp_path / "pb.json"
+    pb_file.write_text("{}")
+    pb = Phonebook(path=pb_file)
+    monkeypatch.setattr(phonebook_intel, "_fetch", lambda u, t: CHATLA_HTML)
+    phonebook_intel.cache_clear()
+    phonebook_intel.detail_cache_clear()
+    entry, candidates = pb.resolve("@Niharika Chatla")
+    assert entry is not None, candidates
+    assert entry.idsid == "niharika1.chatla"
+
+
+def test_resolve_single_token_path_unchanged(monkeypatch, tmp_path):
+    """Single-token @Niharika still returns ambiguous (3 candidates) —
+    proving the surname filter only triggers on compound forms."""
+    from app.phonebook import Phonebook
+    monkeypatch.setattr(settings, "phonebook_scraper_enabled", True, raising=False)
+    pb_file = tmp_path / "pb.json"
+    pb_file.write_text("{}")
+    pb = Phonebook(path=pb_file)
+    monkeypatch.setattr(phonebook_intel, "_fetch", lambda u, t: CHATLA_HTML)
+    phonebook_intel.cache_clear()
+    phonebook_intel.detail_cache_clear()
+    entry, candidates = pb.resolve("@Niharika")
+    # Without an anchor, three candidates → ambiguous.
+    assert entry is None
+    assert len(candidates) == 3
+
+
+def test_resolve_compound_form_uses_given_for_scraper_query(monkeypatch, tmp_path):
+    """The surname is used only as a *filter*; the scraper query must
+    be the given name (otherwise GAL form would never match anything,
+    since the BookName starts with the surname)."""
+    from app.phonebook import Phonebook
+    monkeypatch.setattr(settings, "phonebook_scraper_enabled", True, raising=False)
+    pb_file = tmp_path / "pb.json"
+    pb_file.write_text("{}")
+    pb = Phonebook(path=pb_file)
+    captured: list[str] = []
+    def _fake_fetch(url, timeout):
+        captured.append(url)
+        return CHATLA_HTML
+    monkeypatch.setattr(phonebook_intel, "_fetch", _fake_fetch)
+    phonebook_intel.cache_clear()
+    phonebook_intel.detail_cache_clear()
+    pb.resolve("@Chatla, Niharika")
+    assert any("e=Niharika" in u for u in captured), captured
+    assert not any("Chatla%2C" in u or "Chatla," in u for u in captured), captured
+
+
+# ---------------------------------------------------------------------------
+# #226 — Outlook GAL digit-suffix tolerance ("Niharika1" → "Niharika").
+# ---------------------------------------------------------------------------
+
+def test_split_compound_token_strips_outlook_digit_suffix():
+    from app.phonebook import Phonebook
+    sct = Phonebook._split_compound_token
+    # GAL form with disambiguation digit on the given name.
+    assert sct("Chatla, Niharika1") == ("Niharika", "Chatla")
+    # Two-token form likewise.
+    assert sct("Niharika1 Chatla") == ("Niharika", "Chatla")
+    # Single token: digits NOT stripped (legacy idsids may end in digits).
+    assert sct("user1") == ("user1", None)
+
+
+def test_resolve_strips_digit_suffix_for_gal_form(monkeypatch, tmp_path):
+    from app.phonebook import Phonebook
+    monkeypatch.setattr(settings, "phonebook_scraper_enabled", True, raising=False)
+    pb_file = tmp_path / "pb.json"
+    pb_file.write_text("{}")
+    pb = Phonebook(path=pb_file)
+    captured: list[str] = []
+    def _fake_fetch(url, timeout):
+        captured.append(url)
+        return CHATLA_HTML
+    monkeypatch.setattr(phonebook_intel, "_fetch", _fake_fetch)
+    phonebook_intel.cache_clear()
+    phonebook_intel.detail_cache_clear()
+    entry, _ = pb.resolve("@Chatla, Niharika1")
+    assert entry is not None
+    assert entry.idsid == "niharika1.chatla"
+    # Scraper queried with "Niharika" (digit stripped), not "Niharika1".
+    assert any("e=Niharika&" in u or "e=Niharika" in u.split("&", 1)[0]
+               for u in captured), captured
+
+
+# ---------- NIS / Linux idsid resolution ------------------------------------
+
+def test_linux_idsid_for_wwid_reads_ypcat(monkeypatch):
+    """Parses the NIS passwd map and returns wwid->login mapping."""
+    from app import phonebook_intel as pi
+    pi.reset_nis_cache_for_test()
+    monkeypatch.delenv("VEGANOTES_NIS_DISABLED", raising=False)
+    fake_stdout = (
+        "sbhattad:VAS:11894199:20927:sachin.bhattad,11894199:/h:/s\n"
+        "nsaddaga:VAS:11342477:20927:prasad.addagarla,11342477:/h:/s\n"
+        "broken:VAS:99:1:no_wwid_field:/h:/s\n"
+        "tooshort:VAS\n"
+    )
+    class FakeProc:
+        stdout = fake_stdout
+    monkeypatch.setattr(pi.subprocess, "run",
+                        lambda *a, **k: FakeProc())
+    assert pi.linux_idsid_for_wwid("11894199") == "sbhattad"
+    assert pi.linux_idsid_for_wwid("11342477") == "nsaddaga"
+    assert pi.linux_idsid_for_wwid("99999999") == ""  # unknown wwid
+    assert pi.linux_idsid_for_wwid("") == ""
+    pi.reset_nis_cache_for_test()
+
+
+def test_linux_idsid_disabled_returns_empty(monkeypatch):
+    """VEGANOTES_NIS_DISABLED=1 skips the ypcat call entirely."""
+    from app import phonebook_intel as pi
+    pi.reset_nis_cache_for_test()
+    monkeypatch.setenv("VEGANOTES_NIS_DISABLED", "1")
+    def boom(*a, **k):
+        raise AssertionError("ypcat should not be called when NIS disabled")
+    monkeypatch.setattr(pi.subprocess, "run", boom)
+    assert pi.linux_idsid_for_wwid("11894199") == ""
+    pi.reset_nis_cache_for_test()
+
+
+def test_linux_idsid_missing_ypcat_returns_empty(monkeypatch):
+    """Container without ypcat → graceful empty map, not a crash."""
+    from app import phonebook_intel as pi
+    pi.reset_nis_cache_for_test()
+    monkeypatch.delenv("VEGANOTES_NIS_DISABLED", raising=False)
+    def fnf(*a, **k):
+        raise FileNotFoundError("ypcat")
+    monkeypatch.setattr(pi.subprocess, "run", fnf)
+    assert pi.linux_idsid_for_wwid("11894199") == ""
+    pi.reset_nis_cache_for_test()

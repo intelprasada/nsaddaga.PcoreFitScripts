@@ -6,7 +6,7 @@ import { SavedViews } from "./SavedViews";
 
 export function FilterBar() {
   const { filters, patchFilters, clearFilters } = useUI();
-  const { data: users } = useQuery({ queryKey: ["users"], queryFn: api.users });
+  const { data: users } = useQuery({ queryKey: ["users", "withDisplay"], queryFn: api.usersWithDisplay });
   const { data: projects } = useQuery({ queryKey: ["projects"], queryFn: api.projects });
   const { data: features } = useQuery({ queryKey: ["features"], queryFn: api.features });
 
@@ -15,7 +15,11 @@ export function FilterBar() {
       <select className="rounded border px-2 py-1 text-sm" value={filters.owner ?? ""}
         onChange={(e) => patchFilters({ owner: e.target.value || undefined })}>
         <option value="">all owners</option>
-        {users?.map((u) => <option key={u} value={u}>@{u}</option>)}
+        {users?.map((u) => (
+          <option key={u.name} value={u.name} title={`@${u.name}`}>
+            {u.display !== u.name ? u.display : `@${u.name}`}
+          </option>
+        ))}
       </select>
       <select className="rounded border px-2 py-1 text-sm" value={filters.project ?? ""}
         onChange={(e) => patchFilters({ project: e.target.value || undefined })}>

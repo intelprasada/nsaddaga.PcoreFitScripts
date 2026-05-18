@@ -3,6 +3,189 @@
     "idsid": "nsaddaga",
     "display": "Prasad Addagarla",
     "email": "prasad.addagarla@intel.com",
-    "aliases": ["prasad", "addagarla", "prasad addagarla", "p addagarla", "admin"]
+    "aliases": [
+      "prasad",
+      "addagarla",
+      "prasad addagarla",
+      "p addagarla",
+      "admin"
+    ],
+    "prefer_subtrees": [
+      "eyitav"
+    ]
+  },
+  "nchatla": {
+    "idsid": "nchatla",
+    "display": "Niharika Chatla",
+    "email": "niharika1.chatla@intel.com",
+    "aliases": [
+      "chatla",
+      "chatla niharika",
+      "chatla, niharika",
+      "chatla, niharika1",
+      "niharika",
+      "niharika chatla",
+      "niharika1",
+      "niharika1.chatla"
+    ]
+  },
+  "yongxili": {
+    "idsid": "yongxili",
+    "display": "Yongxi Li",
+    "email": "yongxi.li@intel.com",
+    "aliases": [
+      "li",
+      "li yongxi",
+      "li, yongxi",
+      "yongxi",
+      "yongxi li",
+      "yongxi.li"
+    ]
+  },
+  "alonhers": {
+    "idsid": "alonhers",
+    "display": "Alon Hershkovitz",
+    "email": "alon.hershkovitz@intel.com",
+    "aliases": [
+      "alon",
+      "alon hershkovitz",
+      "alon.hershkovitz",
+      "hershkovitz",
+      "hershkovitz alon",
+      "hershkovitz, alon"
+    ]
+  },
+  "ehezi": {
+    "idsid": "ehezi",
+    "display": "Elad Hezi",
+    "email": "elad.hezi@intel.com",
+    "aliases": [
+      "elad",
+      "elad hezi",
+      "elad.hezi",
+      "hezi",
+      "hezi elad",
+      "hezi, elad"
+    ]
+  },
+  "ylaizer": {
+    "idsid": "ylaizer",
+    "display": "Yakir Laizer",
+    "email": "yakir.laizer@intel.com",
+    "aliases": [
+      "laizer",
+      "laizer yakir",
+      "laizer, yakir",
+      "yakir",
+      "yakir laizer",
+      "yakir.laizer"
+    ]
+  },
+  "ayastein": {
+    "idsid": "ayastein",
+    "display": "Aya Steiner",
+    "email": "aya.steiner@intel.com",
+    "aliases": [
+      "aya",
+      "aya steiner",
+      "aya.steiner",
+      "steiner",
+      "steiner aya",
+      "steiner, aya"
+    ]
+  },
+  "dyehya": {
+    "idsid": "dyehya",
+    "display": "Dalal Yehya",
+    "email": "dalal.yehya@intel.com",
+    "aliases": [
+      "dalal",
+      "dalal yehya",
+      "dalal.yehya",
+      "yehya",
+      "yehya dalal",
+      "yehya, dalal"
+    ]
+  },
+  "efmendez": {
+    "idsid": "efmendez",
+    "display": "Edwin F Mendez Valverde",
+    "email": "edwin.f.mendez.valverde@intel.com",
+    "aliases": [
+      "edwin",
+      "edwin.f.mendez.valverde"
+    ]
+  },
+  "gajith": {
+    "idsid": "gajith",
+    "display": "Gautham Ajith",
+    "email": "gautham.ajith@intel.com",
+    "aliases": [
+      "gautham",
+      "gautham.ajith"
+    ]
+  },
+  "khbyers": {
+    "idsid": "khbyers",
+    "display": "Kelsey H Byers",
+    "email": "kelsey.byers@intel.com",
+    "aliases": [
+      "kelsey",
+      "kelsey.byers"
+    ]
+  },
+  "mkasongo": {
+    "idsid": "mkasongo",
+    "display": "Muana Kasongo",
+    "email": "muana.kasongo@intel.com",
+    "aliases": [
+      "muana",
+      "muana.kasongo"
+    ]
+  },
+  "njammala": {
+    "idsid": "njammala",
+    "display": "Namratha Jammalamadugu",
+    "email": "namratha.jammalamadugu@intel.com",
+    "aliases": [
+      "namratha",
+      "namratha.jammalamadugu"
+    ]
+  },
+  "rnagarat": {
+    "idsid": "rnagarat",
+    "display": "Ragavi Nagarathinam",
+    "email": "ragavi.nagarathinam@intel.com",
+    "aliases": [
+      "ragavi",
+      "ragavi.nagarathinam"
+    ]
+  },
+  "sbhattad": {
+    "idsid": "sbhattad",
+    "display": "Sachin Bhattad",
+    "email": "sachin.bhattad@intel.com",
+    "aliases": [
+      "sachin",
+      "sachin.bhattad"
+    ]
+  },
+  "abolisaw": {
+    "idsid": "abolisaw",
+    "display": "Aboli Sawant",
+    "email": "aboli.sawant@intel.com",
+    "aliases": [
+      "aboli",
+      "aboli.sawant"
+    ]
+  },
+  "ashar10": {
+    "idsid": "ashar10",
+    "display": "Atul Sharma",
+    "email": "atul.z.sharma@intel.com",
+    "aliases": [
+      "atul",
+      "atul.z.sharma"
+    ]
   }
 }

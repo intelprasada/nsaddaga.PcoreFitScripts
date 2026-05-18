@@ -251,6 +251,17 @@ export function OwnersChips({ task, canWrite }: { task: Task; canWrite: boolean 
   const [newOwner, setNewOwner] = useState("");
   const { mutate, isPending }  = useTaskPatch(task.id);
   const { data: knownUsers = [] } = useQuery({ queryKey: ["users"], queryFn: () => api.users() });
+  // #226 follow-up: pull display names so chips render "Prasad Addagarla"
+  // instead of bare idsids. Falls back to the raw value when no
+  // phonebook entry matches.
+  const { data: knownUsersRich = [] } = useQuery({
+    queryKey: ["users", "withDisplay"],
+    queryFn: () => api.usersWithDisplay(),
+  });
+  const displayFor = (name: string): string => {
+    const hit = knownUsersRich.find((u) => u.name === name);
+    return hit && hit.display && hit.display !== name ? hit.display : name;
+  };
 
   useEffect(() => { setOwners(task.owners); }, [task.owners]);
 
@@ -274,8 +285,8 @@ export function OwnersChips({ task, canWrite }: { task: Task; canWrite: boolean 
   return (
     <>
       {owners.map((o) => (
-        <span key={o} className="chip chip-owner group/owner">
-          @{o}
+        <span key={o} className="chip chip-owner group/owner" title={`@${o}`}>
+          {displayFor(o) !== o ? displayFor(o) : `@${o}`}
           {canWrite && (
             <button
               onClick={(e) => remove(o, e)}
