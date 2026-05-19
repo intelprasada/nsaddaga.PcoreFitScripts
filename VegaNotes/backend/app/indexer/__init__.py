@@ -94,9 +94,18 @@ def _upsert_task_attrs(session: Session, tid: int, pt: dict, folder_project: str
                     norm_str = canonical.lower()
             session.add(TaskAttr(task_id=tid, key=key, value=vstr, value_norm=norm_str))
 
+    # Dedupe owners by canonical idsid so multiple aliases of the same
+    # person (e.g. "@Gautham" + "@gajith" both → "gajith") collapse to a
+    # single TaskOwner edge — otherwise the UNIQUE(task_id, user_id)
+    # constraint trips and the whole insert (e.g. POST /tasks/{ref}/ars)
+    # fails with a 500.
+    seen_uids: set[int] = set()
     for name in (pt["attrs"].get("owner", []) if isinstance(pt["attrs"].get("owner"), list) else []):
         canonical, _status = canonical_idsid(name)
         user = _get_or_create(session, User, name=canonical or name)
+        if user.id in seen_uids:
+            continue
+        seen_uids.add(user.id)
         session.add(TaskOwner(task_id=tid, user_id=user.id))
     for name in (pt["attrs"].get("project", []) if isinstance(pt["attrs"].get("project"), list) else []):
         proj = _get_or_create(session, Project, name=name)
@@ -271,10 +280,14 @@ def apply_single_task_patch_to_index(
             text("DELETE FROM taskattr WHERE task_id = :tid AND key = 'owner'")
             .bindparams(tid=task_id)
         )
+        seen_uids: set[int] = set()
         for name in cleaned:
             canonical, _status = canonical_idsid(name)
             uname = canonical or name
             user = _get_or_create(session, User, name=uname)
+            if user.id in seen_uids:
+                continue
+            seen_uids.add(user.id)
             session.add(TaskOwner(task_id=task_id, user_id=user.id))
             session.add(TaskAttr(
                 task_id=task_id, key="owner", value=uname, value_norm=uname.lower(),
