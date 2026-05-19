@@ -1385,3 +1385,56 @@ def test_password_policy_rejects_short_on_self_change(client):
         headers={"Authorization": user_auth},
     )
     assert r.status_code == 400, r.text
+
+
+# ---------------------------------------------------------------------------
+# #237 — GET /api/tasks must honour repeated query keys for list filters.
+# Regression: previously params like `?not_owner=A&not_owner=B` were typed
+# as `Optional[str]` so FastAPI silently kept only the last value, defeating
+# the multi-value exclusion.
+# ---------------------------------------------------------------------------
+
+def test_list_tasks_accepts_repeated_query_keys_for_filters(client):
+    """Repeated `owner=` keys should be intersected (OR-of-tokens),
+    not silently coalesced to the last value."""
+    md = (
+        "# proj\n"
+        "## Repeated query filter\n"
+        "- !task Alpha @alice #id=T-RQK001\n"
+        "- !task Beta  @bob   #id=T-RQK002\n"
+        "- !task Gamma @carol #id=T-RQK003\n"
+    )
+    r = client.put(
+        "/api/notes",
+        json={"path": "rqk.md", "body_md": md},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+
+    # Repeated keys: should match alice OR bob (both), not just bob.
+    r = client.get(
+        "/api/tasks?owner=alice&owner=bob",
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200
+    titles = sorted(t["title"] for t in r.json()["tasks"]
+                    if t["title"] in {"Alpha", "Beta", "Gamma"})
+    assert titles == ["Alpha", "Beta"], titles
+
+    # Equivalent comma-form still works (back-compat).
+    r = client.get(
+        "/api/tasks?owner=alice,bob",
+        headers={"Authorization": AUTH},
+    )
+    titles = sorted(t["title"] for t in r.json()["tasks"]
+                    if t["title"] in {"Alpha", "Beta", "Gamma"})
+    assert titles == ["Alpha", "Beta"], titles
+
+    # Negations: ?not_owner=alice&not_owner=bob must drop both.
+    r = client.get(
+        "/api/tasks?not_owner=alice&not_owner=bob",
+        headers={"Authorization": AUTH},
+    )
+    titles = sorted(t["title"] for t in r.json()["tasks"]
+                    if t["title"] in {"Alpha", "Beta", "Gamma"})
+    assert titles == ["Gamma"], titles

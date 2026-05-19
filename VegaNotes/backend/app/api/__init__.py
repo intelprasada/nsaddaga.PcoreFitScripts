@@ -343,6 +343,29 @@ def _split(csv: Optional[str]) -> list[str]:
     return [x.strip() for x in csv.split(",")] if csv else []
 
 
+def _collect_filter(values: list[str] | None) -> list[str]:
+    """Flatten a query-string filter into a token list.
+
+    Supports both repeated query keys (``?owner=a&owner=b``) and the
+    legacy comma-separated form (``?owner=a,b``) interchangeably. Empty
+    tokens are dropped. Order is preserved.
+
+    Background: ``list[str] = Query(default_factory=list)`` binds repeated
+    keys correctly, but the comma-CSV form arrives as ``['a,b']`` — a
+    single element. This helper splits each element on commas so callers
+    don't have to care which form the caller used. See #237.
+    """
+    out: list[str] = []
+    for v in values or []:
+        if not v:
+            continue
+        for tok in v.split(","):
+            tok = tok.strip()
+            if tok:
+                out.append(tok)
+    return out
+
+
 import re as _re
 _UUID_RE = _re.compile(r"^T-[0-9A-Z]{6,}$")
 
@@ -1058,24 +1081,28 @@ def _parse_attr_clause(raw: str) -> tuple[str, str, str]:
 def list_tasks(
     s: Session = Depends(get_session),
     user: str = Depends(require_user),
-    owner: Optional[str] = None,
-    project: Optional[str] = None,
-    feature: Optional[str] = None,
-    priority: Optional[str] = None,
-    status: Optional[str] = None,
+    # #237: accept either repeated query keys (?owner=a&owner=b) OR
+    # comma-separated values (?owner=a,b). list[str] binds the repeated
+    # form; _collect_filter then splits any embedded commas so both
+    # forms are equivalent.
+    owner: list[str] = Query(default_factory=list),
+    project: list[str] = Query(default_factory=list),
+    feature: list[str] = Query(default_factory=list),
+    priority: list[str] = Query(default_factory=list),
+    status: list[str] = Query(default_factory=list),
     eta_before: Optional[date] = None,
     eta_after: Optional[date] = None,
     hide_done: bool = False,
     q: Optional[str] = None,
-    kind: Optional[str] = None,
+    kind: list[str] = Query(default_factory=list),
     top_level_only: bool = False,
     include_children: bool = False,
     # ── new (issue #38 follow-up) ─────────────────────────────────────
-    not_owner: Optional[str] = None,
-    not_project: Optional[str] = None,
-    not_feature: Optional[str] = None,
-    not_status: Optional[str] = None,
-    not_priority: Optional[str] = None,
+    not_owner: list[str] = Query(default_factory=list),
+    not_project: list[str] = Query(default_factory=list),
+    not_feature: list[str] = Query(default_factory=list),
+    not_status: list[str] = Query(default_factory=list),
+    not_priority: list[str] = Query(default_factory=list),
     attr: list[str] = Query(default_factory=list),
     sort: Optional[str] = None,
     limit: Optional[int] = Query(default=None, ge=1, le=2000),
@@ -1101,9 +1128,9 @@ def list_tasks(
         params[f"{alias}_names"] = tuple(names)
         expanding.append(f"{alias}_names")
 
-    _join_multi("taskowner", "user", _canon_owner_filter(_split(owner)), "u")
-    _join_multi("taskproject", "project", _split(project), "p")
-    _join_multi("taskfeature", "feature", _split(feature), "f")
+    _join_multi("taskowner", "user", _canon_owner_filter(_collect_filter(owner)), "u")
+    _join_multi("taskproject", "project", _collect_filter(project), "p")
+    _join_multi("taskfeature", "feature", _collect_filter(feature), "f")
 
     where = ["1=1"]
     # #230: visibility WHERE clause (no-op for admins).
@@ -1112,15 +1139,15 @@ def list_tasks(
     )
     if _vis_clause is not None:
         where.append(_vis_clause)
-    if hide_done or status == "!done":
+    statuses = _collect_filter(status)
+    if hide_done or "!done" in statuses:
         where.append("t.status != 'done'")
-    elif status:
-        statuses = _split(status)
+    elif statuses:
         where.append("t.status IN :statuses")
         params["statuses"] = tuple(statuses)
         expanding.append("statuses")
-    if priority:
-        prios = _split(priority)
+    prios = _collect_filter(priority)
+    if prios:
         sql.append("JOIN taskattr pa ON pa.task_id = t.id AND pa.key='priority'")
         where.append("pa.value IN :prios")
         params["prios"] = tuple(prios)
@@ -1136,8 +1163,8 @@ def list_tasks(
     if q:
         where.append("t.title LIKE :q")
         params["q"] = f"%{q}%"
-    if kind:
-        kinds = _split(kind)
+    kinds = _collect_filter(kind)
+    if kinds:
         where.append("t.kind IN :kinds")
         params["kinds"] = tuple(kinds)
         expanding.append("kinds")
@@ -1158,20 +1185,22 @@ def list_tasks(
         params[slot] = tuple(names)
         expanding.append(slot)
 
-    _exclude("user",    "taskowner",   "user_id",    _canon_owner_filter(_split(not_owner)),   "not_u_names")
-    _exclude("project", "taskproject", "project_id", _split(not_project), "not_p_names")
-    _exclude("feature", "taskfeature", "feature_id", _split(not_feature), "not_f_names")
+    _exclude("user",    "taskowner",   "user_id",    _canon_owner_filter(_collect_filter(not_owner)),   "not_u_names")
+    _exclude("project", "taskproject", "project_id", _collect_filter(not_project), "not_p_names")
+    _exclude("feature", "taskfeature", "feature_id", _collect_filter(not_feature), "not_f_names")
 
-    if not_status:
+    not_statuses = _collect_filter(not_status)
+    if not_statuses:
         where.append("t.status NOT IN :not_statuses")
-        params["not_statuses"] = tuple(_split(not_status))
+        params["not_statuses"] = tuple(not_statuses)
         expanding.append("not_statuses")
-    if not_priority:
+    not_prios = _collect_filter(not_priority)
+    if not_prios:
         where.append(
             "t.id NOT IN ("
             "SELECT task_id FROM taskattr WHERE key='priority' AND value IN :not_prios)"
         )
-        params["not_prios"] = tuple(_split(not_priority))
+        params["not_prios"] = tuple(not_prios)
         expanding.append("not_prios")
 
     # ── arbitrary @attr filters ──────────────────────────────────────────
