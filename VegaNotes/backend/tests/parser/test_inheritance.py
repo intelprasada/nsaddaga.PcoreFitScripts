@@ -194,3 +194,48 @@ def test_at_quoted_form_two_token():
     md = '- !task Foo @"Niharika Chatla"\n'
     out = parse(md)
     assert out["tasks"][0]["attrs"]["owner"] == ["Niharika Chatla"]
+
+
+# ---------------------------------------------------------------------------
+# #233 — narrowed GAL heuristic must not eat prose words.
+# ---------------------------------------------------------------------------
+
+import pytest
+
+
+@pytest.mark.parametrize(
+    "md,expected_owner",
+    [
+        ("- !task t @alice, Thanks for the help\n", "alice"),
+        ("- !task t @bob, OK lets merge\n", "bob"),
+        ("- !task t @chris, I think this is fine\n", "chris"),
+        ("- !task t @dave, Monday works\n", "dave"),
+        ("- !task t @eve, PR is ready\n", "eve"),
+    ],
+)
+def test_gal_heuristic_no_longer_eats_prose(md, expected_owner):
+    out = parse(md)
+    assert out["tasks"], f"task not parsed for {md!r}"
+    task = out["tasks"][0]
+    assert task["attrs"]["owner"] == [expected_owner]
+
+
+def test_gal_heuristic_still_works_at_eol():
+    """The legitimate "@Last, First" form at end-of-line still extends."""
+    md = "- !task Foo @Addagarla, Prasad\n"
+    out = parse(md)
+    assert out["tasks"][0]["attrs"]["owner"] == ["Addagarla, Prasad"]
+
+
+def test_gal_heuristic_still_works_before_next_token():
+    """"@Last, First" followed by another #attr token still extends."""
+    md = "- !task Foo @Addagarla, Prasad #status todo\n"
+    out = parse(md)
+    assert out["tasks"][0]["attrs"]["owner"] == ["Addagarla, Prasad"]
+
+
+def test_gal_heuristic_still_works_before_next_owner():
+    """"@Last, First @other" — first owner extends, second is its own token."""
+    md = "- !task Foo @Last, First @bob\n"
+    out = parse(md)
+    assert out["tasks"][0]["attrs"]["owner"] == ["Last, First", "bob"]
