@@ -704,7 +704,21 @@ def _apply_ref_rows(session: Session, ref_rows: list[dict]) -> None:
                     if key == "owner":
                         canonical, _status = canonical_idsid(vstr)
                         vstr = canonical or vstr
-                    session.add(TaskAttr(task_id=tgt_id, key=key, value=vstr, value_norm=_norm_for(key, vstr)))
+                    # #234: dedupe against existing (task_id, key, value)
+                    # rows. Without this, reindexing the same ref-row file
+                    # appends another taskattr copy every time (watcher
+                    # event, save, reindex_all) — taskattr grows unbounded
+                    # for ref-row-overridden tasks while taskowner stays
+                    # correctly deduped.
+                    existing_attr = session.exec(
+                        select(TaskAttr).where(
+                            TaskAttr.task_id == tgt_id,
+                            TaskAttr.key == key,
+                            TaskAttr.value == vstr,
+                        )
+                    ).first()
+                    if existing_attr is None:
+                        session.add(TaskAttr(task_id=tgt_id, key=key, value=vstr, value_norm=_norm_for(key, vstr)))
                     # Also sync join tables so filter queries work correctly.
                     if key == "owner":
                         u = _get_or_create(session, User, name=vstr)

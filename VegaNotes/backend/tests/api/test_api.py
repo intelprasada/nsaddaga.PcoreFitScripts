@@ -572,6 +572,54 @@ def test_ref_row_attr_value_norm_matches_canonical(client):
     assert r.json()["priority_rank"] == canon_pri_rank
 
 
+def test_ref_row_reindex_is_idempotent_for_taskattr(client):
+    """Regression (#234): reindexing the same unchanged ref-row file
+    repeatedly must not duplicate taskattr rows. taskowner / taskfeature
+    were already deduped via select-first; the parallel taskattr write
+    was not, so it grew by N per reindex.
+    """
+    notes_dir = DATA / "notes"
+    notes_dir.mkdir(exist_ok=True)
+
+    # Canonical task and a ref-row file that adds two owners + a feature.
+    (notes_dir / "canon_dup.md").write_text(
+        "# Canon\n- !task root task #id T-DUP001 #status todo\n"
+    )
+    r = client.put("/api/notes",
+                   json={"path": "canon_dup.md",
+                         "body_md": (notes_dir / "canon_dup.md").read_text()},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200
+
+    weekly_md = (
+        "# Weekly\n"
+        "#task T-DUP001 @alice @bob #feature search-rewrite\n"
+    )
+    (notes_dir / "weekly_dup.md").write_text(weekly_md)
+    for _ in range(3):
+        r = client.put("/api/notes",
+                       json={"path": "weekly_dup.md", "body_md": weekly_md},
+                       headers={"Authorization": AUTH})
+        assert r.status_code == 200
+
+    from sqlmodel import Session, select
+    from app.db import get_engine
+    from app.models import Task, TaskAttr
+    with Session(get_engine()) as s:
+        t = s.exec(select(Task).where(Task.task_uuid == "T-DUP001")).first()
+        assert t is not None
+        attrs = s.exec(
+            select(TaskAttr).where(TaskAttr.task_id == t.id)
+        ).all()
+        from collections import Counter
+        counts = Counter((a.key, a.value) for a in attrs)
+        # After 3 reindexes of the same ref-row, each (key,value) must
+        # still appear exactly once.
+        assert counts[("owner", "alice")] == 1, dict(counts)
+        assert counts[("owner", "bob")] == 1, dict(counts)
+        assert counts[("feature", "search-rewrite")] == 1, dict(counts)
+
+
 def test_create_task_appends_to_project_note(client):
     """Issue #63 — POST /api/tasks creates a task in the most recently
     modified note of the given project, with the requester as default owner.
