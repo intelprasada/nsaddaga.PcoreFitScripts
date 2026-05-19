@@ -137,6 +137,22 @@ def _user_role_for_project(s: Session, user: str, project: Optional[str]) -> str
     return pm.role if pm else "none"
 
 
+def _require_root_admin(s: Session, user: str, action: str) -> None:
+    """Guard destructive ops on root-level notes (#231).
+
+    ``_user_role_for_project(s, user, None)`` returns ``"manager"`` for
+    everyone because root-level files are considered "open". That's
+    fine for reads, but lumps destructive writes (delete / overwrite /
+    rename) in with reads. Callers that mutate a root-level note must
+    additionally require admin.
+    """
+    u = s.exec(select(User).where(User.name == user)).first()
+    if u is None or not u.is_admin:
+        raise HTTPException(
+            403, f"admin role required to {action} root-level notes"
+        )
+
+
 def _require_project_access(
     s: Session, user: str, project: Optional[str], *, need_manager: bool = False
 ) -> str:
@@ -441,6 +457,10 @@ def upsert_note(
     role = _user_role_for_project(s, user, project)
     if role == "none" or (role == "member" and project is not None):
         raise HTTPException(403, "manager role required to write notes")
+    if project is None:
+        # #231: root-level writes are destructive (overwrite existing
+        # files, no project owner), so require admin.
+        _require_root_admin(s, user, "write")
     full = settings.notes_dir / body.path
     expected = body.if_match if body.if_match is not None else if_match
     pre_existing = full.exists()
@@ -501,6 +521,8 @@ def roll_note_next_week(
     role = _user_role_for_project(s, user, project)
     if role == "none" or (role == "member" and project is not None):
         raise HTTPException(403, "manager role required to create notes")
+    if project is None:
+        _require_root_admin(s, user, "roll")
     src_full = settings.notes_dir / src_rel
     if not src_full.exists():
         raise HTTPException(404, "source note not found")
@@ -549,6 +571,8 @@ def stamp_task_ids(
     role = _user_role_for_project(s, user, project)
     if role == "none" or (role == "member" and project is not None):
         raise HTTPException(403, "manager role required to modify notes")
+    if project is None:
+        _require_root_admin(s, user, "modify")
     full = settings.notes_dir / rel
     if not full.exists():
         raise HTTPException(404, "note not found")
@@ -573,7 +597,13 @@ def delete_note(
     n = s.get(Note, note_id)
     if not n:
         raise HTTPException(404, "note not found")
-    _require_project_access(s, user, _project_for_path(n.path), need_manager=True)
+    project = _project_for_path(n.path)
+    if project is None:
+        # #231: deleting a root-level note used to fall through the
+        # _user_role_for_project(None)=='manager' shortcut. Require admin.
+        _require_root_admin(s, user, "delete")
+    else:
+        _require_project_access(s, user, project, need_manager=True)
     full = settings.notes_dir / n.path
     rel = n.path
     if full.exists():

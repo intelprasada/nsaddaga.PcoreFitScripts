@@ -232,3 +232,66 @@ def test_card_links_403_for_non_member(client, world):
     r = client.get(f"/api/cards/{tid}/links",
                    headers={"Authorization": world["insider"]})
     assert r.status_code == 200
+
+
+# ---------- #231: destructive root-level ops require admin -----------------
+
+def test_delete_root_note_forbidden_for_non_admin(client, world):
+    # Author a root-level note as admin.
+    r = client.put(
+        "/api/notes",
+        json={"path": "rbac_doomed.md", "body_md": "# Doomed\n"},
+        headers={"Authorization": ADMIN},
+    )
+    assert r.status_code == 200, r.text
+    nid = r.json()["id"]
+
+    # Non-admin (member of some unrelated project) must NOT delete it.
+    r = client.delete(f"/api/notes/{nid}",
+                      headers={"Authorization": world["insider"]})
+    assert r.status_code == 403, r.text
+    assert "admin" in r.json()["detail"].lower()
+
+    # Admin still can.
+    r = client.delete(f"/api/notes/{nid}", headers={"Authorization": ADMIN})
+    assert r.status_code == 200, r.text
+
+
+def test_upsert_root_note_forbidden_for_non_admin(client, world):
+    r = client.put(
+        "/api/notes",
+        json={"path": "rbac_root_write.md", "body_md": "# nope\n"},
+        headers={"Authorization": world["insider"]},
+    )
+    assert r.status_code == 403, r.text
+
+
+def test_stamp_ids_root_note_forbidden_for_non_admin(client, world):
+    # Create a root note as admin first.
+    client.put(
+        "/api/notes",
+        json={"path": "rbac_stamp.md",
+              "body_md": "# Stamp\n- !task X #status todo\n"},
+        headers={"Authorization": ADMIN},
+    )
+    r = client.post(
+        "/api/notes/stamp-ids",
+        json={"path": "rbac_stamp.md"},
+        headers={"Authorization": world["insider"]},
+    )
+    assert r.status_code == 403, r.text
+
+
+def test_roll_next_week_root_note_forbidden_for_non_admin(client, world):
+    client.put(
+        "/api/notes",
+        json={"path": "ww20.md",
+              "body_md": "# WW20\n- !task X #status todo\n"},
+        headers={"Authorization": ADMIN},
+    )
+    r = client.post(
+        "/api/notes/next-week",
+        json={"path": "ww20.md"},
+        headers={"Authorization": world["insider"]},
+    )
+    assert r.status_code == 403, r.text
