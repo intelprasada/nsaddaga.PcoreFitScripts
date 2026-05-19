@@ -650,7 +650,25 @@ def _apply_ref_rows(session: Session, ref_rows: list[dict]) -> None:
     taskfeature) so that the owner= / feature= filters in list_tasks work
     correctly.  Previously only taskattr was updated, causing owner-filter
     mismatches for tasks whose ownership came from a ref-row.
+
+    ``value_norm`` is computed via ``REGISTRY[key].normalize`` so ref-row
+    overrides round-trip identically to canonical ``!task`` declarations
+    (#235). Without this, ETA windows and priority sort silently misbehave
+    on ref-row-overridden tasks because their ``value_norm`` is the raw
+    lowercased string instead of an ISO date / priority rank.
     """
+    from ..parser.tokens import REGISTRY  # lazy: avoid potential cycle
+
+    def _norm_for(key: str, vstr: str) -> str | None:
+        spec = REGISTRY.get(key)
+        if spec is None or spec.normalize is None:
+            return vstr.lower()
+        try:
+            norm = spec.normalize(vstr)
+        except Exception:
+            return None
+        return None if norm is None else str(norm)
+
     for rr in ref_rows:
         ref_id = rr.get("ref_id")
         overrides = rr.get("attrs") or {}
@@ -686,7 +704,7 @@ def _apply_ref_rows(session: Session, ref_rows: list[dict]) -> None:
                     if key == "owner":
                         canonical, _status = canonical_idsid(vstr)
                         vstr = canonical or vstr
-                    session.add(TaskAttr(task_id=tgt_id, key=key, value=vstr, value_norm=vstr.lower()))
+                    session.add(TaskAttr(task_id=tgt_id, key=key, value=vstr, value_norm=_norm_for(key, vstr)))
                     # Also sync join tables so filter queries work correctly.
                     if key == "owner":
                         u = _get_or_create(session, User, name=vstr)
@@ -713,7 +731,7 @@ def _apply_ref_rows(session: Session, ref_rows: list[dict]) -> None:
                     text("DELETE FROM taskattr WHERE task_id = :tid AND key = :k")
                     .bindparams(tid=tgt_id, k=key)
                 )
-                session.add(TaskAttr(task_id=tgt_id, key=key, value=str(val), value_norm=str(val).lower()))
+                session.add(TaskAttr(task_id=tgt_id, key=key, value=str(val), value_norm=_norm_for(key, str(val))))
 
 
 def remove_path(rel: str, session: Session) -> None:

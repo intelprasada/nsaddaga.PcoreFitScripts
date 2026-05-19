@@ -490,6 +490,88 @@ def test_ref_row_owner_syncs_taskowner(client):
     assert "bob" in r.json()["owners"], "bob must appear in task owners after ref-row override"
 
 
+def test_ref_row_attr_value_norm_matches_canonical(client):
+    """Regression (#235): ref-row attr overrides must normalize value_norm
+    via REGISTRY[key].normalize, exactly like canonical declarations.
+
+    Without this fix, ETA ref-row overrides land with value_norm = the raw
+    lowercased token (``'2099-09-09'`` happens to round-trip but words like
+    ``tomorrow`` don't), and priority ref-row overrides land with
+    value_norm = ``'p0'`` instead of the rank ``'0'`` — breaking ETA
+    windows and priority sort.
+    """
+    notes_dir = DATA / "notes"
+    notes_dir.mkdir(exist_ok=True)
+
+    # Canonical task declares eta + priority via #attr tokens.
+    canonical = (
+        "# Canonical\n"
+        "- !task due thing #id T-NORM01 #eta 2099-09-09 #priority p0\n"
+    )
+    (notes_dir / "canon_norm.md").write_text(canonical)
+    r = client.put("/api/notes",
+                   json={"path": "canon_norm.md", "body_md": canonical},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200
+
+    # Capture canonical value_norm via the public single-task endpoint.
+    r = client.get("/api/tasks/T-NORM01", headers={"Authorization": AUTH})
+    assert r.status_code == 200
+    canon_eta = r.json()["eta"]
+    canon_pri_rank = r.json()["priority_rank"]
+
+    # Same task, second task declared canonically with different eta/pri.
+    # Then override via a ref-row in another file. The ref-row's
+    # value_norm must round-trip to the same shape as the canonical path
+    # (ETA -> ISO date, priority -> rank integer-as-string).
+    canonical2 = (
+        "# Canonical2\n"
+        "- !task due thing2 #id T-NORM02 #eta 2099-01-01 #priority p3\n"
+    )
+    (notes_dir / "canon_norm2.md").write_text(canonical2)
+    r = client.put("/api/notes",
+                   json={"path": "canon_norm2.md", "body_md": canonical2},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200
+
+    weekly = (
+        "# Weekly\n"
+        "#task T-NORM02 #eta 2099-09-09 #priority p0\n"
+    )
+    (notes_dir / "weekly_norm.md").write_text(weekly)
+    r = client.put("/api/notes",
+                   json={"path": "weekly_norm.md", "body_md": weekly},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200
+
+    # Read raw value_norm out of the DB and compare.
+    from sqlmodel import Session, select
+    from app.db import get_engine
+    from app.models import Task, TaskAttr
+    with Session(get_engine()) as s:
+        t1 = s.exec(select(Task).where(Task.task_uuid == "T-NORM01")).first()
+        t2 = s.exec(select(Task).where(Task.task_uuid == "T-NORM02")).first()
+        assert t1 and t2
+        attrs_canon = {a.key: a.value_norm for a in s.exec(
+            select(TaskAttr).where(TaskAttr.task_id == t1.id)).all()}
+        attrs_ref = {a.key: a.value_norm for a in s.exec(
+            select(TaskAttr).where(TaskAttr.task_id == t2.id)).all()}
+
+    # The same logical override must produce the same value_norm.
+    assert attrs_canon["eta"] == attrs_ref["eta"], (
+        f"eta value_norm mismatch: canon={attrs_canon['eta']!r} "
+        f"ref={attrs_ref['eta']!r}"
+    )
+    assert attrs_canon["priority"] == attrs_ref["priority"], (
+        f"priority value_norm mismatch: canon={attrs_canon['priority']!r} "
+        f"ref={attrs_ref['priority']!r}"
+    )
+    # And the rendered values match too.
+    r = client.get("/api/tasks/T-NORM02", headers={"Authorization": AUTH})
+    assert r.json()["eta"] == canon_eta
+    assert r.json()["priority_rank"] == canon_pri_rank
+
+
 def test_create_task_appends_to_project_note(client):
     """Issue #63 — POST /api/tasks creates a task in the most recently
     modified note of the given project, with the requester as default owner.
