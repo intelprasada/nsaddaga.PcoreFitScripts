@@ -148,6 +148,77 @@ def _require_project_access(
     return role
 
 
+# ---------- read-side RBAC (#230) -------------------------------------------
+# Visibility rules for GET endpoints. Admins see everything. Non-admins
+# see (a) any note whose top-level folder is a project they belong to,
+# and (b) root-level notes (no top folder) — preserves the existing
+# write-side semantic where _user_role_for_project(None) == "manager".
+
+
+def _visible_projects(s: Session, user: str) -> tuple[bool, set[str]]:
+    """Return ``(is_admin, set_of_project_names_user_belongs_to)``.
+
+    Used by read endpoints to scope query results to projects the caller
+    is allowed to see.  Root-level notes (path with no '/') are always
+    visible — callers add that branch to their WHERE clause.
+    """
+    u = s.exec(select(User).where(User.name == user)).first()
+    if u is not None and u.is_admin:
+        return (True, set())
+    rows = s.exec(
+        select(ProjectMember.project_name).where(ProjectMember.user_name == user)
+    ).all()
+    return (False, {r for r in rows})
+
+
+def _note_visibility_sql_clause(
+    note_alias: str, is_admin: bool, projects: set[str],
+    params: dict[str, Any], expanding: list[str], slot: str,
+) -> str | None:
+    """Return a SQL fragment (no leading AND) restricting ``<note_alias>.path``
+    to notes the caller may see, or ``None`` if admin (no restriction).
+
+    Mutates ``params``/``expanding`` to register the bound projects.
+    """
+    if is_admin:
+        return None
+    # Root-level files: path contains no '/'.
+    if not projects:
+        return f"INSTR({note_alias}.path, '/') = 0"
+    params[slot] = tuple(projects)
+    expanding.append(slot)
+    # Substring before first '/' must be in the visible-projects set.
+    return (
+        f"(INSTR({note_alias}.path, '/') = 0 "
+        f"OR SUBSTR({note_alias}.path, 1, INSTR({note_alias}.path, '/') - 1) "
+        f"IN :{slot})"
+    )
+
+
+def _note_is_visible(note: Note, is_admin: bool, projects: set[str]) -> bool:
+    """Python-side mirror of the SQL clause above."""
+    if is_admin:
+        return True
+    project = _project_for_path(note.path)
+    if project is None:
+        return True
+    return project in projects
+
+
+def _require_note_access(s: Session, user: str, note: Note) -> None:
+    """403 if ``user`` can't see ``note`` (mirrors write-side rules)."""
+    is_admin, projects = _visible_projects(s, user)
+    if not _note_is_visible(note, is_admin, projects):
+        raise HTTPException(403, "no access to project")
+
+
+def _require_task_access(s: Session, user: str, task: Task) -> None:
+    note = s.get(Note, task.note_id)
+    if note is None:
+        raise HTTPException(404, "task note not found")
+    _require_note_access(s, user, note)
+
+
 # ---------- helpers ---------------------------------------------------------
 
 def _task_to_dict(s: Session, t: Task, *, include_children: bool = False) -> dict[str, Any]:
@@ -289,9 +360,17 @@ class NoteIn(BaseModel):
 
 
 @router.get("/notes")
-def list_notes(s: Session = Depends(get_session)) -> list[dict[str, Any]]:
+def list_notes(
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> list[dict[str, Any]]:
+    is_admin, projects = _visible_projects(s, user)
     notes = s.exec(select(Note).order_by(Note.updated_at.desc())).all()
-    return [{"id": n.id, "path": n.path, "title": n.title, "updated_at": n.updated_at} for n in notes]
+    return [
+        {"id": n.id, "path": n.path, "title": n.title, "updated_at": n.updated_at}
+        for n in notes
+        if _note_is_visible(n, is_admin, projects)
+    ]
 
 
 @router.get("/notes/etag")
@@ -323,10 +402,15 @@ def note_etag(
 
 
 @router.get("/notes/{note_id}")
-def get_note(note_id: int, s: Session = Depends(get_session)) -> dict[str, Any]:
+def get_note(
+    note_id: int,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
     n = s.get(Note, note_id)
     if not n:
         raise HTTPException(404, "note not found")
+    _require_note_access(s, user, n)
     full = settings.notes_dir / n.path
     # Always read body_md from disk so the editor never shows stale DB-cached
     # content.  The DB copy is only authoritative for structured queries
@@ -943,6 +1027,7 @@ def _parse_attr_clause(raw: str) -> tuple[str, str, str]:
 @router.get("/tasks")
 def list_tasks(
     s: Session = Depends(get_session),
+    user: str = Depends(require_user),
     owner: Optional[str] = None,
     project: Optional[str] = None,
     feature: Optional[str] = None,
@@ -970,6 +1055,11 @@ def list_tasks(
     params: dict[str, Any] = {}
     expanding: list[str] = []
 
+    # #230: read-side RBAC. Join Note for path-based visibility filter.
+    _vis_admin, _vis_projects = _visible_projects(s, user)
+    if not _vis_admin:
+        sql.append("JOIN note rbac_n ON rbac_n.id = t.note_id")
+
     def _join_multi(table: str, name_table: str, names: list[str], alias: str) -> None:
         if not names:
             return
@@ -986,6 +1076,12 @@ def list_tasks(
     _join_multi("taskfeature", "feature", _split(feature), "f")
 
     where = ["1=1"]
+    # #230: visibility WHERE clause (no-op for admins).
+    _vis_clause = _note_visibility_sql_clause(
+        "rbac_n", _vis_admin, _vis_projects, params, expanding, "rbac_projects",
+    )
+    if _vis_clause is not None:
+        where.append(_vis_clause)
     if hide_done or status == "!done":
         where.append("t.status != 'done'")
     elif status:
@@ -1236,6 +1332,7 @@ def list_attr_keys(s: Session = Depends(get_session)) -> list[dict[str, Any]]:
 @router.get("/agenda")
 def agenda(
     s: Session = Depends(get_session),
+    user: str = Depends(require_user),
     owner: Optional[str] = None,
     days: int = Query(default=None),
     start: Optional[str] = Query(default=None),
@@ -1265,6 +1362,11 @@ def agenda(
     LEFT JOIN taskattr pa ON pa.task_id = t.id AND pa.key='priority'
     """
     params: dict[str, Any] = {"start": today.isoformat(), "end": end_d.isoformat()}
+    expanding: list[str] = []
+    # #230: read-side RBAC.
+    _vis_admin, _vis_projects = _visible_projects(s, user)
+    if not _vis_admin:
+        sql += " JOIN note rbac_n ON rbac_n.id = t.note_id "
     if owner:
         owners_expanded = _canon_owner_filter([owner])
         sql += (
@@ -1272,17 +1374,20 @@ def agenda(
             " JOIN user u ON u.id = o.user_id AND u.name IN :owners "
         )
         params["owners"] = tuple(owners_expanded)
-        # bindparam expansion needs the key listed alongside other expanding
-        # binds below; agenda uses text() with explicit bindparams instead.
-    sql += """
+        expanding.append("owners")
+    _vis_clause = _note_visibility_sql_clause(
+        "rbac_n", _vis_admin, _vis_projects, params, expanding, "rbac_projects",
+    )
+    vis_sql = f" AND {_vis_clause}" if _vis_clause else ""
+    sql += f"""
     WHERE t.status != 'done'
       AND ea.value_norm BETWEEN :start AND :end
+      {vis_sql}
     ORDER BY ea.value_norm ASC, pri_rank ASC, t.id ASC
     """
     stmt = text(sql)
-    if owner:
-        from sqlalchemy import bindparam
-        stmt = stmt.bindparams(bindparam("owners", expanding=True))
+    if expanding:
+        stmt = stmt.bindparams(*[bindparam(k, expanding=True) for k in expanding])
     rows = s.exec(stmt.bindparams(**params)).all()
     grouped: dict[str, list[dict]] = {}
     for tid, eta, _pri in rows:
@@ -1293,20 +1398,51 @@ def agenda(
 # ---------- features (cross-user pull) -------------------------------------
 
 @router.get("/features")
-def list_features(s: Session = Depends(get_session)) -> list[str]:
-    return [f.name for f in s.exec(select(Feature).order_by(Feature.name)).all()]
+def list_features(
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> list[str]:
+    is_admin, projects = _visible_projects(s, user)
+    if is_admin:
+        return [f.name for f in s.exec(select(Feature).order_by(Feature.name)).all()]
+    # Only surface features that have at least one task in a visible note.
+    rows = s.exec(
+        select(Feature.name, Note.path)
+        .join(TaskFeature, TaskFeature.feature_id == Feature.id)
+        .join(Task, Task.id == TaskFeature.task_id)
+        .join(Note, Note.id == Task.note_id)
+    ).all()
+    visible = sorted({
+        name for name, path in rows
+        if _project_for_path(path) is None or _project_for_path(path) in projects
+    })
+    return visible
 
 
 @router.get("/features/{name}/tasks")
-def feature_tasks(name: str, s: Session = Depends(get_session)) -> dict[str, Any]:
+def feature_tasks(
+    name: str,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
     feat = s.exec(select(Feature).where(Feature.name == name)).first()
     if not feat:
         raise HTTPException(404, "feature not found")
+    is_admin, projects = _visible_projects(s, user)
     rows = s.exec(
         select(Task.id).join(TaskFeature, TaskFeature.task_id == Task.id)
         .where(TaskFeature.feature_id == feat.id)
     ).all()
-    tasks = [_task_to_dict(s, s.get(Task, r[0] if isinstance(r, tuple) else r)) for r in rows]
+    tasks: list[dict[str, Any]] = []
+    for r in rows:
+        tid = r[0] if isinstance(r, tuple) else r
+        t = s.get(Task, tid)
+        if t is None:
+            continue
+        n = s.get(Note, t.note_id)
+        if n is None or not _note_is_visible(n, is_admin, projects):
+            continue
+        tasks.append(_task_to_dict(s, t))
     agg_o = sorted({o for t in tasks for o in t["owners"]})
     return {
         "feature": name,
@@ -1327,8 +1463,13 @@ def feature_tasks(name: str, s: Session = Depends(get_session)) -> dict[str, Any
 # ---------- cards / bidirectional links ------------------------------------
 
 @router.get("/cards/{task_ref}/links")
-def card_links(task_ref: str, s: Session = Depends(get_session)) -> dict[str, Any]:
+def card_links(
+    task_ref: str,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
     t = _resolve_task(task_ref, s)
+    _require_task_access(s, user, t)
     rows = s.exec(text("""
         SELECT other_slug, kind, direction FROM links_bidir WHERE task_id = :tid
     """).bindparams(tid=t.id)).all()
@@ -1738,10 +1879,12 @@ class TaskPatch(BaseModel):
 def get_task(
     task_ref: str,
     s: Session = Depends(get_session),
+    user: str = Depends(require_user),
     include_children: bool = False,
 ) -> dict[str, Any]:
     """Fetch a single task by integer PK or `T-XXXXXX` uuid ref."""
     t = _resolve_task(task_ref, s)
+    _require_task_access(s, user, t)
     return _task_to_dict(s, t, include_children=include_children)
 
 
@@ -2424,7 +2567,11 @@ def admin_delete_user(
 
 
 @router.get("/search")
-def search(q: str, s: Session = Depends(get_session)) -> list[dict[str, Any]]:
+def search(
+    q: str,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> list[dict[str, Any]]:
     # FTS5 treats characters like '-', ':', '"', '*', '^', '(' / ')' and
     # '.' as operators; passing a raw user string (e.g. 'fit-val') would
     # raise sqlite3.OperationalError -> 500. Convert the input into a
@@ -2448,6 +2595,13 @@ def search(q: str, s: Session = Depends(get_session)) -> list[dict[str, Any]]:
         WHERE notes_fts MATCH :q
         LIMIT 50
     """).bindparams(q=fts_query)).all()
+    # #230: post-filter by visibility (50-row cap keeps this cheap).
+    is_admin, projects = _visible_projects(s, user)
+    if not is_admin:
+        def _vis(path: str) -> bool:
+            p = _project_for_path(path)
+            return p is None or p in projects
+        rows = [r for r in rows if _vis(r[1])]
     return [{"id": r[0], "path": r[1], "title": r[2]} for r in rows]
 
 
