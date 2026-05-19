@@ -80,7 +80,7 @@ def test_create_and_query(client):
 # RBAC: last-manager protection (#81)
 # ---------------------------------------------------------------------------
 
-def _create_user(client, name: str, password: str = "pw") -> None:
+def _create_user(client, name: str, password: str = "password1") -> None:
     r = client.post(
         "/api/admin/users",
         json={"name": name, "password": password, "is_admin": False},
@@ -251,13 +251,13 @@ def test_reindex_sweeps_orphan_notes_when_file_deleted(client):
 
 def test_change_own_password(client):
     """Any user can change their own password; wrong current password is rejected."""
-    _create_user(client, "pw-user", "oldpass")
-    user_auth = "Basic " + base64.b64encode(b"pw-user:oldpass").decode()
+    _create_user(client, "pw-user", "oldpassword")
+    user_auth = "Basic " + base64.b64encode(b"pw-user:oldpassword").decode()
 
     # Wrong current password → 403.
     r = client.patch(
         "/api/me/password",
-        json={"current_password": "wrongpass", "new_password": "newpass"},
+        json={"current_password": "wrongpass1", "new_password": "newpassword"},
         headers={"Authorization": user_auth},
     )
     assert r.status_code == 403
@@ -265,7 +265,7 @@ def test_change_own_password(client):
     # Empty new password → 400.
     r = client.patch(
         "/api/me/password",
-        json={"current_password": "oldpass", "new_password": ""},
+        json={"current_password": "oldpassword", "new_password": ""},
         headers={"Authorization": user_auth},
     )
     assert r.status_code == 400
@@ -273,7 +273,7 @@ def test_change_own_password(client):
     # Correct change → 200.
     r = client.patch(
         "/api/me/password",
-        json={"current_password": "oldpass", "new_password": "newpass"},
+        json={"current_password": "oldpassword", "new_password": "newpassword"},
         headers={"Authorization": user_auth},
     )
     assert r.status_code == 200
@@ -284,7 +284,7 @@ def test_change_own_password(client):
     assert r.status_code == 401
 
     # New credentials work.
-    new_auth = "Basic " + base64.b64encode(b"pw-user:newpass").decode()
+    new_auth = "Basic " + base64.b64encode(b"pw-user:newpassword").decode()
     r = client.get("/api/me", headers={"Authorization": new_auth})
     assert r.status_code == 200
     assert r.json()["name"] == "pw-user"
@@ -292,18 +292,18 @@ def test_change_own_password(client):
 
 def test_admin_can_reset_any_password(client):
     """Admin can reset another user's password via PATCH /admin/users/{name}."""
-    _create_user(client, "reset-target", "original")
+    _create_user(client, "reset-target", "originalpw")
 
-    # Admin resets to "forced".
+    # Admin resets to "forcedpass1".
     r = client.patch(
         "/api/admin/users/reset-target",
-        json={"password": "forced"},
+        json={"password": "forcedpass1"},
         headers={"Authorization": AUTH},
     )
     assert r.status_code == 200
 
     # New password works.
-    new_auth = "Basic " + base64.b64encode(b"reset-target:forced").decode()
+    new_auth = "Basic " + base64.b64encode(b"reset-target:forcedpass1").decode()
     r = client.get("/api/me", headers={"Authorization": new_auth})
     assert r.status_code == 200
     assert r.json()["name"] == "reset-target"
@@ -1342,3 +1342,46 @@ def test_parent_done_with_all_ars_done_persists_after_reindex(client):
         r = client.get(f"/api/tasks/{ref}", headers={"Authorization": AUTH})
         assert r.status_code == 200, r.text
         assert r.json()["status"] == "done", f"{ref} reverted: {r.json()}"
+
+
+# ---------------------------------------------------------------------------
+# Password policy (#238) — short passwords must be rejected.
+# ---------------------------------------------------------------------------
+
+def test_password_policy_rejects_short_on_admin_create(client):
+    """POST /admin/users with a < 8-char password → 400."""
+    r = client.post(
+        "/api/admin/users",
+        json={"name": "weakcreate", "password": "abc", "is_admin": False},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 400, r.text
+    assert "8" in r.json()["detail"] or "characters" in r.json()["detail"].lower()
+
+
+def test_password_policy_rejects_short_on_admin_patch(client):
+    """PATCH /admin/users/{name} with a 1-char password → 400."""
+    _create_user(client, "weakpatch")
+    r = client.patch(
+        "/api/admin/users/weakpatch",
+        json={"password": "a"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 400, r.text
+    # The original password is unchanged — the default _create_user pw
+    # still works.
+    orig_auth = "Basic " + base64.b64encode(b"weakpatch:password1").decode()
+    r = client.get("/api/me", headers={"Authorization": orig_auth})
+    assert r.status_code == 200
+
+
+def test_password_policy_rejects_short_on_self_change(client):
+    """PATCH /me/password with a short new_password → 400."""
+    _create_user(client, "weakself", "originalpw")
+    user_auth = "Basic " + base64.b64encode(b"weakself:originalpw").decode()
+    r = client.patch(
+        "/api/me/password",
+        json={"current_password": "originalpw", "new_password": "abc"},
+        headers={"Authorization": user_auth},
+    )
+    assert r.status_code == 400, r.text

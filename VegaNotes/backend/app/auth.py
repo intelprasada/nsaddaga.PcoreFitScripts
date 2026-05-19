@@ -18,6 +18,29 @@ def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")
 
 
+# #238: minimum password policy. Kept loose on purpose — the project
+# uses idsid-shaped logins on a corporate network, so the threat model
+# is "stop accidentally accepting one-character passwords during admin
+# resets", not "defeat targeted offline cracking". Tighten freely.
+PASSWORD_MIN_LENGTH = 8
+
+
+def validate_password(password: str | None) -> str:
+    """Return the stripped password if it meets policy, else raise 400.
+
+    Centralized so /me/password, admin create, and admin patch all share
+    the same minimum bar.
+    """
+    if password is None or not password:
+        raise HTTPException(status_code=400, detail="password cannot be empty")
+    if len(password) < PASSWORD_MIN_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"password must be at least {PASSWORD_MIN_LENGTH} characters",
+        )
+    return password
+
+
 def verify_password(password: str, hashed: str) -> bool:
     if not hashed:
         return False

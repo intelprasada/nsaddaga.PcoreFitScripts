@@ -48,7 +48,7 @@ def world(client):
     for u in ("insider", "outsider"):
         r = client.post(
             "/api/admin/users",
-            json={"name": u, "password": "pw", "is_admin": False},
+            json={"name": u, "password": "password1", "is_admin": False},
             headers={"Authorization": ADMIN},
         )
         assert r.status_code in (200, 201, 409), r.text
@@ -94,8 +94,8 @@ def world(client):
         )
         assert r.status_code == 200, (path, r.text)
 
-    INSIDER = "Basic " + base64.b64encode(b"insider:pw").decode()
-    OUTSIDER = "Basic " + base64.b64encode(b"outsider:pw").decode()
+    INSIDER = "Basic " + base64.b64encode(b"insider:password1").decode()
+    OUTSIDER = "Basic " + base64.b64encode(b"outsider:password1").decode()
     return {"insider": INSIDER, "outsider": OUTSIDER}
 
 

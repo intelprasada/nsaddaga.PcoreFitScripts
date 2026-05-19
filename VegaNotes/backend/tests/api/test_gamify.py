@@ -226,10 +226,10 @@ def test_backfill_requires_admin(client):
     # Build a non-admin user and confirm 403.
     r = client.post(
         "/api/admin/users",
-        json={"name": "alice", "password": "alicepw", "is_admin": False},
+        json={"name": "alice", "password": "alicepass1", "is_admin": False},
         headers={"Authorization": ADMIN},
     )
     assert r.status_code in (200, 201, 409), r.text
-    alice_auth = "Basic " + base64.b64encode(b"alice:alicepw").decode()
+    alice_auth = "Basic " + base64.b64encode(b"alice:alicepass1").decode()
     r = client.post("/api/admin/gamify/backfill", headers={"Authorization": alice_auth})
     assert r.status_code == 403

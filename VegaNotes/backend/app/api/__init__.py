@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import bindparam, text
 from sqlmodel import Session, select
 
-from ..auth import hash_password, verify_password, require_admin, require_user
+from ..auth import hash_password, validate_password, verify_password, require_admin, require_user
 from ..config import settings
 from ..db import get_session
 from ..indexer import (
@@ -2289,8 +2289,7 @@ def change_my_password(
     """Any authenticated user can change their own password.
     Requires the current password for verification.
     """
-    if not body.new_password:
-        raise HTTPException(400, "new_password cannot be empty")
+    validate_password(body.new_password)
     u = s.exec(select(User).where(User.name == user)).first()
     if u is None:
         raise HTTPException(404, "user not found")
@@ -2532,8 +2531,7 @@ def admin_create_user(
     name = body.name.strip()
     if not name:
         raise HTTPException(400, "name required")
-    if not body.password:
-        raise HTTPException(400, "password required")
+    validate_password(body.password)
     existing = s.exec(select(User).where(User.name == name)).first()
     if existing is not None:
         raise HTTPException(409, f"user '{name}' already exists")
@@ -2555,8 +2553,7 @@ def admin_patch_user(
     if u is None:
         raise HTTPException(404, "user not found")
     if body.password is not None:
-        if not body.password:
-            raise HTTPException(400, "password cannot be empty")
+        validate_password(body.password)
         u.pass_hash = hash_password(body.password)
     if body.is_admin is not None:
         # Prevent removing admin from yourself or from the last remaining admin.
