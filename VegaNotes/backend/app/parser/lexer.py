@@ -44,10 +44,32 @@ _TOKEN_RE = re.compile(
     re.VERBOSE | re.MULTILINE,
 )
 
-# #226: GAL-style "@Last, First" without quotes — only consume the
-# trailing ", Capitalized" when it directly follows an @-name and the
-# next word is Capitalized (so prose like "@john, can you..." is safe).
-_GAL_TAIL_RE = re.compile(r",\s+(?P<sur>[A-Z][\w.-]*)")
+# #226 / #233: GAL-style "@Last, First" without quotes — opportunistically
+# consume the trailing ", Capitalized" only when the surname is clearly
+# *standalone* (end-of-line, end-of-string, or directly followed by
+# another @/# token). The earlier guard ("is next word capitalized?")
+# fired on common prose ("@alice, Thanks", "@bob, OK", "@chris, I",
+# "@dave, Monday", "@eve, PR"), silently mis-attributing ownership AND
+# eating the next word from the surrounding text. The standalone rule
+# keeps the GAL form working while leaving inline prose untouched.
+_GAL_TAIL_RE = re.compile(
+    r",\s+(?P<sur>[A-Z][\w.-]*)(?=\s*$|\s+[@#])"
+)
+# Additional stop-list for ambiguous one/two-letter surnames that *do*
+# pass the standalone check but are almost always prose noise. Curated
+# from the acceptance examples + common day/month abbreviations.
+_GAL_TAIL_STOPWORDS = frozenset({
+    "I", "OK", "PR", "AR", "FYI", "IIRC", "TBD", "EOM", "EOD", "WIP",
+    "TODO", "ETA", "WW", "CC", "BCC", "RE", "FW", "FWD", "OOO",
+    "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun",
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+    "Saturday", "Sunday",
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug",
+    "Sep", "Sept", "Oct", "Nov", "Dec",
+    "January", "February", "March", "April", "June",
+    "July", "August", "September", "October", "November", "December",
+    "Thanks", "Thx", "Yes", "No", "OK", "Done",
+})
 
 _TOKEN_NAMES_NEEDING_VALUE = {"task"}  # !task always takes a value (the title)
 
@@ -134,7 +156,7 @@ def lex(line: str) -> List[Union[TextChunk, Token]]:
             # display form Outlook produces is "Last, First" — we
             # support both orderings symmetrically.
             tail = _GAL_TAIL_RE.match(line, end)
-            if tail:
+            if tail and tail.group("sur") not in _GAL_TAIL_STOPWORDS:
                 # Keep the comma so _split_compound_token recognises
                 # this as GAL form (surname=First, given=Second word),
                 # which is what Outlook emits for "Last, First".

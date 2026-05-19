@@ -80,7 +80,7 @@ def test_create_and_query(client):
 # RBAC: last-manager protection (#81)
 # ---------------------------------------------------------------------------
 
-def _create_user(client, name: str, password: str = "pw") -> None:
+def _create_user(client, name: str, password: str = "password1") -> None:
     r = client.post(
         "/api/admin/users",
         json={"name": name, "password": password, "is_admin": False},
@@ -251,13 +251,13 @@ def test_reindex_sweeps_orphan_notes_when_file_deleted(client):
 
 def test_change_own_password(client):
     """Any user can change their own password; wrong current password is rejected."""
-    _create_user(client, "pw-user", "oldpass")
-    user_auth = "Basic " + base64.b64encode(b"pw-user:oldpass").decode()
+    _create_user(client, "pw-user", "oldpassword")
+    user_auth = "Basic " + base64.b64encode(b"pw-user:oldpassword").decode()
 
     # Wrong current password → 403.
     r = client.patch(
         "/api/me/password",
-        json={"current_password": "wrongpass", "new_password": "newpass"},
+        json={"current_password": "wrongpass1", "new_password": "newpassword"},
         headers={"Authorization": user_auth},
     )
     assert r.status_code == 403
@@ -265,7 +265,7 @@ def test_change_own_password(client):
     # Empty new password → 400.
     r = client.patch(
         "/api/me/password",
-        json={"current_password": "oldpass", "new_password": ""},
+        json={"current_password": "oldpassword", "new_password": ""},
         headers={"Authorization": user_auth},
     )
     assert r.status_code == 400
@@ -273,7 +273,7 @@ def test_change_own_password(client):
     # Correct change → 200.
     r = client.patch(
         "/api/me/password",
-        json={"current_password": "oldpass", "new_password": "newpass"},
+        json={"current_password": "oldpassword", "new_password": "newpassword"},
         headers={"Authorization": user_auth},
     )
     assert r.status_code == 200
@@ -284,7 +284,7 @@ def test_change_own_password(client):
     assert r.status_code == 401
 
     # New credentials work.
-    new_auth = "Basic " + base64.b64encode(b"pw-user:newpass").decode()
+    new_auth = "Basic " + base64.b64encode(b"pw-user:newpassword").decode()
     r = client.get("/api/me", headers={"Authorization": new_auth})
     assert r.status_code == 200
     assert r.json()["name"] == "pw-user"
@@ -292,18 +292,18 @@ def test_change_own_password(client):
 
 def test_admin_can_reset_any_password(client):
     """Admin can reset another user's password via PATCH /admin/users/{name}."""
-    _create_user(client, "reset-target", "original")
+    _create_user(client, "reset-target", "originalpw")
 
-    # Admin resets to "forced".
+    # Admin resets to "forcedpass1".
     r = client.patch(
         "/api/admin/users/reset-target",
-        json={"password": "forced"},
+        json={"password": "forcedpass1"},
         headers={"Authorization": AUTH},
     )
     assert r.status_code == 200
 
     # New password works.
-    new_auth = "Basic " + base64.b64encode(b"reset-target:forced").decode()
+    new_auth = "Basic " + base64.b64encode(b"reset-target:forcedpass1").decode()
     r = client.get("/api/me", headers={"Authorization": new_auth})
     assert r.status_code == 200
     assert r.json()["name"] == "reset-target"
@@ -488,6 +488,136 @@ def test_ref_row_owner_syncs_taskowner(client):
     r = client.get("/api/tasks/T-REFOWN1", headers={"Authorization": AUTH})
     assert r.status_code == 200
     assert "bob" in r.json()["owners"], "bob must appear in task owners after ref-row override"
+
+
+def test_ref_row_attr_value_norm_matches_canonical(client):
+    """Regression (#235): ref-row attr overrides must normalize value_norm
+    via REGISTRY[key].normalize, exactly like canonical declarations.
+
+    Without this fix, ETA ref-row overrides land with value_norm = the raw
+    lowercased token (``'2099-09-09'`` happens to round-trip but words like
+    ``tomorrow`` don't), and priority ref-row overrides land with
+    value_norm = ``'p0'`` instead of the rank ``'0'`` — breaking ETA
+    windows and priority sort.
+    """
+    notes_dir = DATA / "notes"
+    notes_dir.mkdir(exist_ok=True)
+
+    # Canonical task declares eta + priority via #attr tokens.
+    canonical = (
+        "# Canonical\n"
+        "- !task due thing #id T-NORM01 #eta 2099-09-09 #priority p0\n"
+    )
+    (notes_dir / "canon_norm.md").write_text(canonical)
+    r = client.put("/api/notes",
+                   json={"path": "canon_norm.md", "body_md": canonical},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200
+
+    # Capture canonical value_norm via the public single-task endpoint.
+    r = client.get("/api/tasks/T-NORM01", headers={"Authorization": AUTH})
+    assert r.status_code == 200
+    canon_eta = r.json()["eta"]
+    canon_pri_rank = r.json()["priority_rank"]
+
+    # Same task, second task declared canonically with different eta/pri.
+    # Then override via a ref-row in another file. The ref-row's
+    # value_norm must round-trip to the same shape as the canonical path
+    # (ETA -> ISO date, priority -> rank integer-as-string).
+    canonical2 = (
+        "# Canonical2\n"
+        "- !task due thing2 #id T-NORM02 #eta 2099-01-01 #priority p3\n"
+    )
+    (notes_dir / "canon_norm2.md").write_text(canonical2)
+    r = client.put("/api/notes",
+                   json={"path": "canon_norm2.md", "body_md": canonical2},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200
+
+    weekly = (
+        "# Weekly\n"
+        "#task T-NORM02 #eta 2099-09-09 #priority p0\n"
+    )
+    (notes_dir / "weekly_norm.md").write_text(weekly)
+    r = client.put("/api/notes",
+                   json={"path": "weekly_norm.md", "body_md": weekly},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200
+
+    # Read raw value_norm out of the DB and compare.
+    from sqlmodel import Session, select
+    from app.db import get_engine
+    from app.models import Task, TaskAttr
+    with Session(get_engine()) as s:
+        t1 = s.exec(select(Task).where(Task.task_uuid == "T-NORM01")).first()
+        t2 = s.exec(select(Task).where(Task.task_uuid == "T-NORM02")).first()
+        assert t1 and t2
+        attrs_canon = {a.key: a.value_norm for a in s.exec(
+            select(TaskAttr).where(TaskAttr.task_id == t1.id)).all()}
+        attrs_ref = {a.key: a.value_norm for a in s.exec(
+            select(TaskAttr).where(TaskAttr.task_id == t2.id)).all()}
+
+    # The same logical override must produce the same value_norm.
+    assert attrs_canon["eta"] == attrs_ref["eta"], (
+        f"eta value_norm mismatch: canon={attrs_canon['eta']!r} "
+        f"ref={attrs_ref['eta']!r}"
+    )
+    assert attrs_canon["priority"] == attrs_ref["priority"], (
+        f"priority value_norm mismatch: canon={attrs_canon['priority']!r} "
+        f"ref={attrs_ref['priority']!r}"
+    )
+    # And the rendered values match too.
+    r = client.get("/api/tasks/T-NORM02", headers={"Authorization": AUTH})
+    assert r.json()["eta"] == canon_eta
+    assert r.json()["priority_rank"] == canon_pri_rank
+
+
+def test_ref_row_reindex_is_idempotent_for_taskattr(client):
+    """Regression (#234): reindexing the same unchanged ref-row file
+    repeatedly must not duplicate taskattr rows. taskowner / taskfeature
+    were already deduped via select-first; the parallel taskattr write
+    was not, so it grew by N per reindex.
+    """
+    notes_dir = DATA / "notes"
+    notes_dir.mkdir(exist_ok=True)
+
+    # Canonical task and a ref-row file that adds two owners + a feature.
+    (notes_dir / "canon_dup.md").write_text(
+        "# Canon\n- !task root task #id T-DUP001 #status todo\n"
+    )
+    r = client.put("/api/notes",
+                   json={"path": "canon_dup.md",
+                         "body_md": (notes_dir / "canon_dup.md").read_text()},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200
+
+    weekly_md = (
+        "# Weekly\n"
+        "#task T-DUP001 @alice @bob #feature search-rewrite\n"
+    )
+    (notes_dir / "weekly_dup.md").write_text(weekly_md)
+    for _ in range(3):
+        r = client.put("/api/notes",
+                       json={"path": "weekly_dup.md", "body_md": weekly_md},
+                       headers={"Authorization": AUTH})
+        assert r.status_code == 200
+
+    from sqlmodel import Session, select
+    from app.db import get_engine
+    from app.models import Task, TaskAttr
+    with Session(get_engine()) as s:
+        t = s.exec(select(Task).where(Task.task_uuid == "T-DUP001")).first()
+        assert t is not None
+        attrs = s.exec(
+            select(TaskAttr).where(TaskAttr.task_id == t.id)
+        ).all()
+        from collections import Counter
+        counts = Counter((a.key, a.value) for a in attrs)
+        # After 3 reindexes of the same ref-row, each (key,value) must
+        # still appear exactly once.
+        assert counts[("owner", "alice")] == 1, dict(counts)
+        assert counts[("owner", "bob")] == 1, dict(counts)
+        assert counts[("feature", "search-rewrite")] == 1, dict(counts)
 
 
 def test_create_task_appends_to_project_note(client):
@@ -1212,3 +1342,99 @@ def test_parent_done_with_all_ars_done_persists_after_reindex(client):
         r = client.get(f"/api/tasks/{ref}", headers={"Authorization": AUTH})
         assert r.status_code == 200, r.text
         assert r.json()["status"] == "done", f"{ref} reverted: {r.json()}"
+
+
+# ---------------------------------------------------------------------------
+# Password policy (#238) — short passwords must be rejected.
+# ---------------------------------------------------------------------------
+
+def test_password_policy_rejects_short_on_admin_create(client):
+    """POST /admin/users with a < 8-char password → 400."""
+    r = client.post(
+        "/api/admin/users",
+        json={"name": "weakcreate", "password": "abc", "is_admin": False},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 400, r.text
+    assert "8" in r.json()["detail"] or "characters" in r.json()["detail"].lower()
+
+
+def test_password_policy_rejects_short_on_admin_patch(client):
+    """PATCH /admin/users/{name} with a 1-char password → 400."""
+    _create_user(client, "weakpatch")
+    r = client.patch(
+        "/api/admin/users/weakpatch",
+        json={"password": "a"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 400, r.text
+    # The original password is unchanged — the default _create_user pw
+    # still works.
+    orig_auth = "Basic " + base64.b64encode(b"weakpatch:password1").decode()
+    r = client.get("/api/me", headers={"Authorization": orig_auth})
+    assert r.status_code == 200
+
+
+def test_password_policy_rejects_short_on_self_change(client):
+    """PATCH /me/password with a short new_password → 400."""
+    _create_user(client, "weakself", "originalpw")
+    user_auth = "Basic " + base64.b64encode(b"weakself:originalpw").decode()
+    r = client.patch(
+        "/api/me/password",
+        json={"current_password": "originalpw", "new_password": "abc"},
+        headers={"Authorization": user_auth},
+    )
+    assert r.status_code == 400, r.text
+
+
+# ---------------------------------------------------------------------------
+# #237 — GET /api/tasks must honour repeated query keys for list filters.
+# Regression: previously params like `?not_owner=A&not_owner=B` were typed
+# as `Optional[str]` so FastAPI silently kept only the last value, defeating
+# the multi-value exclusion.
+# ---------------------------------------------------------------------------
+
+def test_list_tasks_accepts_repeated_query_keys_for_filters(client):
+    """Repeated `owner=` keys should be intersected (OR-of-tokens),
+    not silently coalesced to the last value."""
+    md = (
+        "# proj\n"
+        "## Repeated query filter\n"
+        "- !task Alpha @alice #id=T-RQK001\n"
+        "- !task Beta  @bob   #id=T-RQK002\n"
+        "- !task Gamma @carol #id=T-RQK003\n"
+    )
+    r = client.put(
+        "/api/notes",
+        json={"path": "rqk.md", "body_md": md},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+
+    # Repeated keys: should match alice OR bob (both), not just bob.
+    r = client.get(
+        "/api/tasks?owner=alice&owner=bob",
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200
+    titles = sorted(t["title"] for t in r.json()["tasks"]
+                    if t["title"] in {"Alpha", "Beta", "Gamma"})
+    assert titles == ["Alpha", "Beta"], titles
+
+    # Equivalent comma-form still works (back-compat).
+    r = client.get(
+        "/api/tasks?owner=alice,bob",
+        headers={"Authorization": AUTH},
+    )
+    titles = sorted(t["title"] for t in r.json()["tasks"]
+                    if t["title"] in {"Alpha", "Beta", "Gamma"})
+    assert titles == ["Alpha", "Beta"], titles
+
+    # Negations: ?not_owner=alice&not_owner=bob must drop both.
+    r = client.get(
+        "/api/tasks?not_owner=alice&not_owner=bob",
+        headers={"Authorization": AUTH},
+    )
+    titles = sorted(t["title"] for t in r.json()["tasks"]
+                    if t["title"] in {"Alpha", "Beta", "Gamma"})
+    assert titles == ["Gamma"], titles

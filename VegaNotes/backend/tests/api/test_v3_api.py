@@ -110,13 +110,13 @@ def test_owner_can_edit_their_task_without_project_membership(client):
     # Create a user with a known password but NO project membership in `alpha`.
     r = client.post(
         "/api/admin/users",
-        json={"name": "ghost", "password": "pw", "is_admin": False},
+        json={"name": "ghost", "password": "password1", "is_admin": False},
         headers={"Authorization": ADMIN},
     )
     assert r.status_code in (200, 201), r.text
 
     assert r.status_code in (200, 201), r.text
-    GHOST = "Basic " + base64.b64encode(b"ghost:pw").decode()
+    GHOST = "Basic " + base64.b64encode(b"ghost:password1").decode()
 
     # Admin authors a task in alpha/ that mentions @ghost as the owner.
     md = (
