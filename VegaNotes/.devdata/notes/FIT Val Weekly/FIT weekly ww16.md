@@ -23,7 +23,7 @@
 				#note was hiding behind another bucket
 	#project jnc
 		!task #id T-S3YSN7 Review assertions that have not reached a proven status #status in-progress #eta 2026-05-22
-			#note 4/6 converged. need to review the code myself
+				#note 4/6 converged. need to review the code myself
 			#update 2/4 assertions fixed, review pending
 		!task #id T-ARYRJN Assumptions review updates model TI 
 			#status done
