@@ -22,9 +22,9 @@
 			!AR #id T-8XTQ99 why failing now #eta WW17.5 #status done
 				#note was hiding behind another bucket
 	#project jnc
-		!task #id T-S3YSN7 Review assertions that have not reached a proven status #status todo
+		!task #id T-S3YSN7 Review assertions that have not reached a proven status #status in-progress #eta 2026-05-22
+				#note 4/6 converged. need to review the code myself
 			#update 2/4 assertions fixed, review pending
-			#eta ww17.5
 		!task #id T-ARYRJN Assumptions review updates model TI 
 			#status done
 		!task #id T-63C696 Review starvation covers. #status done 
@@ -37,16 +37,16 @@
 			!AR #id T-B45J4P 1 Jasper failure - details to be added #status done
 			!AR #id T-WKYEQQ Followup with Apar about the fix once he is free @aboli
 		!task #id T-CV97FD Val Plan development and review #eta ww18 #status in-progress #priority P0
-			!AR #id T-VG12T9 SMT related COI, assertions
+			!AR #id T-VG12T9 SMT related COI, assertions #status in-progress #eta 2026-05-22
 			!AR #id T-Y2A944 SEC for STSR?
 		#task #id T-5GV7JM Track number of assertions/assumptions and COI for reporting progress 
-		!task #id T-TAAGK0 STSR bug fix done in GFC to be done in JNC - IQ bypass CB added #priority low #eta ww20 
-		!task #id T-9VNZDM Added new assertion on outputs with no assertions in GFC  #eta ww18 
+		!task #id T-TAAGK0 STSR bug fix done in GFC to be done in JNC - IQ bypass CB added #priority low
+		!task #id T-9VNZDM Added new assertion on outputs with no assertions in GFC  #eta 2026-05-22 
 			!AR #id T-H0NNND 25 new assertions added - #status wip
 				#note AI tool took wrong pipe stages for assertion coding - need to understand the source 
 				#note All assertions are passing
-		!task #id T-PA0TBS ARs from reviews to be completed #eta ww19 
-		!task #id T-FA6GDA Reviewing unconverged covers #eta ww20
+		!task #id T-PA0TBS ARs from reviews to be completed #eta 2026-05-22 
+		!task #id T-FA6GDA Reviewing unconverged covers #eta 2026-05-29
 			!AR #id T-ED9XED 0/6 Done 
 @Namratha
 	!task #id T-MM5T3Z IDQ weekly bucket debug #priority P2 #status wip
@@ -148,7 +148,7 @@
 
 @Gautham
 	#project jnc
-	!task #id T-4PPA0R Signal refactoring for iq_tid_CM106L #status in-progress
+		!task #id T-4PPA0R Signal refactoring for iq_tid_CM106L #status done
 		!task #id T-WCF4H6 updating coverage for fe_idq_tlm_cov.e for SMT #status wip
 			!AR #id T-PZQ4CK updated code to handle threads @Gautham #status done
 			!AR #id T-4SPN38 add missing signals to packet @Gautham #status done
@@ -171,10 +171,11 @@
 			!AR #id T-1ZDG4T add additional coverage for SMT @Gautham #status in-progress
 			!AR #id T-YNRAYB update logging for signals to verify thread usage @Gautham #status in-progress
 			!AR #id T-8AVCBP Pseudocode for cross thread coverage @Gautham #status done
-			!AR #id T-1FNXBN Create Val Plan with Sachin @gajith
-			!AR #id T-XPPG48 Update Val Plan with Sachin @gajith
-			!AR #id T-DSEQ5Z Update Val Plan @gajith
-			!AR #id T-X23YZD test @gajith
+			!AR #id T-1FNXBN Create Val Plan with Sachin @gajith #status done
+			!AR #id T-XPPG48 Update Val Plan with Sachin @gajith #status in-progress
+			!AR #id T-DSEQ5Z Update Val Plan @gajith #status done
+			!AR #id T-X23YZD test @gajith #status done
+			!AR #id T-AJTE2P port all valid signals and add instrumental signals for valids that are not vectorized @gajith #status in-progress
 		!task #id T-TSRF81 IDQ Ramp up #status done 
 			!AR #id T-Q2F4T2 LSD, BIQ checker #eta ww18 #status done 
 			!AR #id T-44JP6F create presentation @Gautham #status done 
@@ -218,3 +219,22 @@
 !task #id T-KP1PRW IDQ Ramp up: LSD checker @Gautham #status in-progress
 	!AR #id T-55E9FD review LSD checker related packets @Gautham #status in-progress
 	!AR #id T-34T7JK Understand high level of IDQ write side of LSD @Gautham
+
+
+
+!task #id T-2MWMS4 Removal of incorrect const assume for DisSharedIDQorSMT signal @abolisaw #status done
+	#note Removed the const assume to let the proof have mode change capacity as it works in RTL.
+	#note Needed to add assumes for IDQ signals connecte dto this signla as there were failures after removing const assume.
+
+!task #id T-HV614G Complete STSR Val Plan review with STSR team @abolisaw #status done
+
+!task #id T-2RBC1Q Fixing FV to reproduce an RTL bug that missed in FV @abolisaw #status done
+	#note RTL credit counter was not updating the credits correctly incase of ST-SMT mode change. since the mode change was not supported by FV we did not catch it. Fixed FV an reproduced the failure and reviewed with designer.
+
+!task #id T-TQHRYZ Debug Fv regression fails in Elad's model @abolisaw #status done
+	#note DsbqBypassArriveThrM182H was stuck at 1. HSD: 14027888369
+	#note FAilure: DsbqNotEmptyOrBypassArriveThrM182H_according_to_active_thread
+
+!task #id T-X1NSHZ Debug Apar Clock gating model fails @abolisaw #status in-progress #eta 2026-05-20
+	#note Debugged, needs an FV fix
+
