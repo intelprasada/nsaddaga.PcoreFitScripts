@@ -424,13 +424,13 @@ def note_etag(
     can poll for out-of-band changes without transferring the full body on
     every tick.  The etag matches what ``GET /notes/{id}`` would return.
     """
-    if ".." in path or path.startswith("/"):
+    if not path or ".." in path or path.startswith("/") or path.endswith("/"):
         raise HTTPException(400, "invalid path")
     project = _project_for_path(path)
     if _user_role_for_project(s, user, project) == "none":
         raise HTTPException(403, "no access")
     full = settings.notes_dir / path
-    if not full.exists():
+    if not full.exists() or not full.is_file():
         raise HTTPException(404, "note not found")
     disk_md = full.read_text(encoding="utf-8")
     return {
