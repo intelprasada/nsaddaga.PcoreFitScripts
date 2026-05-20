@@ -289,9 +289,34 @@ export const api = {
   attrs: () => req<{ key: string; count: number; sample_values: string[] }[]>("/attrs"),
 
   // Per-user saved chip-bar views (issue #38 follow-up).
-  savedViews: () => req<Record<string, string[]>>("/me/views"),
-  saveViews: (views: Record<string, string[]>) =>
-    req<Record<string, string[]>>("/me/views", { method: "PUT", body: JSON.stringify(views) }),
+  //
+  // Backend persists views as ``list[{name, query: dict}]`` so they're
+  // also addressable from the CLI; the FilterBar deals in opaque DSL
+  // "chips" (``string[]``). Bridge here by stashing the chip list as
+  // ``query.chips`` and exposing the FE-friendly ``Record<name, chips>``
+  // shape that the React component expects. See #236.
+  savedViews: async (): Promise<Record<string, string[]>> => {
+    const list = await req<Array<{ name: string; query?: { chips?: string[] } }>>(
+      "/me/views",
+    );
+    const out: Record<string, string[]> = {};
+    for (const v of list || []) {
+      if (!v || typeof v.name !== "string") continue;
+      const chips = Array.isArray(v.query?.chips) ? (v.query!.chips as string[]) : [];
+      out[v.name] = chips;
+    }
+    return out;
+  },
+  saveViews: async (views: Record<string, string[]>): Promise<Record<string, string[]>> => {
+    const body = Object.entries(views || {})
+      .filter(([name]) => !!name)
+      .map(([name, chips]) => ({ name, query: { chips: chips || [] } }));
+    await req<{ status: string; count: number }>("/me/views", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+    return views;
+  },
 
   // ----- gamification (issue #137) ----------------------------------------
   meStats: () => req<MeStats>("/me/stats"),

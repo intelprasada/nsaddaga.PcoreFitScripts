@@ -36,7 +36,7 @@
 			!AR #id T-H66QC7 2 FV fixes #status done
 			!AR #id T-B45J4P 1 Jasper failure - details to be added #status done
 			!AR #id T-WKYEQQ Followup with Apar about the fix once he is free @aboli
-		!task #id T-CV97FD Val Plan development and review #eta ww18 
+		!task #id T-CV97FD Val Plan development and review #eta ww18 #status in-progress #priority P0
 			!AR #id T-VG12T9 SMT related COI, assertions
 			!AR #id T-Y2A944 SEC for STSR?
 		#task #id T-5GV7JM Track number of assertions/assumptions and COI for reporting progress 
@@ -148,14 +148,14 @@
 
 @Gautham
 	#project jnc
-		!task #id T-4PPA0R Signal refactoring for iq_tid_CM106L #status done 
+	!task #id T-4PPA0R Signal refactoring for iq_tid_CM106L #status in-progress
 		!task #id T-WCF4H6 updating coverage for fe_idq_tlm_cov.e for SMT #status wip
 			!AR #id T-PZQ4CK updated code to handle threads @Gautham #status done
 			!AR #id T-4SPN38 add missing signals to packet @Gautham #status done
 			!AR #id T-ZVSM2W verify cover groups collected @Gautham #status done
 			!AR #id T-VFRC9F turn in without thread-aware 148h signals @Gautham #status done
-			!AR #id T-P51GT4 investigate 148H signals @Gautham #status in-progress
-			!AR #id T-Q1C4MS update coverage to handle 148h signals @Gautham
+			!AR #id T-P51GT4 investigate 148H signals @Gautham #status done
+			!AR #id T-Q1C4MS update coverage to handle 148h signals @Gautham #status in-progress
 		!task #id T-D3K2BP predq tracker #status done #eta ww18
 			!AR #id T-S3B7ZW created yaml packet, tlm infrastructure and tracker @Gautham #status done
 			!AR #id T-D6JB94 verified cycle accuracy of packet signals @Gautham #status done
@@ -171,6 +171,10 @@
 			!AR #id T-1ZDG4T add additional coverage for SMT @Gautham #status in-progress
 			!AR #id T-YNRAYB update logging for signals to verify thread usage @Gautham #status in-progress
 			!AR #id T-8AVCBP Pseudocode for cross thread coverage @Gautham #status done
+			!AR #id T-1FNXBN Create Val Plan with Sachin @gajith
+			!AR #id T-XPPG48 Update Val Plan with Sachin @gajith
+			!AR #id T-DSEQ5Z Update Val Plan @gajith
+			!AR #id T-X23YZD test @gajith
 		!task #id T-TSRF81 IDQ Ramp up #status done 
 			!AR #id T-Q2F4T2 LSD, BIQ checker #eta ww18 #status done 
 			!AR #id T-44JP6F create presentation @Gautham #status done 

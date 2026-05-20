@@ -1261,6 +1261,20 @@ def test_notes_etag_endpoint_404(client):
     assert r.status_code == 404
 
 
+def test_notes_etag_endpoint_400_on_empty_or_directory_path(client):
+    """#232: empty / directory paths must be rejected with 400, not a
+    500 from ``read_text`` on the notes_dir itself."""
+    # Empty path (was 500 before the fix).
+    r = client.get("/api/notes/etag?path=",
+        headers={"Authorization": AUTH})
+    assert r.status_code == 400, r.text
+
+    # Trailing slash → looks like a directory.
+    r = client.get("/api/notes/etag?path=foo/",
+        headers={"Authorization": AUTH})
+    assert r.status_code == 400, r.text
+
+
 def test_notes_etag_endpoint_requires_auth(client):
     r = client.get("/api/notes/etag?path=etag-probe.md")
     assert r.status_code == 401
