@@ -23,7 +23,7 @@
 				#note was hiding behind another bucket
 	#project jnc
 		!task #id T-S3YSN7 Review assertions that have not reached a proven status #status in-progress #eta 2026-05-22
-				#note 4/6 converged. need to review the code myself
+			#note 4/6 converged. need to review the code myself
 			#update 2/4 assertions fixed, review pending
 		!task #id T-ARYRJN Assumptions review updates model TI 
 			#status done
@@ -39,7 +39,7 @@
 		!task #id T-CV97FD Val Plan development and review #eta ww18 #status in-progress #priority P0
 			!AR #id T-VG12T9 SMT related COI, assertions #status in-progress #eta 2026-05-22
 			!AR #id T-Y2A944 SEC for STSR?
-		#task #id T-5GV7JM Track number of assertions/assumptions and COI for reporting progress 
+		!task #id T-5GV7JM Track number of assertions/assumptions and COI for reporting progress 
 		!task #id T-TAAGK0 STSR bug fix done in GFC to be done in JNC - IQ bypass CB added #priority low
 		!task #id T-9VNZDM Added new assertion on outputs with no assertions in GFC  #eta 2026-05-22 
 			!AR #id T-H0NNND 25 new assertions added - #status wip
