@@ -197,6 +197,11 @@ def _apply_col_filter(series: "pd.Series", text: str) -> "pd.Series":
     Plain substring (default when no keywords present):
         foo               → rows whose cell contains "foo" (case-insensitive)
 
+    Wildcard:
+        *                 → matches every row (column is still "active" so
+                            its number can be referenced from the global
+                            logic-expression bar)
+
     Numeric range:
         RANGE(lo-hi)                     → lo ≤ value ≤ hi
         RANGE(lo-hi, lo-hi, ...)         → value falls in any of the ranges
@@ -214,6 +219,15 @@ def _apply_col_filter(series: "pd.Series", text: str) -> "pd.Series":
     """
     text = text.strip()
     if not text:
+        return pd.Series(True, index=series.index)
+
+    # ── Wildcard: bare '*' matches every row ─────────────────────────
+    # The column still counts as "active" (non-empty filter text) so its
+    # number is referenced from the global-logic expression bar; the mask
+    # itself imposes no constraint. This lets users build expressions like
+    # ``(1 AND 2) OR (3 AND NOT 4)`` where one column should participate
+    # structurally without narrowing the row set.
+    if text == "*":
         return pd.Series(True, index=series.index)
 
     # ── Simple substring mode (no boolean keywords) ──────────────────
@@ -408,6 +422,7 @@ class FilteredTable(ttk.Frame):
                 "Active filter numbers are shown to the right of this box as you type.\n\n"
                 "── Column filter syntax ──────────────────────────────────────────────────\n\n"
                 "  hello              — substring match (case-insensitive)\n"
+                "  *                  — wildcard, matches every row (column stays active)\n"
                 "  (hello) OR (world) — boolean expression with substring atoms\n"
                 "  NOT (foo)          — rows that do NOT contain 'foo'\n"
                 "  RANGE(lo-hi)       — numeric range, both ends inclusive\n"
