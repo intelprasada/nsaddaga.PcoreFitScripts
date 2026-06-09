@@ -65,7 +65,9 @@ if [[ "$UNINSTALL" == "1" ]]; then
   exec "$PYTHON" -m pip uninstall -y veganotes-vn
 fi
 
-PIP_ARGS=()
+PIP_PROXY="${HTTPS_PROXY:-${https_proxy:-http://proxy-chain.intel.com:911}}"
+
+PIP_ARGS=("--proxy" "$PIP_PROXY")
 [[ -n "$USER_FLAG" ]] && PIP_ARGS+=("$USER_FLAG")
 [[ "$EDITABLE" == "1" ]] && PIP_ARGS+=("-e")
 PIP_ARGS+=("$PKG_DIR")
