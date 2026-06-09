@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SuperTracker — CTE Tracker File Viewer</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1f2328;
+    --muted: #57606a;
+    --accent: #0969da;
+    --accent-soft: #ddf4ff;
+    --border: #d0d7de;
+    --code-bg: #f6f8fa;
+    --row-alt: #f9fafb;
+    --warn-bg: #fff8c5;
+    --warn-border: #d4a72c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+  }
+  header {
+    background: linear-gradient(135deg, #0969da, #218bff);
+    color: white;
+    padding: 2.4rem 2rem 2rem;
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { margin: 0 0 .35rem; font-size: 2.1rem; letter-spacing: .3px; }
+  header p  { margin: 0; opacity: .92; max-width: 60rem; }
+  .layout {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    gap: 0;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  nav {
+    border-right: 1px solid var(--border);
+    padding: 1.5rem 1rem;
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    overflow-y: auto;
+    background: var(--bg);
+  }
+  nav h3 { margin: .25rem 0 .6rem; font-size: .8rem; text-transform: uppercase; color: var(--muted); letter-spacing: .8px; }
+  nav ul { list-style: none; padding: 0; margin: 0 0 1.2rem; }
+  nav li { margin: .25rem 0; }
+  nav a { color: var(--fg); text-decoration: none; font-size: .92rem; }
+  nav a:hover { color: var(--accent); }
+  main { padding: 1.8rem 2rem 4rem; min-width: 0; }
+  section { margin-bottom: 2.8rem; }
+  section > h2 {
+    margin-top: 0;
+    padding-bottom: .35rem;
+    border-bottom: 1px solid var(--border);
+    font-size: 1.55rem;
+  }
+  h3 { margin-top: 1.6rem; font-size: 1.15rem; }
+  code, pre {
+    font-family: "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: .9em;
+  }
+  code { background: var(--code-bg); padding: .15em .35em; border-radius: 4px; }
+  pre {
+    background: var(--code-bg);
+    padding: .9rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+  }
+  pre code { background: transparent; padding: 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: .94rem;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: .55rem .8rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); }
+  tbody tr:nth-child(even) { background: var(--row-alt); }
+  .pill {
+    display: inline-block;
+    background: var(--accent-soft);
+    color: var(--accent);
+    padding: .1em .55em;
+    border-radius: 999px;
+    font-size: .78em;
+    font-weight: 600;
+    margin-left: .4rem;
+  }
+  .note {
+    background: var(--warn-bg);
+    border-left: 4px solid var(--warn-border);
+    padding: .8rem 1rem;
+    border-radius: 4px;
+    margin: 1rem 0;
+  }
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 1rem;
+    margin: 1rem 0;
+  }
+  .card {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: .9rem 1rem;
+    background: var(--bg);
+  }
+  .card h4 { margin: 0 0 .35rem; font-size: 1rem; color: var(--accent); }
+  .card p  { margin: 0; font-size: .9rem; color: var(--muted); }
+  footer {
+    text-align: center;
+    color: var(--muted);
+    padding: 1.2rem;
+    border-top: 1px solid var(--border);
+    font-size: .85rem;
+  }
+  @media (max-width: 800px) {
+    .layout { grid-template-columns: 1fr; }
+    nav { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SuperTracker <span class="pill">CTE Tracker Viewer</span></h1>
+  <p>An interactive viewer for CTE tracker <code>.elog</code> files (pipe-delimited with repeating header blocks),
+     built on top of the SuperCSV widget layer. Provides full filtering, sorting, column-hiding, email,
+     and export capabilities — with native support for plain CSV / TSV / PSV files as well.</p>
+</header>
+
+<div class="layout">
+<nav>
+  <h3>Contents</h3>
+  <ul>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#features">Features</a></li>
+    <li><a href="#dependencies">Dependencies</a></li>
+    <li><a href="#quickstart">Quick Start</a></li>
+    <li><a href="#cli">CLI Options</a></li>
+    <li><a href="#elog-format">Elog Format</a></li>
+    <li><a href="#header-spec">Header-Row Spec</a></li>
+    <li><a href="#range-filter">Range Filtering</a></li>
+    <li><a href="#architecture">Architecture</a></li>
+    <li><a href="#api">Internal API</a></li>
+    <li><a href="#examples">Examples</a></li>
+    <li><a href="#tests">Tests</a></li>
+  </ul>
+</nav>
+
+<main>
+
+<section id="overview">
+  <h2>Overview</h2>
+  <p><strong>SuperTracker</strong> is a specialised viewer for CTE tracker <code>.elog</code> files. These files
+     are pipe-delimited and contain a repeating 3-line header block scattered every ~50 rows throughout the file.
+     SuperTracker strips all repeated headers and loads the data into the same <code>FilteredTable</code> widget
+     used by SuperCSV.</p>
+  <p>Plain CSV / TSV / PSV files are also fully supported and are routed through SuperCSV's regular
+     rendering path — extended with header-block-aware reading so multi-row or repeating headers in
+     CSV files can be cleaned up identically to elog files.</p>
+</section>
+
+<section id="features">
+  <h2>Features</h2>
+  <div class="feature-grid">
+    <div class="card"><h4>Elog parser</h4><p>Auto-detects pipe-delimited tracker logs and strips repeated <code>===…===</code> separator + header blocks.</p></div>
+    <div class="card"><h4>Gzip support</h4><p>Reads <code>.elog.gz</code> directly — no manual decompression needed.</p></div>
+    <div class="card"><h4>Multi-row headers</h4><p><code>--header-row N:k</code> handles header blocks spanning multiple lines.</p></div>
+    <div class="card"><h4>Hex / binary range filter</h4><p>Tracker tabs accept ranges like <code>0x10..0x2F</code> and <code>0b1010..0b1111</code>.</p></div>
+    <div class="card"><h4>Multi-tab UI</h4><p>Open many files at once, each in its own tab.</p></div>
+    <div class="card"><h4>Filter / sort / hide</h4><p>Per-column filter expressions, global logic bar, column picker — all inherited from SuperCSV.</p></div>
+    <div class="card"><h4>Email &amp; export</h4><p>Send filtered data via email or export to CSV / Excel.</p></div>
+    <div class="card"><h4>Recent files</h4><p>Up to <code>_RECENT_MAX</code> recently-opened files persisted across sessions.</p></div>
+  </div>
+</section>
+
+<section id="dependencies">
+  <h2>Dependencies</h2>
+  <p>SuperTracker builds on <strong>SuperCSV</strong>'s shared widget layer:</p>
+  <ul>
+    <li><code>FilteredTable</code> — the data grid widget</li>
+    <li><code>FontManager</code> — global font scaling</li>
+    <li><code>ThemeManager</code> — light/dark themes (used by inherited toolbar)</li>
+    <li><code>SuperCSV</code> — the base application class</li>
+  </ul>
+  <p>The <code>bin/supertracker</code> wrapper script automatically prepends <code>tools/supercsv/</code>
+     to <code>PYTHONPATH</code>, so no manual setup is needed.</p>
+  <p><strong>External:</strong> <code>pandas&gt;=1.3</code> (matches SuperCSV's requirement).</p>
+</section>
+
+<section id="quickstart">
+  <h2>Quick Start</h2>
+<pre><code>bin/supertracker path/to/file.elog.gz
+bin/supertracker                          # opens file-picker dialog
+bin/supertracker trk_T0.elog.gz trk_T1.elog.gz   # multiple files / tabs</code></pre>
+</section>
+
+<section id="cli">
+  <h2>CLI Options</h2>
+  <table>
+    <thead><tr><th>Option</th><th>Default</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>[files …]</code></td><td>—</td><td>One or more <code>.elog</code>, <code>.elog.gz</code>, <code>.csv</code>, <code>.tsv</code>, <code>.psv</code>, <code>.txt</code> files. Empty → file dialog.</td></tr>
+      <tr><td><code>-d</code>, <code>--delimiter CHAR</code></td><td>auto</td><td>Force column separator (<code>\t</code>, <code>|</code>, <code>,</code>, …) for non-tracker files.</td></tr>
+      <tr><td><code>--header-row N[:k]</code></td><td><code>0</code></td><td>Header block specification — 0-based start row; optional <code>:k</code> sets block height.</td></tr>
+      <tr><td><code>--num-cols N</code></td><td>auto</td><td>Override the column count. <code>0</code> = auto-detect from header.</td></tr>
+      <tr><td><code>--drop-bad-lines</code></td><td>off</td><td>Drop rows whose column count differs from the header instead of padding/trimming.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="elog-format">
+  <h2>Elog Format</h2>
+  <p>CTE tracker logs contain a repeating 3-line header pattern interleaved with data rows:</p>
+<pre><code>====================...==     ← separator (≥ 20 '=' characters)
+col1 | col2 | col3             ← column-name line
+====================...==     ← separator
+row1a | row1b | row1c          ← data rows (repeats every ~50 rows)
+row2a | row2b | row2c
+…
+====================...==     ← next header block — stripped
+col1 | col2 | col3
+====================...==
+…</code></pre>
+  <p>SuperTracker's parser uses a small state machine to detect each header occurrence and remove it,
+     keeping only the first set of column names. See <code>_parse_elog_stream()</code> in
+     <code>supertracker.py</code>.</p>
+</section>
+
+<section id="header-spec">
+  <h2>Header-Row Spec (<code>--header-row</code>)</h2>
+  <p>The header-row specification controls how non-tracker delimited files are parsed:</p>
+  <table>
+    <thead><tr><th>Spec</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>0</code></td><td>Single-row header at row 0 (default)</td></tr>
+      <tr><td><code>N</code></td><td>Single-row header at 0-based row <em>N</em></td></tr>
+      <tr><td><code>N:k</code></td><td>Header block of <em>k</em> rows starting at row <em>N</em>; column names taken from the <strong>last non-separator</strong> row of the block</td></tr>
+    </tbody>
+  </table>
+  <div class="note">
+    <strong>Repeated headers:</strong> Every row in the file that exactly matches any row of the header
+    block is stripped from the data — so periodic re-printed headers are removed automatically.
+  </div>
+</section>
+
+<section id="range-filter">
+  <h2>Hex / Binary Range Filtering</h2>
+  <p>Elog tabs install an extended <code>RANGE</code> filter that understands numeric prefixes in both
+     the filter spec and the cell values:</p>
+  <ul>
+    <li>Decimal: <code>10..20</code></li>
+    <li>Hex: <code>0x10..0x2F</code></li>
+    <li>Binary: <code>0b1010..0b1111</code></li>
+    <li>Mixed: <code>0x10..255</code></li>
+  </ul>
+  <p>Standard CSV tabs continue to use SuperCSV's decimal-only range behaviour. The override is
+     implemented via <code>_xt_parse_number()</code>, <code>_xt_parse_range_pairs()</code>,
+     <code>_xt_coerce_series()</code> and <code>_xt_apply_col_filter()</code>.</p>
+</section>
+
+<section id="architecture">
+  <h2>Architecture</h2>
+  <p>SuperTracker is a thin extension of SuperCSV:</p>
+<pre><code>SuperCSV (tools/supercsv/supercsv.py)
+   └── SuperTracker (tools/supertracker/supertracker.py)
+        • overrides _open_dialog()  → adds elog file types
+        • overrides _open_csv()     → routes elog files to _load_elog_as_df()
+        • adds _open_elog()         → tracker-tab loader with hex/bin range filter
+        • adds _ask_tracker_csv_options() → extended dialog for non-tracker files</code></pre>
+  <p>All UI surfaces — tabs, toolbar, filter bar, column picker, font controls, recent-files menu,
+     export / email actions — are inherited unchanged from SuperCSV.</p>
+</section>
+
+<section id="api">
+  <h2>Internal API Reference</h2>
+  <table>
+    <thead><tr><th>Symbol</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>_is_elog(path)</code></td><td>True for paths ending <code>.elog</code> or <code>.elog.gz</code>.</td></tr>
+      <tr><td><code>_is_separator(line)</code></td><td>True if a line begins with ≥ 20 <code>=</code> characters.</td></tr>
+      <tr><td><code>_is_separator_row(row)</code></td><td>True if a parsed row consists of repeated non-alphanumeric characters (e.g. <code>---</code>, <code>===</code>).</td></tr>
+      <tr><td><code>_parse_header_spec(spec)</code></td><td>Parses <code>"N"</code> / <code>"N:k"</code> → <code>(start, count)</code>.</td></tr>
+      <tr><td><code>_parse_elog_stream(fileobj)</code></td><td>State-machine parser returning <code>(columns, rows)</code> for an elog stream.</td></tr>
+      <tr><td><code>_load_elog_as_df(path, num_cols=0)</code></td><td>Open <code>.elog</code>/<code>.elog.gz</code> and return a <code>pandas.DataFrame</code>.</td></tr>
+      <tr><td><code>_read_tracker_csv(path, sep, header_spec, num_cols, drop_bad)</code></td><td>Read a delimited file with header-block awareness; returns <code>(DataFrame, n_adjusted)</code>.</td></tr>
+      <tr><td><code>_xt_parse_number(s)</code></td><td>Parse decimal / hex (<code>0x…</code>) / binary (<code>0b…</code>) numeric strings.</td></tr>
+      <tr><td><code>_xt_parse_range_pairs(spec)</code></td><td>Parse a range filter spec into <code>[(lo, hi), …]</code>.</td></tr>
+      <tr><td><code>_xt_coerce_series(series)</code></td><td>Coerce a pandas Series of mixed-base numeric strings to float.</td></tr>
+      <tr><td><code>_xt_apply_col_filter(series, text)</code></td><td>Apply a column filter expression — extends SuperCSV's filter with hex/bin support.</td></tr>
+      <tr><td><code>SuperTracker(SuperCSV)</code></td><td>Application class. Constructor accepts <code>files</code>, <code>cli_sep</code>, <code>cli_drop_bad</code>, <code>cli_header_spec</code>, <code>cli_num_cols</code>.</td></tr>
+      <tr><td><code>main()</code></td><td>CLI entry point — parses arguments and runs <code>SuperTracker(...).mainloop()</code>.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="examples">
+  <h2>Examples</h2>
+
+  <h3>Open a single tracker file</h3>
+<pre><code>python3 supertracker.py fe_ifu_ic_sb_trk_T0.elog.gz</code></pre>
+
+  <h3>Open several tracker logs</h3>
+<pre><code>python3 supertracker.py trk_T0.elog.gz trk_T1.elog.gz</code></pre>
+
+  <h3>Mix tracker and CSV files</h3>
+<pre><code>python3 supertracker.py results.elog.gz summary.csv</code></pre>
+
+  <h3>Space-delimited file, 3-row header starting at row 2, 8 columns</h3>
+<pre><code>python3 supertracker.py -d ' ' --header-row 2:3 --num-cols 8 my_report.txt</code></pre>
+
+  <h3>Drop non-compliant rows instead of padding</h3>
+<pre><code>python3 supertracker.py --drop-bad-lines data.csv</code></pre>
+
+  <h3>Open file dialog (no args)</h3>
+<pre><code>python3 supertracker.py</code></pre>
+</section>
+
+<section id="tests">
+  <h2>Tests</h2>
+  <p>Unit tests live in <code>tests/test_supertracker.py</code> and cover the elog parser, header-spec
+     parsing, separator detection, hex / binary range filters, and the tracker CSV loader.</p>
+<pre><code>cd tools/supertracker
+python3 -m pytest tests/</code></pre>
+</section>
+
+</main>
+</div>
+
+<footer>
+  SuperTracker — part of the FitScripts core-tools suite. Built on SuperCSV.
+</footer>
+
+</body>
+</html>
