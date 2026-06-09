@@ -153,6 +153,7 @@ _reqs_importable() {
         local pkg mod
         pkg="$(echo "$line" | sed 's/[><=!;[:space:]\[].*//')"
         mod="$(_pkg_to_module "$pkg")"
+        info "  Running: $PY3 -c 'import ${mod}'"
         "$PY3" -c "import ${mod}" 2>/dev/null || return 1
     done < <(grep -vE '^\s*#|^\s*$' "$req")
     return 0
@@ -176,19 +177,21 @@ else
             skip "${tool_name}: no external Python dependencies."
             continue
         fi
-        info "${tool_name}: checking dependencies ..."
-        if pip_out=$("$PY3" -m pip install --user -r "$req" 2>&1); then
-            ok "${tool_name}: dependencies satisfied."
+        info "${tool_name}: checking if dependencies are already importable ..."
+        if _reqs_importable "$req"; then
+            skip "${tool_name}: packages already importable — pip install skipped."
         else
-            echo "$pip_out"
-            # pip failed (network/proxy timeout) — check if packages are already importable
-            if _reqs_importable "$req"; then
-                skip "${tool_name}: packages already importable — pip skipped (no network needed)."
+            PIP_PROXY="${HTTPS_PROXY:-${https_proxy:-http://proxy-chain.intel.com:911}}"
+            info "${tool_name}: missing packages — running pip install."
+            info "  Running: $PY3 -m pip install --proxy $PIP_PROXY --user -r $req"
+            if pip_out=$("$PY3" -m pip install --proxy "$PIP_PROXY" --user -r "$req" 2>&1); then
+                ok "${tool_name}: dependencies installed."
             else
+                echo "$pip_out"
                 warn "${tool_name}: pip install failed AND packages are not importable."
-                warn "  If behind a proxy, retry with:"
+                warn "  Retry manually with:"
                 warn "    pip install --user -r ${req} \\"
-                warn "      --proxy \"\${HTTPS_PROXY:-\${https_proxy}}\" \\"
+                warn "      --proxy http://proxy-chain.intel.com:911 \\"
                 warn "      --trusted-host pypi.org --trusted-host files.pythonhosted.org"
             fi
         fi

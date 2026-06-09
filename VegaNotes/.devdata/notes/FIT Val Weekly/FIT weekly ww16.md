@@ -38,7 +38,7 @@
 			!AR #id T-WKYEQQ Followup with Apar about the fix once he is free @aboli
 		!task #id T-CV97FD Val Plan development and review #eta 2026-05-28 #status done #priority P0
 			!AR #id T-VG12T9 SMT related COI, assertions #status done #eta 2026-05-22
-			!AR #id T-Y2A944 SEC for STSR?
+			!AR #id T-Y2A944 SEC for STSR? #status done
 		!task #id T-TAAGK0 STSR bug fix done in GFC to be done in JNC - IQ bypass CB added #priority low #eta 2026-06-19
 		!task #id T-9VNZDM Added new assertion on outputs with no assertions in GFC  #eta 2026-06-24 
 			!AR #id T-H0NNND 25 new assertions added - #status wip
@@ -49,7 +49,7 @@
 			#note all were IDQ credit related. Real IDQ full is
 			#note IDQ size - capsule size -1.
 			#note the covers needed to reflect that
-			!AR #id T-ED9XED 0/6 Done 
+			!AR #id T-ED9XED 0/6 Done #status done
 @Namratha
 	!task #id T-39NW4C SEC IDQ weekly failures to debug 
 		!AR #id T-1MW9C8 fe::Formal::Assert(sec)::cex::idq.idimmCM*H::gfc-a0 #status done
@@ -233,7 +233,7 @@
 !task #id T-78A0MT MS SMT coding @abolisaw #status in-progress #eta 2026-06-12 #priority P0
 	#note 9 files done, 4 files left as discussed with chen, more file to take after that
 
-!task #id T-TJC2BC New Thread Hang assertion @abolisaw #status in-progress
+!task #id T-TJC2BC New Thread Hang assertion @abolisaw #status done
 	#note added new assertion, after multiple debugs and reviews, ready to TI
 
 !task #id T-RJ7269 GFC A0 FV Paranoia Tasks @njammala #status done
@@ -270,16 +270,24 @@
 
 !task #id T-DDPYQY WW23_JNC_Bucket_Debug @khbyers #eta 2026-ww23 #status in-progress
 	!AR #id T-C6MFMS macrofusion bucket, root cause CTE issue on listening to external snoops @khbyers #status done
-	!AR #id T-D74VDF Try to create temp workaround for broadcast in CTE until RTL is coded @khbyers #status in-progress
-	!AR #id T-RJEB3Z UOP Clip mismatch @khbyers #status in-progress
+	!AR #id T-D74VDF Try to create temp workaround for broadcast in CTE until RTL is coded @khbyers #status done
+	!AR #id T-RJEB3Z UOP Clip mismatch @khbyers #status done
 	!AR #id T-ZS3AM2 Thread Hang, Long MS stall on T1 causing hang on T0 @khbyers #status in-progress
 
 !task #id T-66WRAH Enable MBB Agent in MT @khbyers #status done
 
 !task #id T-Z3Z4VD SEC Proof for STSR @abolisaw #eta 2026-06-26
 
-!task #id T-W3J83X GFC a0 Paranoia @abolisaw #status in-progress #eta 2026-06-05
+!task #id T-W3J83X GFC a0 Paranoia @abolisaw #status in-progress #eta ww24.1
 	#note 2 STSR assertions to check, one is in FPV_RESTRICT need to check why and other has a wrong format
 	#note 1: this fails a lot in simulation. Edwin suggested it can be removed if assume was not used,I checked and proof is not affected, so can be removed, Chen suggested to run coi_proof too, need to run that and make the final finishes.
 	#note 2. STSR_Assume_DSBE_Assert_if_dsFirstVec_than_dsbqtid_and_DSBOwnership
 	#note Assume properties should not be in interface files, if needed it should be in a different format. This was flagged for using assume property but when I checked this is assert property itself in interface file. have sent analysis to Daher and chen, waiting to see if anything else was required for this.
+
+!task #id T-DB7HX1 WW24 GFC - A0 Bucket Debug @khbyers #status in-progress #eta WW24.5
+	#note Husam added injections code 1.5months back, likely CTE issue
+	!AR #id T-YW62FY MCA Agent Injecting IFU Long Stall @khbyers
+
+!task #id T-5WGW2J WW24_JNC_Bucket_Debug @khbyers #status in-progress #eta WW24.5
+
+!task #id T-N3BSET Create Thread Mode Log @khbyers #status in-progress #eta WW24.5
