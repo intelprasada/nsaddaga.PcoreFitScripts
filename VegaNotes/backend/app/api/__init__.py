@@ -368,6 +368,49 @@ def _collect_filter(values: list[str] | None) -> list[str]:
 
 import re as _re
 _UUID_RE = _re.compile(r"^T-[0-9A-Z]{6,}$")
+# Locate `#id T-XXXXXX` tokens on a single line; matches the parser's
+# rule for stamped task uuids (see backend/app/parser/lexer.py).
+_ID_TOKEN_RE = _re.compile(r"#id\s+(T-[0-9A-Z]{6,})\b")
+
+
+def _find_task_line_in_md(md: str, t: Task) -> Optional[int]:
+    """Locate the current 0-indexed line of ``t`` inside ``md``.
+
+    Used by :func:`patch_task` to **re-anchor** a popover patch when the
+    cached ``Task.line`` has gone stale relative to disk (see issue
+    #239). The previous implementation trusted ``t.line`` and could
+    silently rewrite the wrong line when the file shifted between
+    fast-path popover patches.
+
+    Strategy:
+
+    * If ``t.task_uuid`` is set, scan ``md`` for ``#id <uuid>``. This is
+      the only fully-reliable matcher because uuids are unique.
+    * Otherwise (unstamped task) parse ``md`` and match by slug. If more
+      than one task in the file shares this slug, return ``None`` —
+      caller must fail closed rather than risk patching the wrong task.
+
+    Returns ``None`` when the task cannot be uniquely located. Caller
+    should treat that as a 409 / 404 (the task may have been removed or
+    renamed out-of-band).
+    """
+    if t.task_uuid:
+        target = t.task_uuid
+        for i, line in enumerate(md.splitlines()):
+            m = _ID_TOKEN_RE.search(line)
+            if m and m.group(1) == target:
+                return i
+        return None
+    # Unstamped: fall back to slug match via the parser, which does the
+    # same de-duplication / continuation handling as the indexer.
+    try:
+        parsed = parse(md).get("tasks", [])
+    except Exception:
+        return None
+    matches = [pt for pt in parsed if pt.get("slug") == t.slug]
+    if len(matches) == 1:
+        return matches[0]["line"]
+    return None
 
 
 def _resolve_task(ref: str, s: Session) -> Task:
@@ -1977,105 +2020,122 @@ def patch_task(
     if role != "manager" and not is_owner:
         raise HTTPException(403, "members can only edit their own tasks")
 
-    md = note.body_md
-    changed = False
-    old_status = t.status
-    status_changed = False
-    if body.status is not None:
-        md = update_task_status(md, t.line, body.status)
-        status_changed = (body.status != old_status)
-        changed = True
-    if body.priority is not None:
-        md = (replace_attr(md, t.line, "priority", body.priority.strip())
-              if body.priority.strip() else remove_attr(md, t.line, "priority"))
-        changed = True
-    if body.eta is not None:
-        md = (replace_attr(md, t.line, "eta", body.eta.strip())
-              if body.eta.strip() else remove_attr(md, t.line, "eta"))
-        changed = True
-    if body.owners is not None:
-        cleaned = [o.strip().lstrip("@") for o in body.owners if o and o.strip()]
-        md = replace_multi_attr(md, t.line, "owner", cleaned)
-        changed = True
-    if body.features is not None:
-        cleaned = [f.strip() for f in body.features if f and f.strip()]
-        md = replace_multi_attr(md, t.line, "feature", cleaned)
-        changed = True
-    if body.add_note is not None and body.add_note.strip():
-        # Guardrail: refuse note text that looks like a task / AR declaration.
-        # Persisting it as a `#note` continuation would silently lose the
-        # intended structure (the parser doesn't recognize `#note !AR ...`
-        # as a task line).  See issue #125.
-        for raw_line in body.add_note.splitlines():
-            stripped = raw_line.lstrip().lstrip("-*+ ").lstrip()
-            low = stripped.lower()
-            if low.startswith(("!ar ", "!ar\t", "!task ", "!task\t")) or low in {"!ar", "!task"}:
-                raise HTTPException(
-                    400,
-                    "note text starts with `!AR` or `!task` — that won't be "
-                    "recognized as a task. Use the dedicated 'Add an AR' "
-                    "field (POST /api/tasks/{ref}/ars) for action requests.",
-                )
-        md = append_note(md, t.line, body.add_note)
-        changed = True
-    elif body.notes is not None:
-        # Legacy overwrite-the-block path. Discouraged; see issue #53.
-        md = replace_notes(md, t.line, t.indent, body.notes)
-        changed = True
-
-    if not changed:
-        return _task_to_dict(s, t)
-
     full = settings.notes_dir / note.path
-    # RMW under the file lock: re-read current bytes from disk so a
-    # concurrent writer (vim, another tab, another PATCH) doesn't get
-    # silently overwritten by our DB-cached body_md. See issue #60.
+    if not full.exists():
+        raise HTTPException(404, "note file missing on disk")
+
+    # ── RMW under the file lock ───────────────────────────────────────────
+    # The fast-path popover (issue #140) updates ``note.body_md`` without
+    # re-running the parser, so individual ``Task.line`` values in the
+    # index can drift from disk over time. To keep popover patches from
+    # silently rewriting the wrong line (issue #239: T-EWGPDY appeared
+    # done in kanban but the ``#status done`` token never reached the md
+    # file because ``t.line`` pointed at a sibling row that already had
+    # ``#status done``), we now:
+    #
+    #   1. acquire the file lock first,
+    #   2. read the authoritative disk content,
+    #   3. re-anchor ``t.line`` by searching disk for ``#id <uuid>``
+    #      (or, for unstamped tasks, an unambiguous slug match),
+    #   4. apply mutations against disk content (not the cached body_md),
+    #   5. write + reindex while still holding the lock.
+    #
+    # Replaces the previous broad ``disk_md != note.body_md`` 409 check;
+    # mutations are surgical (token-level), so concurrent edits to the
+    # same task that don't touch the patched fields are preserved.
     with with_file_lock(full):
-        if full.exists():
-            disk_md = full.read_text(encoding="utf-8")
-            if disk_md != note.body_md:
-                # Replay our mutations against the freshest content so the
-                # patch is correctly anchored. The line numbers we have are
-                # from the cached parse; if the file has shifted we have to
-                # bail out rather than corrupt it. The client should refetch
-                # the task and retry.
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "error": "stale_task",
-                        "message": "task base content changed under you; refetch and retry",
-                    },
-                )
+        disk_md = full.read_text(encoding="utf-8")
+        actual_line = _find_task_line_in_md(disk_md, t)
+        if actual_line is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "stale_task",
+                    "message": "task no longer present in current file content; refetch and retry",
+                },
+            )
+        if actual_line != t.line:
+            t.line = actual_line  # self-heal stale index
+
+        md = disk_md
+        changed = False
+        old_status = t.status
+        status_changed = False
+        if body.status is not None:
+            md = update_task_status(md, t.line, body.status)
+            status_changed = (body.status != old_status)
+            changed = True
+        if body.priority is not None:
+            md = (replace_attr(md, t.line, "priority", body.priority.strip())
+                  if body.priority.strip() else remove_attr(md, t.line, "priority"))
+            changed = True
+        if body.eta is not None:
+            md = (replace_attr(md, t.line, "eta", body.eta.strip())
+                  if body.eta.strip() else remove_attr(md, t.line, "eta"))
+            changed = True
+        if body.owners is not None:
+            cleaned = [o.strip().lstrip("@") for o in body.owners if o and o.strip()]
+            md = replace_multi_attr(md, t.line, "owner", cleaned)
+            changed = True
+        if body.features is not None:
+            cleaned = [f.strip() for f in body.features if f and f.strip()]
+            md = replace_multi_attr(md, t.line, "feature", cleaned)
+            changed = True
+        if body.add_note is not None and body.add_note.strip():
+            # Guardrail: refuse note text that looks like a task / AR declaration.
+            # Persisting it as a `#note` continuation would silently lose the
+            # intended structure (the parser doesn't recognize `#note !AR ...`
+            # as a task line).  See issue #125.
+            for raw_line in body.add_note.splitlines():
+                stripped = raw_line.lstrip().lstrip("-*+ ").lstrip()
+                low = stripped.lower()
+                if low.startswith(("!ar ", "!ar\t", "!task ", "!task\t")) or low in {"!ar", "!task"}:
+                    raise HTTPException(
+                        400,
+                        "note text starts with `!AR` or `!task` — that won't be "
+                        "recognized as a task. Use the dedicated 'Add an AR' "
+                        "field (POST /api/tasks/{ref}/ars) for action requests.",
+                    )
+            md = append_note(md, t.line, body.add_note)
+            changed = True
+        elif body.notes is not None:
+            # Legacy overwrite-the-block path. Discouraged; see issue #53.
+            md = replace_notes(md, t.line, t.indent, body.notes)
+            changed = True
+
+        if not changed:
+            return _task_to_dict(s, t)
+
         _safe_write_unlocked(full, md, notes_dir=settings.notes_dir)
 
-    # ── Fast index update (issue #140): only this single task changed ────
-    # The popover never mutates more than one task at a time, so a full
-    # reindex_file (which re-parses every line and re-fingerprints every
-    # task) is wasteful. Apply the same mutations directly to the index
-    # rows for `task_id`, plus a single line-shift UPDATE for any tasks
-    # below the insertion point if append_note added rows.
-    new_disk = (settings.notes_dir / note.path).read_text(encoding="utf-8")
-    new_mtime = (settings.notes_dir / note.path).stat().st_mtime
-    line_shift = 0
-    line_shift_pivot = -1
-    if body.add_note is not None and body.add_note.strip():
-        line_shift = sum(1 for ln in body.add_note.split("\n") if ln.strip())
-        line_shift_pivot = t.line
-    apply_single_task_patch_to_index(
-        s,
-        note_id=note.id,
-        task_id=task_id,
-        new_body_md=new_disk,
-        new_mtime=new_mtime,
-        line_shift=line_shift,
-        line_shift_pivot=line_shift_pivot,
-        status=body.status,
-        priority=body.priority,
-        eta=body.eta,
-        owners=body.owners,
-        features=body.features,
-        add_note=body.add_note,
-    )
+        # ── Fast index update (issue #140): only this single task changed ────
+        # The popover never mutates more than one task at a time, so a full
+        # reindex_file (which re-parses every line and re-fingerprints every
+        # task) is wasteful. Apply the same mutations directly to the index
+        # rows for `task_id`, plus a single line-shift UPDATE for any tasks
+        # below the insertion point if append_note added rows.
+        new_disk = full.read_text(encoding="utf-8")
+        new_mtime = full.stat().st_mtime
+        line_shift = 0
+        line_shift_pivot = -1
+        if body.add_note is not None and body.add_note.strip():
+            line_shift = sum(1 for ln in body.add_note.split("\n") if ln.strip())
+            line_shift_pivot = t.line
+        apply_single_task_patch_to_index(
+            s,
+            note_id=note.id,
+            task_id=task_id,
+            new_body_md=new_disk,
+            new_mtime=new_mtime,
+            line_shift=line_shift,
+            line_shift_pivot=line_shift_pivot,
+            status=body.status,
+            priority=body.priority,
+            eta=body.eta,
+            owners=body.owners,
+            features=body.features,
+            add_note=body.add_note,
+        )
 
     # ── Propagate to all ref-row files ────────────────────────────────────
     # Any .md file that references this task via `#task T-XXXX` / `#AR T-XXXX`

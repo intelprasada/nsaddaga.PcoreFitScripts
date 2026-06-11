@@ -1452,3 +1452,101 @@ def test_list_tasks_accepts_repeated_query_keys_for_filters(client):
     titles = sorted(t["title"] for t in r.json()["tasks"]
                     if t["title"] in {"Alpha", "Beta", "Gamma"})
     assert titles == ["Gamma"], titles
+
+
+# ---------------------------------------------------------------------------
+# #239 — popover PATCH must self-heal when Task.line has gone stale.
+# ---------------------------------------------------------------------------
+
+def test_patch_task_self_heals_stale_line(client, monkeypatch):
+    """If Task.line is stale (drifted vs disk), PATCH must re-anchor by
+    task_uuid before mutating the file."""
+    md = (
+        "# stale\n"
+        "## Self-heal probe\n"
+        "!task Anchor task @alice #id T-STALE1\n"
+        "!task Drifted task @alice #id T-STALE2\n"
+    )
+    r = client.put(
+        "/api/notes",
+        json={"path": "stale_line.md", "body_md": md},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+
+    from app.config import settings as _s
+    from app.db import get_engine
+    from sqlmodel import Session as _Session, select as _select
+    from app.models import Task as _Task
+    from sqlalchemy import text as _sa_text
+    eng = get_engine()
+    with _Session(eng) as session:
+        t1 = session.exec(_select(_Task).where(_Task.task_uuid == "T-STALE1")).first()
+        t2 = session.exec(_select(_Task).where(_Task.task_uuid == "T-STALE2")).first()
+        assert t1.line != t2.line
+        good_line = t2.line
+        bad_line = t1.line
+    # Disable the awatch-driven reindex so it doesn't quietly heal the
+    # corruption we're about to plant. We want patch_task itself to do
+    # the self-heal, not the watcher.
+    import app.indexer as _idx
+    monkeypatch.setattr(_idx, "reindex_file", lambda *a, **k: None)
+    from app import api as _api_pkg
+    monkeypatch.setattr(_api_pkg, "reindex_file", lambda *a, **k: None, raising=False)
+    with _Session(eng) as session:
+        session.exec(_sa_text("UPDATE task SET line = :ln WHERE task_uuid = 'T-STALE2'").bindparams(ln=bad_line))
+        session.commit()
+    r = client.patch(
+        "/api/tasks/T-STALE2",
+        json={"status": "done"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+
+    full = _s.notes_dir / "stale_line.md"
+    text = full.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    t1_lines = [ln for ln in lines if "T-STALE1" in ln]
+    t2_lines = [ln for ln in lines if "T-STALE2" in ln]
+    assert len(t1_lines) == 1 and len(t2_lines) == 1
+    assert "#status done" in t2_lines[0], (
+        f"T-STALE2 line missing #status done: {t2_lines[0]!r}"
+    )
+    assert "#status done" not in t1_lines[0], (
+        f"T-STALE1 line should be untouched but got: {t1_lines[0]!r}"
+    )
+    with _Session(eng) as session:
+        t2 = session.exec(_select(_Task).where(_Task.task_uuid == "T-STALE2")).first()
+        assert t2.status == "done"
+
+
+def test_patch_task_409_when_uuid_missing_from_disk(client):
+    """If the task's #id token has been removed from the file out-of-band,
+    PATCH must fail closed rather than guess."""
+    md = (
+        "# missing\n"
+        "## Vanish probe\n"
+        "!task Vanishing task @alice #id T-VAN001\n"
+    )
+    r = client.put(
+        "/api/notes",
+        json={"path": "vanish.md", "body_md": md},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200
+
+    from app.config import settings as _s
+    full = _s.notes_dir / "vanish.md"
+    full.write_text(
+        full.read_text(encoding="utf-8").replace("#id T-VAN001", "").rstrip() + "\n",
+        encoding="utf-8",
+    )
+
+    r = client.patch(
+        "/api/tasks/T-VAN001",
+        json={"status": "done"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 409, r.text
+    detail = r.json().get("detail", {})
+    assert isinstance(detail, dict) and detail.get("error") == "stale_task"

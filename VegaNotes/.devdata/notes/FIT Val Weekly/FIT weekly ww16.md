@@ -25,9 +25,8 @@
 		!task #id T-S3YSN7 Review assertions that have not reached a proven status #status done #eta 2026-06-12
 			#note 4/6 converged. need to review the code myself
 			#update 2/4 assertions fixed, review pending
-		!task #id T-ARYRJN Assumptions review updates model TI 
-			#status done
-		!task #id T-63C696 Review starvation covers. #status done 
+		!task #id T-ARYRJN Assumptions review updates model TI #status done
+		!task #id T-63C696 Review starvation covers. #status in-progress 
 			!AR #id T-TC4QCP converted cover into assertion - found an RTL bug 
 		!task #id T-AX24MR RTL bug fix model has FV failures #status blocked
 			#note test note
@@ -51,7 +50,7 @@
 			#note the covers needed to reflect that
 			!AR #id T-ED9XED 0/6 Done #status done
 @Namratha
-	!task #id T-39NW4C SEC IDQ weekly failures to debug 
+	!task #id T-39NW4C SEC IDQ weekly failures to debug #status done
 		!AR #id T-1MW9C8 fe::Formal::Assert(sec)::cex::idq.idimmCM*H::gfc-a0 #status done
 		!AR #id T-42QB7M fe::Formal::Assert(sec)::cex::idq.IDBiqWrEnBranchEventM*H::gfc-a0" #status done
 			due to Jasper tool issue
@@ -60,9 +59,8 @@
 		!AR #id T-NG1CV5 MRN deep dive #eta ww17.3 #status done
 	!task #id T-C0WWN0 Cover buckets debug 
 		!AR #id T-MJ453V 10 covers unreachable #eta ww19 
-	!task #id T-800631 JNC bucket debug 
-		!AR #id T-W7M4KZ MRN counter bucket debug  
-			#status done
+	!task #id T-800631 JNC bucket debug #status done
+		!AR #id T-W7M4KZ MRN counter bucket debug  #status done
 	!task #id T-1APKMK IDQ formal plan review #eta ww21 @nchatla
 
 @Muana
@@ -95,8 +93,8 @@
 
 @Kelsey
 	#project jnc
-		!task #id T-WAHSH6 JNC work on moving complex nukes from all thread to thread specific 
-			#eta ww17 #status done
+		!task #id T-WAHSH6 JNC work on moving complex nukes from all thread to thread specific #status done
+			#eta ww17
 		!task #id T-1Q99SZ JNC CTE ready for all state transitions mentioned in UCODE HAS #status done #eta W21
 
 @Ragavi
@@ -171,12 +169,9 @@
 		!task #id T-8QA47X SVA debug: ONEHOT_DECODE_ic_mop_choose_way_mif2h ww15e #status done 
 		!task #id T-VXA4K2 SVA debug: ltt_fetch_from_ip_match ww15e #status done 
 		!task #id T-0XNJTM Extended run for btb duplicate queue feature with Marty’s new implementation #status done 
-		!task #id T-AEGYJY SVA debug: btb round robin check selected cluster for update mismatch when btb update conflict 
-			#status done
-		!task #id T-NQZ949 SVA debug: btp update queue valid mismatch 
-			#status done
-		!task #id T-18XD5R SVA debug: mop update data mismatch 
-			#status done
+		!task #id T-AEGYJY SVA debug: btb round robin check selected cluster for update mismatch when btb update conflict #status done
+		!task #id T-NQZ949 SVA debug: btp update queue valid mismatch #status done
+		!task #id T-18XD5R SVA debug: mop update data mismatch #status done
 @Niharika
 	#project jnc
 		!task #id T-BZWKMW IDQ val plan review #eta ww21

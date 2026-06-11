@@ -36,10 +36,9 @@
 			#AR T-8YJP85 why failing now?
 		#AR T-KABQ7A fe::Assert::fv_idq_assume_mite_assert_legal_valid_ordid_range::msid_idq_fv_idq_dsbe_intf_inst_genblk::gfc-a0
 			#status wip
-	#task T-39NW4C SEC IDQ weekly failures to debug
+	#task T-39NW4C SEC IDQ weekly failures to debug #status done
 		#AR T-1MW9C8 fe::Formal::Assert(sec)::cex::idq.idimmCM*H::gfc-a0
-			#status wip
-		#AR T-42QB7M fe::Formal::Assert(sec)::cex::idq.IDBiqWrEnBranchEventM*H::gfc-a0" #status done
+		#AR T-42QB7M fe::Formal::Assert(sec)::cex::idq.IDBiqWrEnBranchEventM*H::gfc-a0"
 			due to Jasper tool issue
 	#task T-MZ0P9M Prepare Presentation on IDQ Arch
 		#AR T-NG1CV5 MRN deep dive #eta ww17.3
@@ -47,7 +46,7 @@
 		#AR T-K1CFFK quantitative data to be reported here #eta ww17.5
 	#task T-C0WWN0 Cover buckets debug
 		#AR T-MJ453V 10 covers unreachable #eta ww19
-	#task T-800631 JNC bucket debug
+	#task T-800631 JNC bucket debug #status done
 @Muana
 	#project jnc
 		#task T-8V3204 IFU ramp up
@@ -141,4 +140,4 @@
 	!AR #id T-13PHJZ Update query to allow for both FM/IDC bucket owners @gajith
 	!AR #id T-E8SXVZ script to parse csv and reassign bucket owners @gajith
 
-!task #id T-EWGPDY Cover property clean up in GFC @njammala
+!task #id T-EWGPDY Cover property clean up in GFC @njammala #status done
