@@ -804,6 +804,86 @@ def test_create_ar_under_task_inserts_inside_block(client):
     assert "newly added AR" in child_titles
 
 
+def test_create_ar_inherits_parent_owner_not_requester(client):
+    """Popover AR-create (only ``title`` in the payload) must inherit the
+    parent task's owner — NOT silently tag the AR with the requester's
+    name. Surgical write-up: project manager ``admin`` files an AR under
+    a task explicitly owned by ``khbyers`` (with no overriding section
+    ``@owner`` heading); the resulting !AR line must carry ``@khbyers``
+    and the API ``owners`` field must reflect that — admin is the
+    requester, not an owner.
+    """
+    _create_user(client, "khbyers")
+    notes_dir = DATA / "notes" / "arinheritproj"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    # No `@admin` section heading — parent's only owner is the explicit
+    # `@khbyers` token. This isolates the inheritance behaviour from
+    # section-context owner injection.
+    seed = (
+        "# Weekly\n"
+        "!task #id T-INHERIT01 Parent owned by khbyers @khbyers\n"
+    )
+    r = client.put("/api/notes",
+                   json={"path": "arinheritproj/wk.md", "body_md": seed},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    # admin (manager / requester) files an AR with the popover payload
+    # shape — only ``title``. No owners list at all.
+    r = client.post("/api/tasks/T-INHERIT01/ars",
+                    json={"title": "follow up debug"},
+                    headers={"Authorization": AUTH})
+    assert r.status_code == 201, r.text
+    new_ar = r.json()
+    assert new_ar["owners"] == ["khbyers"], (
+        f"AR should inherit parent owner [khbyers], got {new_ar['owners']!r}"
+    )
+    assert "admin" not in new_ar["owners"], (
+        "AR must not be silently tagged with the requester (admin)"
+    )
+
+    md = (DATA / "notes" / "arinheritproj" / "wk.md").read_text(encoding="utf-8")
+    ar_line = next(l for l in md.splitlines() if "follow up debug" in l)
+    assert "@khbyers" in ar_line, f"!AR line missing @khbyers token:\n{ar_line}"
+    assert "@admin" not in ar_line, (
+        f"!AR line should not carry @admin (the requester):\n{ar_line}"
+    )
+
+
+def test_create_ar_explicit_owners_override_inheritance(client):
+    """When the caller passes a non-empty ``owners`` list, that list wins
+    — inheritance from the parent only kicks in when ``owners`` is None.
+    """
+    _create_user(client, "alice")
+    notes_dir = DATA / "notes" / "aroverrideproj"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    seed = (
+        "# Weekly\n"
+        "!task #id T-OVRD0001 Parent owned by bob @bob\n"
+    )
+    _create_user(client, "bob")
+    client.put("/api/notes",
+               json={"path": "aroverrideproj/wk.md", "body_md": seed},
+               headers={"Authorization": AUTH})
+
+    r = client.post("/api/tasks/T-OVRD0001/ars",
+                    json={"title": "delegate work", "owners": ["alice"]},
+                    headers={"Authorization": AUTH})
+    assert r.status_code == 201, r.text
+    # Note: parser child-inheritance of parent owner tokens means the API
+    # response also includes @bob; what we're pinning here is that the
+    # written !AR line carries @alice (the explicit override) and NOT @bob
+    # (which would have been the inheritance default).
+    md = (DATA / "notes" / "aroverrideproj" / "wk.md").read_text(encoding="utf-8")
+    ar_line = next(l for l in md.splitlines() if "delegate work" in l)
+    assert "@alice" in ar_line, f"explicit @alice missing from !AR line:\n{ar_line}"
+    assert "@bob" not in ar_line, (
+        f"!AR line should not carry @bob — explicit owners override "
+        f"parent-inheritance:\n{ar_line}"
+    )
+    assert "alice" in r.json()["owners"]
+
+
 def test_add_ar_propagates_to_ref_row_files(client):
     """POST /api/tasks/{ref}/ars must add a `#AR <new_id> <title>` row to
     every md file that already contains a `#task <parent_uuid>` ref row.
@@ -919,6 +999,90 @@ def test_add_ar_skips_files_without_parent_ref(client):
     loose_after = (DATA / "notes" / "arproseproj" / "loose.md").read_text(encoding="utf-8")
     assert prose == loose_after, "prose-only note must be untouched"
     assert new_id not in loose_after
+
+
+def test_archived_notes_are_not_mutated_by_ar_or_patch(client):
+    """Issue #253: AR-create / task PATCH must NEVER rewrite archived
+    weekly notes, even when the archive contains a `#task <parent>` ref
+    row pointing at the active task. The archive-style rollover (#251)
+    leaves such ref rows in every prior week's archive, so without the
+    ``archived == False`` filter on the candidate-notes query, every
+    edit on a long-lived task fans out into all of them — corrupting
+    history and bypassing the manager-only popover RBAC.
+    """
+    from app.db import session_scope
+    from app.models import Note
+
+    proj = DATA / "notes" / "archnoprop"
+    (proj / "_archive").mkdir(parents=True, exist_ok=True)
+
+    # Active week: canonical declaration of the parent task.
+    active = (
+        "# ww24\n"
+        "@admin\n"
+        "\t!task #id T-ARCHFIX01 Long-lived parent\n"
+    )
+    # Archived week: contains a `#task` ref row pointing at the parent
+    # (this is exactly what archive-style rollover writes for migrated
+    # tasks). It MUST remain byte-identical after any active-week edit.
+    archived = (
+        "# ww23 (archived)\n"
+        "- #task T-ARCHFIX01 Long-lived parent #status in-progress\n"
+        "Closing notes for the week.\n"
+    )
+    r = client.put("/api/notes",
+                   json={"path": "archnoprop/ww24.md", "body_md": active},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+    r = client.put("/api/notes",
+                   json={"path": "archnoprop/_archive/ww23.md", "body_md": archived},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    # Flag the archive row as Note.archived = True (mirrors what
+    # roll_to_next_week does in 2e95e67). The path is also under
+    # ``_archive/`` so the belt-and-suspenders skip would catch it too,
+    # but we want both gates exercised.
+    with session_scope() as s:
+        from sqlmodel import select as _select
+        n = s.exec(_select(Note).where(Note.path == "archnoprop/_archive/ww23.md")).one()
+        n.archived = True
+        s.add(n)
+
+    archive_path = DATA / "notes" / "archnoprop" / "_archive" / "ww23.md"
+    archive_bytes_before = archive_path.read_bytes()
+
+    # 1) AR-create on the active week's task.
+    r = client.post("/api/tasks/T-ARCHFIX01/ars",
+                    json={"title": "investigate hang"},
+                    headers={"Authorization": AUTH})
+    assert r.status_code == 201, r.text
+    new_id = r.json()["task_uuid"]
+    assert new_id and new_id.startswith("T-")
+
+    archive_bytes_after_ar = archive_path.read_bytes()
+    assert archive_bytes_after_ar == archive_bytes_before, (
+        "archived note was rewritten by AR-create propagation (issue #253)"
+    )
+    assert new_id.encode() not in archive_bytes_after_ar, (
+        f"new AR id {new_id} leaked into archive"
+    )
+
+    # 2) PATCH the parent task — status / eta / add_note.
+    r = client.patch("/api/tasks/T-ARCHFIX01",
+                     json={"status": "done", "eta": "WW25.1",
+                           "add_note": "wrapping up"},
+                     headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    archive_bytes_after_patch = archive_path.read_bytes()
+    assert archive_bytes_after_patch == archive_bytes_before, (
+        "archived note was rewritten by patch_task propagation (issue #253)"
+    )
+    # The active week's canonical line should reflect the patch.
+    active_after = (DATA / "notes" / "archnoprop" / "ww24.md").read_text(encoding="utf-8")
+    assert "#status done" in active_after
+    assert "#eta WW25.1" in active_after
 
 
 def test_add_ar_idempotent_on_retry(client):

@@ -1048,11 +1048,18 @@ def create_ar_under_task(
     parent_uuid = parent.task_uuid
     parent_line = parent.line
 
-    # Default owner = requester (mirrors create_task), so the AR is attributed
-    # to whoever filed it rather than silently inheriting the parent's owner
-    # via section context.
-    owners = body.owners if body.owners is not None else [user]
-    cleaned_owners = [o.strip().lstrip("@") for o in owners if o and o.strip()]
+    # Owner inheritance: when caller omits ``owners`` (popover default —
+    # see ``TaskEditPopover``), the AR inherits the parent task's effective
+    # owner set rather than being attributed to the requester. This keeps
+    # ARs visually attached to whoever is responsible for the parent work
+    # instead of accumulating @<requester> tags every time someone files
+    # a follow-up under another person's task. An explicit ``owners=[]``
+    # still means "no owner — inherit from section context"; an explicit
+    # non-empty list overrides everything.
+    if body.owners is not None:
+        cleaned_owners = [o.strip().lstrip("@") for o in body.owners if o and o.strip()]
+    else:
+        cleaned_owners = [o for o in parent_owners if o]
 
     with with_file_lock(full):
         if not full.exists():
@@ -1123,12 +1130,27 @@ def create_ar_under_task(
                 body_parts.append(f"#feature {n}")
         ar_body = " ".join(body_parts)
 
+        # Issue #253: archived notes (rolled-forward weeks) are immutable
+        # historical records and must NEVER receive propagated AR ref rows.
+        # The archive-style rollover (#251 / 2e95e67) writes a `#task T-XXX`
+        # ref row into every archive for each migrated task, so without
+        # this filter every AR-create on a long-lived task fans out into
+        # every prior archive — corrupting history and bypassing the
+        # manager-only popover RBAC.
         from sqlmodel import col as _col
         candidate_notes = s.exec(
             select(Note)
             .where(_col(Note.body_md).contains(parent_uuid))
             .where(Note.id != note.id)
+            .where(Note.archived == False)  # noqa: E712
         ).all()
+        # Belt-and-suspenders: skip anything physically under an
+        # ``_archive/`` segment in case a row's ``archived`` flag wasn't
+        # set (legacy data, partially-migrated installs).
+        candidate_notes = [
+            n for n in candidate_notes
+            if "/_archive/" not in f"/{n.path}/"
+        ]
 
         for ref_note in candidate_notes:
             ref_full = settings.notes_dir / ref_note.path
@@ -2381,12 +2403,21 @@ def patch_task(
             # Pre-filter: only notes whose cached body contains the ref_id text.
             # This is a cheap LIKE scan; false positives are eliminated by
             # find_ref_row_lines() inside patch_ref_rows().
+            #
+            # Issue #253: exclude archived notes so PATCH on an active-week
+            # task can't rewrite prior weeks' archives. Same reasoning as
+            # the AR-create propagator above.
             from sqlmodel import col as _col
             candidate_notes = s.exec(
                 select(Note)
                 .where(_col(Note.body_md).contains(ref_id))
                 .where(Note.id != note.id)   # canonical file already written
+                .where(Note.archived == False)  # noqa: E712
             ).all()
+            candidate_notes = [
+                n for n in candidate_notes
+                if "/_archive/" not in f"/{n.path}/"
+            ]
 
             for ref_note in candidate_notes:
                 ref_full = settings.notes_dir / ref_note.path
