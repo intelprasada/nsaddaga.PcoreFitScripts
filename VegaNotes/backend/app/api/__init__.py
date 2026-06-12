@@ -1048,11 +1048,18 @@ def create_ar_under_task(
     parent_uuid = parent.task_uuid
     parent_line = parent.line
 
-    # Default owner = requester (mirrors create_task), so the AR is attributed
-    # to whoever filed it rather than silently inheriting the parent's owner
-    # via section context.
-    owners = body.owners if body.owners is not None else [user]
-    cleaned_owners = [o.strip().lstrip("@") for o in owners if o and o.strip()]
+    # Owner inheritance: when caller omits ``owners`` (popover default —
+    # see ``TaskEditPopover``), the AR inherits the parent task's effective
+    # owner set rather than being attributed to the requester. This keeps
+    # ARs visually attached to whoever is responsible for the parent work
+    # instead of accumulating @<requester> tags every time someone files
+    # a follow-up under another person's task. An explicit ``owners=[]``
+    # still means "no owner — inherit from section context"; an explicit
+    # non-empty list overrides everything.
+    if body.owners is not None:
+        cleaned_owners = [o.strip().lstrip("@") for o in body.owners if o and o.strip()]
+    else:
+        cleaned_owners = [o for o in parent_owners if o]
 
     with with_file_lock(full):
         if not full.exists():

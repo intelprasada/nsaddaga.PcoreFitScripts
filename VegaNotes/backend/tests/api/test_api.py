@@ -804,6 +804,86 @@ def test_create_ar_under_task_inserts_inside_block(client):
     assert "newly added AR" in child_titles
 
 
+def test_create_ar_inherits_parent_owner_not_requester(client):
+    """Popover AR-create (only ``title`` in the payload) must inherit the
+    parent task's owner — NOT silently tag the AR with the requester's
+    name. Surgical write-up: project manager ``admin`` files an AR under
+    a task explicitly owned by ``khbyers`` (with no overriding section
+    ``@owner`` heading); the resulting !AR line must carry ``@khbyers``
+    and the API ``owners`` field must reflect that — admin is the
+    requester, not an owner.
+    """
+    _create_user(client, "khbyers")
+    notes_dir = DATA / "notes" / "arinheritproj"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    # No `@admin` section heading — parent's only owner is the explicit
+    # `@khbyers` token. This isolates the inheritance behaviour from
+    # section-context owner injection.
+    seed = (
+        "# Weekly\n"
+        "!task #id T-INHERIT01 Parent owned by khbyers @khbyers\n"
+    )
+    r = client.put("/api/notes",
+                   json={"path": "arinheritproj/wk.md", "body_md": seed},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    # admin (manager / requester) files an AR with the popover payload
+    # shape — only ``title``. No owners list at all.
+    r = client.post("/api/tasks/T-INHERIT01/ars",
+                    json={"title": "follow up debug"},
+                    headers={"Authorization": AUTH})
+    assert r.status_code == 201, r.text
+    new_ar = r.json()
+    assert new_ar["owners"] == ["khbyers"], (
+        f"AR should inherit parent owner [khbyers], got {new_ar['owners']!r}"
+    )
+    assert "admin" not in new_ar["owners"], (
+        "AR must not be silently tagged with the requester (admin)"
+    )
+
+    md = (DATA / "notes" / "arinheritproj" / "wk.md").read_text(encoding="utf-8")
+    ar_line = next(l for l in md.splitlines() if "follow up debug" in l)
+    assert "@khbyers" in ar_line, f"!AR line missing @khbyers token:\n{ar_line}"
+    assert "@admin" not in ar_line, (
+        f"!AR line should not carry @admin (the requester):\n{ar_line}"
+    )
+
+
+def test_create_ar_explicit_owners_override_inheritance(client):
+    """When the caller passes a non-empty ``owners`` list, that list wins
+    — inheritance from the parent only kicks in when ``owners`` is None.
+    """
+    _create_user(client, "alice")
+    notes_dir = DATA / "notes" / "aroverrideproj"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    seed = (
+        "# Weekly\n"
+        "!task #id T-OVRD0001 Parent owned by bob @bob\n"
+    )
+    _create_user(client, "bob")
+    client.put("/api/notes",
+               json={"path": "aroverrideproj/wk.md", "body_md": seed},
+               headers={"Authorization": AUTH})
+
+    r = client.post("/api/tasks/T-OVRD0001/ars",
+                    json={"title": "delegate work", "owners": ["alice"]},
+                    headers={"Authorization": AUTH})
+    assert r.status_code == 201, r.text
+    # Note: parser child-inheritance of parent owner tokens means the API
+    # response also includes @bob; what we're pinning here is that the
+    # written !AR line carries @alice (the explicit override) and NOT @bob
+    # (which would have been the inheritance default).
+    md = (DATA / "notes" / "aroverrideproj" / "wk.md").read_text(encoding="utf-8")
+    ar_line = next(l for l in md.splitlines() if "delegate work" in l)
+    assert "@alice" in ar_line, f"explicit @alice missing from !AR line:\n{ar_line}"
+    assert "@bob" not in ar_line, (
+        f"!AR line should not carry @bob — explicit owners override "
+        f"parent-inheritance:\n{ar_line}"
+    )
+    assert "alice" in r.json()["owners"]
+
+
 def test_add_ar_propagates_to_ref_row_files(client):
     """POST /api/tasks/{ref}/ars must add a `#AR <new_id> <title>` row to
     every md file that already contains a `#task <parent_uuid>` ref row.
