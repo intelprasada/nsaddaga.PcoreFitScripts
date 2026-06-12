@@ -129,22 +129,25 @@
 !task #id T-78A0MT MS SMT coding @abolisaw #status in-progress #eta 2026-06-12 #priority P0
 	#note 9 files done, 4 files left as discussed with chen, more file to take after that
 
-!task #id T-JVQYB7 JNC - CTE Infra Valplan @khbyers #priority P0 #eta ww24.3 #status in-progress
+!task #id T-JVQYB7 JNC - CTE Infra Valplan @khbyers #priority P0 #eta ww24.3 #status done
 
 
-!task #id T-DDPYQY ww24_JNC_Bucket_Debug @khbyers #eta 2026-ww23 #status in-progress
+!task #id T-DDPYQY ww24_JNC_Bucket_Debug @khbyers #eta 2026-ww23 #status done
 	!AR #id T-C6MFMS macrofusion bucket, root cause CTE issue on listening to external snoops @khbyers #status done
 	!AR #id T-D74VDF Try to create temp workaround for broadcast in CTE until RTL is coded @khbyers #status done
 	!AR #id T-RJEB3Z UOP Clip mismatch @khbyers #status done
-	!AR #id T-ZS3AM2 Thread Hang, Long MS stall on T1 causing hang on T0 @khbyers #status in-progress
+	!AR #id T-ZS3AM2 Thread Hang, Long MS stall on T1 causing hang on T0 @khbyers #status done
 
 !task #id T-Z3Z4VD SEC Proof for STSR @abolisaw #eta 2026-06-26
 
-!task #id T-DB7HX1 WW24 GFC - A0 Bucket Debug @khbyers #status in-progress #eta WW24.5
+!task #id T-DB7HX1 WW24 GFC - A0 Bucket Debug @khbyers #status done #eta WW24.5
 	#note Husam added injections code 1.5months back, likely CTE issue
-	!AR #id T-YW62FY MCA Agent Injecting IFU Long Stall @khbyers
+	!AR #id T-YW62FY MCA Agent Injecting IFU Long Stall @khbyers #status done
 
 !task #id T-5WGW2J WW24_JNC_Bucket_Debug @khbyers #status in-progress #eta WW24.5
+	!AR #id T-0JK45W DSB Thread hang due to non-threaded dsbq ctl sync signal @khbyers #status done
+	!AR #id T-XNRPX1 branch skid issue with nuke BPU assertion @khbyers #status done
+	!AR #id T-YTVX7Y DSBQ Full Stall @khbyers
 
 !task #id T-N3BSET Create Thread Mode Log @khbyers #status in-progress #eta WW24.5
 
