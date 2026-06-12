@@ -1990,6 +1990,54 @@ def get_task(
     return _task_to_dict(s, t, include_children=include_children)
 
 
+@router.get("/tasks/{task_ref}/activity")
+def task_activity(
+    task_ref: str,
+    limit: int = Query(200, ge=1, le=1000),
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> list[dict[str, Any]]:
+    """Return the chronological audit timeline for a single task.
+
+    Includes every ``ActivityEvent`` whose ``ref`` matches the task's
+    uuid (or its legacy ``task#<id>`` fallback for unstamped tasks).
+    Each row carries the actor name, kind, ts and meta blob — the
+    full per-field history surfaced by issue #251 (status, owners,
+    priority, eta, features, notes, deletion).
+
+    Access is RBAC-scoped via :func:`_require_task_access`: anyone
+    who can read the task can read its activity.
+    """
+    t = _resolve_task(task_ref, s)
+    _require_task_access(s, user, t)
+    refs: list[str] = []
+    if t.task_uuid:
+        refs.append(t.task_uuid)
+    refs.append(f"task#{t.id}")
+    q = (
+        select(ActivityEvent, User.name)
+        .join(User, User.id == ActivityEvent.user_id)
+        .where(ActivityEvent.ref.in_(refs))
+        .order_by(ActivityEvent.ts.desc())
+        .limit(limit)
+    )
+    out: list[dict[str, Any]] = []
+    for ev, actor in s.exec(q).all():
+        try:
+            meta = json.loads(ev.meta_json) if ev.meta_json else {}
+        except json.JSONDecodeError:
+            meta = {}
+        out.append({
+            "id": ev.id,
+            "kind": ev.kind,
+            "ref": ev.ref,
+            "ts": ev.ts.isoformat(),
+            "actor": actor,
+            "meta": meta,
+        })
+    return out
+
+
 @router.patch("/tasks/{task_ref}")
 def patch_task(
     task_ref: str,
@@ -2024,6 +2072,23 @@ def patch_task(
     if not full.exists():
         raise HTTPException(404, "note file missing on disk")
 
+    # Snapshot pre-mutation values for the audit-trail events emitted
+    # below (issue #251). Owners are already loaded above; priority /
+    # eta / features come from the TaskAttr / TaskFeature mirrors.
+    old_owners_norm = sorted({(o or "").strip().lower() for o in owners if o and o.strip()})
+    _old_priority_row = s.exec(
+        select(TaskAttr.value).where(TaskAttr.task_id == task_id, TaskAttr.key == "priority")
+    ).first()
+    old_priority = (_old_priority_row[0] if isinstance(_old_priority_row, tuple) else _old_priority_row) or ""
+    _old_eta_row = s.exec(
+        select(TaskAttr.value).where(TaskAttr.task_id == task_id, TaskAttr.key == "eta")
+    ).first()
+    old_eta = (_old_eta_row[0] if isinstance(_old_eta_row, tuple) else _old_eta_row) or ""
+    _old_features = s.exec(
+        select(Feature.name).join(TaskFeature, TaskFeature.feature_id == Feature.id)
+        .where(TaskFeature.task_id == task_id)
+    ).all()
+    old_features_norm = sorted({(f or "").strip().lower() for f in _old_features if f and f.strip()})
     # ── RMW under the file lock ───────────────────────────────────────────
     # The fast-path popover (issue #140) updates ``note.body_md`` without
     # re-running the parser, so individual ``Task.line`` values in the
@@ -2202,9 +2267,9 @@ def patch_task(
 
     refreshed = s.get(Task, task_id)
     awarded: list[str] = []
+    ev_ref = (refreshed.task_uuid if refreshed and refreshed.task_uuid
+              else (t.task_uuid or f"task#{task_id}"))
     if status_changed and body.status is not None:
-        ev_ref = (refreshed.task_uuid if refreshed and refreshed.task_uuid
-                  else (t.task_uuid or f"task#{task_id}"))
         awarded += gamify.record_event(
             s, user, gamify.TASK_STATUS_SET,
             ref=ev_ref,
@@ -2216,6 +2281,50 @@ def patch_task(
                 ref=ev_ref,
                 meta={"from": old_status, "to": body.status},
             )
+    # ── Per-field audit events (issue #251) ──────────────────────────────
+    # One event per field that actually changed. Skip no-ops and reorder-
+    # only multi-value updates. Emission is best-effort (record_event
+    # swallows errors), so a logging hiccup never blocks the PATCH.
+    if body.priority is not None:
+        new_priority = (body.priority or "").strip()
+        if (old_priority or "") != new_priority:
+            awarded += gamify.record_event(
+                s, user, gamify.TASK_PRIORITY_SET,
+                ref=ev_ref,
+                meta={"from": old_priority or None, "to": new_priority or None},
+            )
+    if body.eta is not None:
+        new_eta = (body.eta or "").strip()
+        if (old_eta or "") != new_eta:
+            awarded += gamify.record_event(
+                s, user, gamify.TASK_ETA_SET,
+                ref=ev_ref,
+                meta={"from": old_eta or None, "to": new_eta or None},
+            )
+    if body.owners is not None:
+        new_owners_clean = [o.strip().lstrip("@") for o in body.owners if o and o.strip()]
+        new_owners_norm = sorted({o.lower() for o in new_owners_clean})
+        if new_owners_norm != old_owners_norm:
+            awarded += gamify.record_event(
+                s, user, gamify.TASK_OWNERS_SET,
+                ref=ev_ref,
+                meta={"from": [o for o in owners if o], "to": new_owners_clean},
+            )
+    if body.features is not None:
+        new_features_clean = [f.strip() for f in body.features if f and f.strip()]
+        new_features_norm = sorted({f.lower() for f in new_features_clean})
+        if new_features_norm != old_features_norm:
+            awarded += gamify.record_event(
+                s, user, gamify.TASK_FEATURES_SET,
+                ref=ev_ref,
+                meta={"from": [f for f in _old_features if f], "to": new_features_clean},
+            )
+    if body.add_note is not None and body.add_note.strip():
+        awarded += gamify.record_event(
+            s, user, gamify.TASK_NOTE_ADDED,
+            ref=ev_ref,
+            meta={"text": body.add_note.strip()},
+        )
     out = _task_to_dict(s, refreshed) if refreshed else {"ok": True}
     if awarded:
         # De-dupe: status_set + close on the same task can both award
@@ -2288,6 +2397,14 @@ def delete_task(
         new_mtime=new_mtime,
         line_shift_pivot=line_to_remove,
         line_shift=-max(lines_removed, 1),
+    )
+    # Audit event (issue #251). Emitted after the index delete commits
+    # via session_scope so the row references a stable task_uuid string.
+    ev_ref = task_uuid or f"task#{t.id}"
+    gamify.record_event(
+        s, user, gamify.TASK_DELETED,
+        ref=ev_ref,
+        meta={"title": task_title, "last_status": t.status, "note_path": note.path},
     )
     return {"status": "deleted", "task_uuid": task_uuid, "title": task_title}
 

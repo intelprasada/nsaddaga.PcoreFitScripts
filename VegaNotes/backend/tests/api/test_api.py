@@ -1550,3 +1550,142 @@ def test_patch_task_409_when_uuid_missing_from_disk(client):
     assert r.status_code == 409, r.text
     detail = r.json().get("detail", {})
     assert isinstance(detail, dict) and detail.get("error") == "stale_task"
+
+
+# ---------------------------------------------------------------------------
+# #251 — full per-field audit trail for task mutations.
+# ---------------------------------------------------------------------------
+
+def _audit_kinds_for(client, ref):
+    r = client.get(f"/api/tasks/{ref}/activity", headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+    return [(ev["kind"], ev.get("meta", {})) for ev in r.json()]
+
+
+def test_audit_per_field_events_emitted(client):
+    md = (
+        "# audit\n"
+        "## Audit probe\n"
+        "!task Audit task @alice #id T-AUDIT1\n"
+    )
+    r = client.put(
+        "/api/notes",
+        json={"path": "audit.md", "body_md": md},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+
+    # Owners change
+    r = client.patch(
+        "/api/tasks/T-AUDIT1",
+        json={"owners": ["alice", "bob"]},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+    # Priority change
+    assert client.patch(
+        "/api/tasks/T-AUDIT1", json={"priority": "P1"},
+        headers={"Authorization": AUTH},
+    ).status_code == 200
+    # ETA change
+    assert client.patch(
+        "/api/tasks/T-AUDIT1", json={"eta": "ww30"},
+        headers={"Authorization": AUTH},
+    ).status_code == 200
+    # Features change
+    assert client.patch(
+        "/api/tasks/T-AUDIT1", json={"features": ["alpha"]},
+        headers={"Authorization": AUTH},
+    ).status_code == 200
+    # Note add
+    assert client.patch(
+        "/api/tasks/T-AUDIT1", json={"add_note": "first journal entry"},
+        headers={"Authorization": AUTH},
+    ).status_code == 200
+    # Status change (already covered by older tests, but include here)
+    assert client.patch(
+        "/api/tasks/T-AUDIT1", json={"status": "done"},
+        headers={"Authorization": AUTH},
+    ).status_code == 200
+
+    events = _audit_kinds_for(client, "T-AUDIT1")
+    kinds = {k for k, _ in events}
+    assert "task.owners.set" in kinds
+    assert "task.priority.set" in kinds
+    assert "task.eta.set" in kinds
+    assert "task.features.set" in kinds
+    assert "task.note.added" in kinds
+    assert "task.status.set" in kinds
+
+    # Verify meta payloads.
+    by_kind = {k: m for k, m in events}
+    assert by_kind["task.priority.set"]["to"] == "P1"
+    assert by_kind["task.eta.set"]["to"] == "ww30"
+    assert by_kind["task.note.added"]["text"] == "first journal entry"
+    assert sorted(by_kind["task.owners.set"]["to"]) == ["alice", "bob"]
+    assert by_kind["task.features.set"]["to"] == ["alpha"]
+
+
+def test_audit_no_event_when_value_unchanged(client):
+    md = (
+        "# audit2\n"
+        "!task Same value task @alice #priority P2 #id T-AUDIT2\n"
+    )
+    r = client.put(
+        "/api/notes",
+        json={"path": "audit2.md", "body_md": md},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+
+    # PATCH priority to the SAME value as on disk → no event.
+    r = client.patch(
+        "/api/tasks/T-AUDIT2", json={"priority": "P2"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+
+    # PATCH owners to same set (just reordered) → no event.
+    r = client.patch(
+        "/api/tasks/T-AUDIT2", json={"owners": ["alice"]},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+
+    events = _audit_kinds_for(client, "T-AUDIT2")
+    kinds = [k for k, _ in events]
+    assert "task.priority.set" not in kinds, events
+    assert "task.owners.set" not in kinds, events
+
+
+def test_audit_delete_event_emitted(client):
+    md = (
+        "# audit3\n"
+        "!task Doomed task @alice #id T-AUDIT3\n"
+    )
+    r = client.put(
+        "/api/notes",
+        json={"path": "audit3.md", "body_md": md},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+
+    # Capture the events scoped to the uuid before deletion (the row
+    # itself goes away, but ActivityEvent rows persist by ref string).
+    r = client.delete(
+        "/api/tasks/T-AUDIT3", headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+
+    # Read activity by ref directly via /api/me/activity since the task
+    # is gone (so /api/tasks/T-AUDIT3/activity would 404).
+    r = client.get(
+        "/api/me/activity?kind=task.deleted",
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+    rows = [ev for ev in r.json() if ev["ref"] == "T-AUDIT3"]
+    assert len(rows) == 1, rows
+    meta = rows[0]["meta"]
+    assert meta["title"] == "Doomed task"
+    assert meta["note_path"] == "audit3.md"

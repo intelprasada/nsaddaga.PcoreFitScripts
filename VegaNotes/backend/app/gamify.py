@@ -32,6 +32,15 @@ log = logging.getLogger(__name__)
 TASK_CREATED = "task.created"
 TASK_STATUS_SET = "task.status.set"
 TASK_CLOSED = "task.closed"
+# Per-field audit events (issue #251). Emitted from patch_task /
+# delete_task on every actual value change so the DB carries a full
+# timestamped history of what was modified, by whom, and to what value.
+TASK_OWNERS_SET = "task.owners.set"
+TASK_PRIORITY_SET = "task.priority.set"
+TASK_ETA_SET = "task.eta.set"
+TASK_FEATURES_SET = "task.features.set"
+TASK_NOTE_ADDED = "task.note.added"
+TASK_DELETED = "task.deleted"
 NOTE_CREATED = "note.created"
 NOTE_EDITED = "note.edited"
 
