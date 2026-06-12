@@ -921,6 +921,90 @@ def test_add_ar_skips_files_without_parent_ref(client):
     assert new_id not in loose_after
 
 
+def test_archived_notes_are_not_mutated_by_ar_or_patch(client):
+    """Issue #253: AR-create / task PATCH must NEVER rewrite archived
+    weekly notes, even when the archive contains a `#task <parent>` ref
+    row pointing at the active task. The archive-style rollover (#251)
+    leaves such ref rows in every prior week's archive, so without the
+    ``archived == False`` filter on the candidate-notes query, every
+    edit on a long-lived task fans out into all of them — corrupting
+    history and bypassing the manager-only popover RBAC.
+    """
+    from app.db import session_scope
+    from app.models import Note
+
+    proj = DATA / "notes" / "archnoprop"
+    (proj / "_archive").mkdir(parents=True, exist_ok=True)
+
+    # Active week: canonical declaration of the parent task.
+    active = (
+        "# ww24\n"
+        "@admin\n"
+        "\t!task #id T-ARCHFIX01 Long-lived parent\n"
+    )
+    # Archived week: contains a `#task` ref row pointing at the parent
+    # (this is exactly what archive-style rollover writes for migrated
+    # tasks). It MUST remain byte-identical after any active-week edit.
+    archived = (
+        "# ww23 (archived)\n"
+        "- #task T-ARCHFIX01 Long-lived parent #status in-progress\n"
+        "Closing notes for the week.\n"
+    )
+    r = client.put("/api/notes",
+                   json={"path": "archnoprop/ww24.md", "body_md": active},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+    r = client.put("/api/notes",
+                   json={"path": "archnoprop/_archive/ww23.md", "body_md": archived},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    # Flag the archive row as Note.archived = True (mirrors what
+    # roll_to_next_week does in 2e95e67). The path is also under
+    # ``_archive/`` so the belt-and-suspenders skip would catch it too,
+    # but we want both gates exercised.
+    with session_scope() as s:
+        from sqlmodel import select as _select
+        n = s.exec(_select(Note).where(Note.path == "archnoprop/_archive/ww23.md")).one()
+        n.archived = True
+        s.add(n)
+
+    archive_path = DATA / "notes" / "archnoprop" / "_archive" / "ww23.md"
+    archive_bytes_before = archive_path.read_bytes()
+
+    # 1) AR-create on the active week's task.
+    r = client.post("/api/tasks/T-ARCHFIX01/ars",
+                    json={"title": "investigate hang"},
+                    headers={"Authorization": AUTH})
+    assert r.status_code == 201, r.text
+    new_id = r.json()["task_uuid"]
+    assert new_id and new_id.startswith("T-")
+
+    archive_bytes_after_ar = archive_path.read_bytes()
+    assert archive_bytes_after_ar == archive_bytes_before, (
+        "archived note was rewritten by AR-create propagation (issue #253)"
+    )
+    assert new_id.encode() not in archive_bytes_after_ar, (
+        f"new AR id {new_id} leaked into archive"
+    )
+
+    # 2) PATCH the parent task — status / eta / add_note.
+    r = client.patch("/api/tasks/T-ARCHFIX01",
+                     json={"status": "done", "eta": "WW25.1",
+                           "add_note": "wrapping up"},
+                     headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    archive_bytes_after_patch = archive_path.read_bytes()
+    assert archive_bytes_after_patch == archive_bytes_before, (
+        "archived note was rewritten by patch_task propagation (issue #253)"
+    )
+    # The active week's canonical line should reflect the patch.
+    active_after = (DATA / "notes" / "archnoprop" / "ww24.md").read_text(encoding="utf-8")
+    assert "#status done" in active_after
+    assert "#eta WW25.1" in active_after
+
+
 def test_add_ar_idempotent_on_retry(client):
     """If create_ar_under_task is called twice for the same logical AR
     (transient 5xx + client retry produces a new task_uuid each time, but
