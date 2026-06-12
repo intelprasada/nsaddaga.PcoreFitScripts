@@ -286,26 +286,3 @@
 !task #id T-5WGW2J WW24_JNC_Bucket_Debug @khbyers #status in-progress #eta WW24.5
 
 !task #id T-N3BSET Create Thread Mode Log @khbyers #status in-progress #eta WW24.5
-
-!task #id T-1QHX29 IDQ Ramp plan @gajith @Kushwanth #status in-progress #eta WW 25
-	#note develop plan of ramp up for DV:
-	#note - Understand reference models for LSD
-	#note - look at the idq write side (nearly done)
-	#note - look at the idq read side (need to start)
-	#note - Look into the LSD and TBIQ LSD related checkers
-	#note - understand inputs, outputs and transformations and how data is being fed into ref models
-	#note - Checker EID re-evaluations:
-	#note - Take some solved buckets with failing EIDs (preferably from each checker we have discussed) that Niharika has solved
-	#note - Reverse engineer/ understand how to conclusions were made by our ownselves #status done
-	#note - Present waveforms review and process of solving checkers #status in-progress
-	!AR #id T-MV861K present write side checker/ref model @gajith #status in-progress
-	!AR #id T-VSJRCG Study read packets/ ref model idq lsd read side @gajith
-	!AR #id T-XCJR1S present lsd read side ref model/ checker @gajith
-	!AR #id T-FBDJ3N ask for debug buckets/ go through one with niharika @gajith
-	!AR #id T-VXJ5HE present debug bucket @gajith #priority P2
-
-!task #id T-XZ5H94 Bucket automation/ updates @gajith #status in-progress
-	!AR #id T-13PHJZ Update query to allow for both FM/IDC bucket owners @gajith
-	!AR #id T-E8SXVZ script to parse csv and reassign bucket owners @gajith
-
-!task #id T-EWGPDY Cover property clean up in GFC @njammala #status done
