@@ -48,6 +48,14 @@ def init_db() -> None:
         if user_cols and "tz" not in user_cols:
             # Per-user IANA TZ for gamification (Phase 3). Empty ≡ UTC.
             conn.execute(text("ALTER TABLE user ADD COLUMN tz TEXT NOT NULL DEFAULT ''"))
+        # Note.archived: rollover/archive feature. Marks a weekly note that
+        # has been rolled forward — popover/PATCH writes are gated by the
+        # API to project managers, and tree/listing endpoints hide it from
+        # default views.  ``DEFAULT 0`` keeps every existing row visible.
+        note_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(note)")).fetchall()}
+        if note_cols and "archived" not in note_cols:
+            conn.execute(text("ALTER TABLE note ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_note_archived ON note(archived)"))
         # Normalise legacy priority value_norm rows: old indexer stored 'p0'-'p3'
         # as the value_norm; new indexer stores the integer rank ('0'-'3').
         # Re-write any non-numeric priority value_norm to the integer rank.

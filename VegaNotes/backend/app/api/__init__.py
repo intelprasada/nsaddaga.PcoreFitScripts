@@ -573,12 +573,26 @@ def roll_note_next_week(
     s: Session = Depends(get_session),
     user: str = Depends(require_user),
 ) -> dict[str, Any]:
-    """Create a follow-up note for the next Intel work week.
+    """Roll a weekly note forward to the next Intel work week with the
+    archive (single-active-file) model.
 
-    Reads the source note, drops every `!task`/`!ar` line whose normalized
-    status is `done` (and any nested sub-items), bumps every `wwN[.x]` token
-    matching the source filename's WW number by +1, and writes the result to
-    a sibling file with the bumped basename. Returns the new path.
+    Behaviour:
+
+    * Open top-level ``!task`` / ``!AR`` declarations move canonically to
+      the new ww file (their entire indent block, including done children
+      of an open parent, follows them).
+    * Done top-level declarations stay canonical in the archived copy of
+      the source file (under sibling ``_archive/<basename>``).
+    * The source file is removed from disk and its ``Note`` row is
+      repathed to ``_archive/<basename>`` and flagged ``archived = True``.
+      Subsequent popover/PATCH writes target the new file unless the
+      caller is a project manager (RBAC enforced in ``patch_task`` /
+      ``delete_task``).
+    * Cross-file ``#task T-XXX`` references continue to resolve by uuid;
+      child rows (TaskAttr / TaskOwner / Link) stay attached because the
+      ``Task`` row is moved, not recreated.
+
+    Returns ``{id, path, from_ww, to_ww, archived_path, moved_count}``.
     """
     src_rel = body.path
     if ".." in src_rel or src_rel.startswith("/"):
@@ -592,28 +606,102 @@ def roll_note_next_week(
     src_full = settings.notes_dir / src_rel
     if not src_full.exists():
         raise HTTPException(404, "source note not found")
-    # Read+write under the source file's lock so a concurrent edit can't
-    # interleave between the read and the write-back of injected IDs.
+
+    archive_dir = src_full.parent / "_archive"
+    archived_path = archive_dir / src_full.name
+    archived_rel = str(archived_path.relative_to(settings.notes_dir))
+
+    # ── Read + plan under the source file's lock so a concurrent edit
+    #    can't interleave between read and the rollover write-back.
     with with_file_lock(src_full):
         src_md = src_full.read_text(encoding="utf-8")
         try:
-            new_md, new_base, cur, nxt, patched_src = roll_to_next_week(src_md, src_full.name)
+            new_md, new_base, cur, nxt, archived_md, moved_uuids = roll_to_next_week(
+                src_md, src_full.name,
+            )
         except ValueError as e:
             raise HTTPException(400, str(e))
         dst_full = src_full.parent / new_base
         dst_rel = str(dst_full.relative_to(settings.notes_dir))
         if dst_full.exists() and not body.overwrite:
             raise HTTPException(409, f"target note already exists: {dst_rel}")
-        if patched_src != src_md:
-            _safe_write_unlocked(src_full, patched_src, notes_dir=settings.notes_dir)
-            reindex_file(src_full, s)
-    # Destination is a different file -> different lock domain. safe_write
-    # creates it atomically and the existence check above + safe_write's
-    # internal lock together prevent a parallel create from clobbering us
-    # in the rare overwrite=True case.
+        if archived_path.exists() and not body.overwrite:
+            raise HTTPException(409, f"archive already exists: {archived_rel}")
+
+    # ── Phase 1 (DB): repath the old Note → archive, create the new Note,
+    #    bulk-reassign moved tasks to the new note id.  All committed
+    #    BEFORE any disk side-effects so the watcher's later reindex pass
+    #    (or any concurrent reader) sees a consistent view.
+    old_note = s.exec(select(Note).where(Note.path == src_rel)).first()
+    if old_note is None:
+        # Force-index it now so we have something to repath.
+        old_note = reindex_file(src_full, s)
+
+    # If overwrite=True and an archived/dst Note already exists, drop them
+    # so the UNIQUE(path) repath below succeeds without a constraint clash.
+    if body.overwrite:
+        stale_archive = s.exec(select(Note).where(Note.path == archived_rel)).first()
+        if stale_archive is not None and stale_archive.id != old_note.id:
+            remove_path(archived_rel, s)
+            s.flush()
+
+    old_note.path = archived_rel
+    old_note.archived = True
+    old_note.body_md = archived_md
+    old_note.updated_at = datetime.utcnow()
+    s.add(old_note)
+    s.flush()
+
+    new_note = s.exec(select(Note).where(Note.path == dst_rel)).first()
+    if new_note is None:
+        new_note = Note(path=dst_rel, body_md=new_md, archived=False)
+        s.add(new_note)
+    else:
+        new_note.body_md = new_md
+        new_note.archived = False
+        new_note.updated_at = datetime.utcnow()
+    s.flush()
+
+    if moved_uuids:
+        # Bulk reassign Task rows by stable uuid.  This MUST happen before
+        # we reindex the new file — otherwise ``_incremental_reindex``
+        # would see the moved tasks as "new" (no match by uuid in the new
+        # note's existing rows) and try to INSERT, failing the UNIQUE
+        # constraint on ``task.task_uuid``.
+        ph_list = ",".join(f":u{i}" for i in range(len(moved_uuids)))
+        params: dict[str, Any] = {"nid": new_note.id}
+        for i, u in enumerate(moved_uuids):
+            params[f"u{i}"] = u
+        s.exec(
+            text(f"UPDATE task SET note_id = :nid WHERE task_uuid IN ({ph_list})")
+            .bindparams(**params)
+        )
+    s.commit()
+
+    # ── Phase 2 (disk): write the archive, write the next-week file,
+    #    delete the source.  Watcher events fire AFTER DB is consistent;
+    #    its reindex passes are idempotent against our state so any race
+    #    is benign.
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    safe_write(archived_path, archived_md, notes_dir=settings.notes_dir)
     safe_write(dst_full, new_md, notes_dir=settings.notes_dir)
-    note = reindex_file(dst_full, s)
-    return {"id": note.id, "path": note.path, "from_ww": cur, "to_ww": nxt}
+    with with_file_lock(src_full):
+        if src_full.exists():
+            src_full.unlink()
+
+    # ── Phase 3: explicit reindex to refresh ``Task.line`` for both files
+    #    (canonical declarations move = line numbers shift).
+    reindex_file(archived_path, s)
+    reindex_file(dst_full, s)
+
+    return {
+        "id": new_note.id,
+        "path": new_note.path,
+        "from_ww": cur,
+        "to_ww": nxt,
+        "archived_path": archived_rel,
+        "moved_count": len(moved_uuids),
+    }
 
 
 class StampIdsIn(BaseModel):
@@ -705,6 +793,12 @@ def _resolve_destination_note(
       1. explicit note_path (validated to live under notes_dir, project match if given)
       2. project given → most recently modified .md under that project folder
       3. neither → 422
+
+    Archived notes (``Note.archived = True`` or anything under a sibling
+    ``_archive/`` folder) are skipped — under the single-active-file model
+    new tasks always land on the current week's file.  An explicit
+    ``note_path`` pointing at an archived note is rejected (422) so the
+    caller can re-target the active week.
     """
     nd = settings.notes_dir
     if note_path:
@@ -715,20 +809,40 @@ def _resolve_destination_note(
             raise HTTPException(404, f"note not found: {note_path}")
         if project is not None and _project_for_path(note_path) != project:
             raise HTTPException(422, f"note '{note_path}' is not in project '{project}'")
+        # Reject archived destinations so new tasks don't accidentally
+        # land in a rolled-forward week.
+        note_row = s.exec(select(Note).where(Note.path == note_path)).first()
+        if (note_row and note_row.archived) or "/_archive/" in f"/{note_path}/":
+            raise HTTPException(
+                422, f"note '{note_path}' is archived; create the task on the active week's file",
+            )
         return full
     if project:
         proj_dir = nd / project
         if not proj_dir.is_dir():
             raise HTTPException(404, f"project not found: {project}")
-        candidates = sorted(
-            (p for p in proj_dir.rglob("*.md") if p.is_file()),
-            key=lambda p: p.stat().st_mtime, reverse=True,
-        )
-        if not candidates:
+        # Skip files under any ``_archive/`` segment so the resolver
+        # always lands on a live week.
+        candidates = [
+            p for p in proj_dir.rglob("*.md")
+            if p.is_file() and "_archive" not in p.relative_to(nd).parts
+        ]
+        # Cross-check against the DB to skip any file flagged archived
+        # (covers files whose folder isn't named ``_archive`` but whose
+        # Note row is archived — should not happen today but is defensive).
+        live: list[Path] = []
+        for p in candidates:
+            rel = str(p.relative_to(nd))
+            n = s.exec(select(Note).where(Note.path == rel)).first()
+            if n is not None and n.archived:
+                continue
+            live.append(p)
+        live.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        if not live:
             raise HTTPException(
                 422, f"no notes in project '{project}'. Create a note first.",
             )
-        return candidates[0]
+        return live[0]
     raise HTTPException(
         422,
         "no destination: provide either `project` (uses most recently modified "
@@ -1786,6 +1900,7 @@ def list_project_notes(
     project: str,
     s: Session = Depends(get_session),
     user: str = Depends(require_user),
+    include_archived: bool = False,
 ) -> list[dict[str, Any]]:
     _require_project_access(s, user, project)
     pdir = settings.notes_dir / project
@@ -1795,6 +1910,11 @@ def list_project_notes(
     files = sorted(pdir.rglob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
     for p in files:
         rel = str(p.relative_to(settings.notes_dir))
+        # Skip files under a sibling ``_archive/`` folder unless the
+        # caller explicitly opts in via ``?include_archived=1``.
+        in_archive_dir = "_archive" in p.relative_to(settings.notes_dir).parts
+        if in_archive_dir and not include_archived:
+            continue
         note = s.exec(select(Note).where(Note.path == rel)).first()
         if note is None:
             # Self-heal: a markdown file exists on disk but the indexer never
@@ -1806,10 +1926,14 @@ def list_project_notes(
             except Exception:
                 s.rollback()
                 note = None
+        # Belt-and-suspenders: also filter the DB ``archived`` flag.
+        if note is not None and note.archived and not include_archived:
+            continue
         out.append({
             "path": rel,
             "id": note.id if note else None,
             "title": note.title if note else p.stem,
+            "archived": bool(note.archived) if note else in_archive_dir,
         })
     return out
 
@@ -1818,8 +1942,14 @@ def list_project_notes(
 def tree(
     s: Session = Depends(get_session),
     user: str = Depends(require_user),
+    include_archived: bool = False,
 ) -> list[dict[str, Any]]:
-    """Project → notes tree, filtered by caller's RBAC."""
+    """Project → notes tree, filtered by caller's RBAC.
+
+    Archived notes (rolled-forward weeklies under sibling ``_archive/``
+    folders) are hidden by default to keep the active workspace focused
+    on the current week.  Pass ``?include_archived=1`` to include them.
+    """
     out: list[dict[str, Any]] = []
     nd = settings.notes_dir
     nd.mkdir(parents=True, exist_ok=True)
@@ -1833,6 +1963,9 @@ def tree(
         notes = []
         for p in sorted(child.rglob("*.md"), key=lambda x: x.stat().st_mtime, reverse=True):
             rel = str(p.relative_to(nd))
+            in_archive_dir = "_archive" in p.relative_to(nd).parts
+            if in_archive_dir and not include_archived:
+                continue
             note = s.exec(select(Note).where(Note.path == rel)).first()
             if note is None:
                 try:
@@ -1841,10 +1974,13 @@ def tree(
                 except Exception:
                     s.rollback()
                     note = None
+            if note is not None and note.archived and not include_archived:
+                continue
             notes.append({
                 "path": rel,
                 "id": note.id if note else None,
                 "title": note.title if note else p.stem,
+                "archived": bool(note.archived) if note else in_archive_dir,
             })
         out.append({"project": child.name, "role": role, "notes": notes})
     # Root-level loose .md files (no project)
@@ -1859,10 +1995,13 @@ def tree(
             except Exception:
                 s.rollback()
                 note = None
+        if note is not None and note.archived and not include_archived:
+            continue
         loose.append({
             "path": rel,
             "id": note.id if note else None,
             "title": note.title if note else p.stem,
+            "archived": bool(note.archived) if note else False,
         })
     if loose:
         out.append({"project": None, "role": "manager", "notes": loose})
@@ -1990,6 +2129,54 @@ def get_task(
     return _task_to_dict(s, t, include_children=include_children)
 
 
+@router.get("/tasks/{task_ref}/activity")
+def task_activity(
+    task_ref: str,
+    limit: int = Query(200, ge=1, le=1000),
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> list[dict[str, Any]]:
+    """Return the chronological audit timeline for a single task.
+
+    Includes every ``ActivityEvent`` whose ``ref`` matches the task's
+    uuid (or its legacy ``task#<id>`` fallback for unstamped tasks).
+    Each row carries the actor name, kind, ts and meta blob — the
+    full per-field history surfaced by issue #251 (status, owners,
+    priority, eta, features, notes, deletion).
+
+    Access is RBAC-scoped via :func:`_require_task_access`: anyone
+    who can read the task can read its activity.
+    """
+    t = _resolve_task(task_ref, s)
+    _require_task_access(s, user, t)
+    refs: list[str] = []
+    if t.task_uuid:
+        refs.append(t.task_uuid)
+    refs.append(f"task#{t.id}")
+    q = (
+        select(ActivityEvent, User.name)
+        .join(User, User.id == ActivityEvent.user_id)
+        .where(ActivityEvent.ref.in_(refs))
+        .order_by(ActivityEvent.ts.desc())
+        .limit(limit)
+    )
+    out: list[dict[str, Any]] = []
+    for ev, actor in s.exec(q).all():
+        try:
+            meta = json.loads(ev.meta_json) if ev.meta_json else {}
+        except json.JSONDecodeError:
+            meta = {}
+        out.append({
+            "id": ev.id,
+            "kind": ev.kind,
+            "ref": ev.ref,
+            "ts": ev.ts.isoformat(),
+            "actor": actor,
+            "meta": meta,
+        })
+    return out
+
+
 @router.patch("/tasks/{task_ref}")
 def patch_task(
     task_ref: str,
@@ -2019,11 +2206,37 @@ def patch_task(
         raise HTTPException(403, "no access to project")
     if role != "manager" and not is_owner:
         raise HTTPException(403, "members can only edit their own tasks")
+    # Archived notes are read-mostly under the single-active-file model.
+    # Only project managers / admins can mutate tasks in a note that has
+    # been rolled forward — owners need to act on the active week's file.
+    if note.archived and role != "manager":
+        raise HTTPException(
+            403,
+            "archived notes are read-only; this week was rolled forward — "
+            "edit the task on the current week's note instead",
+        )
 
     full = settings.notes_dir / note.path
     if not full.exists():
         raise HTTPException(404, "note file missing on disk")
 
+    # Snapshot pre-mutation values for the audit-trail events emitted
+    # below (issue #251). Owners are already loaded above; priority /
+    # eta / features come from the TaskAttr / TaskFeature mirrors.
+    old_owners_norm = sorted({(o or "").strip().lower() for o in owners if o and o.strip()})
+    _old_priority_row = s.exec(
+        select(TaskAttr.value).where(TaskAttr.task_id == task_id, TaskAttr.key == "priority")
+    ).first()
+    old_priority = (_old_priority_row[0] if isinstance(_old_priority_row, tuple) else _old_priority_row) or ""
+    _old_eta_row = s.exec(
+        select(TaskAttr.value).where(TaskAttr.task_id == task_id, TaskAttr.key == "eta")
+    ).first()
+    old_eta = (_old_eta_row[0] if isinstance(_old_eta_row, tuple) else _old_eta_row) or ""
+    _old_features = s.exec(
+        select(Feature.name).join(TaskFeature, TaskFeature.feature_id == Feature.id)
+        .where(TaskFeature.task_id == task_id)
+    ).all()
+    old_features_norm = sorted({(f or "").strip().lower() for f in _old_features if f and f.strip()})
     # ── RMW under the file lock ───────────────────────────────────────────
     # The fast-path popover (issue #140) updates ``note.body_md`` without
     # re-running the parser, so individual ``Task.line`` values in the
@@ -2202,9 +2415,9 @@ def patch_task(
 
     refreshed = s.get(Task, task_id)
     awarded: list[str] = []
+    ev_ref = (refreshed.task_uuid if refreshed and refreshed.task_uuid
+              else (t.task_uuid or f"task#{task_id}"))
     if status_changed and body.status is not None:
-        ev_ref = (refreshed.task_uuid if refreshed and refreshed.task_uuid
-                  else (t.task_uuid or f"task#{task_id}"))
         awarded += gamify.record_event(
             s, user, gamify.TASK_STATUS_SET,
             ref=ev_ref,
@@ -2216,6 +2429,50 @@ def patch_task(
                 ref=ev_ref,
                 meta={"from": old_status, "to": body.status},
             )
+    # ── Per-field audit events (issue #251) ──────────────────────────────
+    # One event per field that actually changed. Skip no-ops and reorder-
+    # only multi-value updates. Emission is best-effort (record_event
+    # swallows errors), so a logging hiccup never blocks the PATCH.
+    if body.priority is not None:
+        new_priority = (body.priority or "").strip()
+        if (old_priority or "") != new_priority:
+            awarded += gamify.record_event(
+                s, user, gamify.TASK_PRIORITY_SET,
+                ref=ev_ref,
+                meta={"from": old_priority or None, "to": new_priority or None},
+            )
+    if body.eta is not None:
+        new_eta = (body.eta or "").strip()
+        if (old_eta or "") != new_eta:
+            awarded += gamify.record_event(
+                s, user, gamify.TASK_ETA_SET,
+                ref=ev_ref,
+                meta={"from": old_eta or None, "to": new_eta or None},
+            )
+    if body.owners is not None:
+        new_owners_clean = [o.strip().lstrip("@") for o in body.owners if o and o.strip()]
+        new_owners_norm = sorted({o.lower() for o in new_owners_clean})
+        if new_owners_norm != old_owners_norm:
+            awarded += gamify.record_event(
+                s, user, gamify.TASK_OWNERS_SET,
+                ref=ev_ref,
+                meta={"from": [o for o in owners if o], "to": new_owners_clean},
+            )
+    if body.features is not None:
+        new_features_clean = [f.strip() for f in body.features if f and f.strip()]
+        new_features_norm = sorted({f.lower() for f in new_features_clean})
+        if new_features_norm != old_features_norm:
+            awarded += gamify.record_event(
+                s, user, gamify.TASK_FEATURES_SET,
+                ref=ev_ref,
+                meta={"from": [f for f in _old_features if f], "to": new_features_clean},
+            )
+    if body.add_note is not None and body.add_note.strip():
+        awarded += gamify.record_event(
+            s, user, gamify.TASK_NOTE_ADDED,
+            ref=ev_ref,
+            meta={"text": body.add_note.strip()},
+        )
     out = _task_to_dict(s, refreshed) if refreshed else {"ok": True}
     if awarded:
         # De-dupe: status_set + close on the same task can both award
@@ -2255,6 +2512,12 @@ def delete_task(
         raise HTTPException(403, "no access to project")
     if role != "manager" and not is_owner:
         raise HTTPException(403, "only the task owner or a project manager can delete")
+    if note.archived and role != "manager":
+        raise HTTPException(
+            403,
+            "archived notes are read-only; this week was rolled forward — "
+            "delete the task on the current week's note instead",
+        )
 
     full = settings.notes_dir / note.path
     task_uuid = t.task_uuid
@@ -2288,6 +2551,14 @@ def delete_task(
         new_mtime=new_mtime,
         line_shift_pivot=line_to_remove,
         line_shift=-max(lines_removed, 1),
+    )
+    # Audit event (issue #251). Emitted after the index delete commits
+    # via session_scope so the row references a stable task_uuid string.
+    ev_ref = task_uuid or f"task#{t.id}"
+    gamify.record_event(
+        s, user, gamify.TASK_DELETED,
+        ref=ev_ref,
+        meta={"title": task_title, "last_status": t.status, "note_path": note.path},
     )
     return {"status": "deleted", "task_uuid": task_uuid, "title": task_title}
 

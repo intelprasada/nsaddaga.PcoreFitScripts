@@ -160,6 +160,42 @@ def strip_done_tasks(md: str) -> str:
     return "".join(out)
 
 
+def strip_top_level_done_tasks(md: str) -> str:
+    """Like :func:`strip_done_tasks` but only drops **top-level** done tasks
+    (those whose parent is None).  Done children of an open parent are kept
+    inside the parent's block — when the open parent moves to the next week
+    on rollover, its done children (final state) move with it for full
+    historical context.
+
+    Used by the new archive-style rollover (#251 follow-up).
+    """
+    from .parser import parse
+    parsed = parse(md)
+    done_lines: set[int] = set()
+    for t in parsed.get("tasks", []):
+        if t.get("parent_slug") is not None:
+            continue
+        if t.get("status") != "done":
+            continue
+        if isinstance(t.get("line"), int):
+            done_lines.add(t["line"])
+    lines = md.splitlines(keepends=True)
+    out: list[str] = []
+    skip_indent: int | None = None
+    for i, line in enumerate(lines):
+        if skip_indent is not None:
+            if not line.strip():
+                continue
+            if _line_indent(line) > skip_indent:
+                continue
+            skip_indent = None
+        if i in done_lines:
+            skip_indent = _line_indent(line)
+            continue
+        out.append(line)
+    return "".join(out)
+
+
 def bump_ww(text: str, current_ww: int, next_ww: int) -> str:
     """Replace every `wwN[.x]` token (case-insensitive) where N == ``current_ww``
     with `ww<next_ww>[.x]`, preserving the fractional part. Other ww references
@@ -177,38 +213,62 @@ def detect_ww(name: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def roll_to_next_week(md: str, basename: str) -> tuple[str, str, int, int, str]:
-    """Roll an Intel-WW-tagged note to the next week.
+def roll_to_next_week(
+    md: str, basename: str,
+) -> tuple[str, str, int, int, str, list[str]]:
+    """Roll an Intel-WW-tagged note forward to the next week using the
+    archive (single-active-file) model.
 
-    - Strips done tasks/ARs (with their nested items / continuation lines).
-    - Ensures every surviving `!task`/`!AR` line in the SOURCE has a stable
-      `#id <ID>` token (mutating ``md`` if needed); returns the patched
-      source as the 5th element so the caller can write it back.
-    - Bumps every occurrence of the current WW number (matching the filename's
-      WW) by +1 in the basename and in any plain prose `wwN[.x]` references in
-      the body — but **never** in `#eta` values.
-    - Rewrites the surviving `!task`/`!AR` lines into agenda **reference rows**
-      `- #task <ID> <title> ...` so the next-week note does not redeclare
-      tasks (avoiding duplicate Task rows in the index).
+    Returns a 6-tuple ``(new_md, new_basename, current_ww, next_ww,
+    archived_md, moved_uuids)``:
 
-    Returns ``(new_md, new_basename, current_ww, next_ww, patched_source_md)``.
+    * ``new_md`` — contents of the next-week file.  Open top-level
+      ``!task`` / ``!AR`` declarations are MOVED here verbatim (with their
+      entire indent block: nested children, ``#note`` continuations,
+      done children of an open parent).  Done top-level blocks are
+      dropped — their canonical declarations stay in the archive.  Prose
+      ``wwN[.x]`` references matching ``current_ww`` are bumped by +1
+      (but never inside ``#eta`` values).
+    * ``archived_md`` — contents to write to the source file's archive
+      location.  Open top-level declarations are replaced with a single
+      ``- #task <ID> <title>`` (or ``- #AR …``) reference row, with their
+      indent block dropped.  Done top-level blocks remain canonical so
+      historical state is preserved.  ww references are NOT bumped — the
+      archive captures the original week.
+    * ``moved_uuids`` — every task UUID whose canonical declaration moved
+      from the source file into ``new_md``.  The API caller uses this to
+      bulk ``UPDATE task SET note_id = <new_note_id>`` so cross-file refs
+      (``#task T-XXX``) and child rows (TaskAttr / TaskOwner / Link) stay
+      attached to the now-canonical task without losing audit history.
+
     Raises ``ValueError`` if the basename does not contain a `wwN` token.
     """
     cur = detect_ww(basename)
     if cur is None:
         raise ValueError("filename must contain a 'wwN' token (e.g. 'ww16')")
     nxt = cur + 1
-    # 1. Inject missing IDs into the source first so both source and rolled
-    #    file share the same canonical IDs.
+    # 1. Inject missing IDs first so both files share the canonical IDs.
     patched_source, _ = inject_missing_ids(md)
-    # 2. Strip done tasks (using the patched source so IDs survive too).
-    pruned = strip_done_tasks(patched_source)
-    # 3. Bump prose ww references (but not #eta values).
-    bumped = _bump_ww_outside_eta(pruned, cur, nxt)
-    # 4. Rewrite remaining !task/!AR declarations as #task <ID> reference rows.
-    new_body = rewrite_tasks_as_refs(bumped)
+    # 2. New (next-week) file: drop only top-level done blocks; keep open
+    #    parents' indent blocks intact (so done children of open parents
+    #    move with their parent).  Then bump prose ww references.
+    new_pruned = strip_top_level_done_tasks(patched_source)
+    new_body = _bump_ww_outside_eta(new_pruned, cur, nxt)
     new_base = bump_ww(basename, cur, nxt)
-    return new_body, new_base, cur, nxt, patched_source
+    # 3. Archive: replace top-level OPEN declarations with ref rows,
+    #    drop their indent blocks.  Top-level DONE blocks stay canonical.
+    archived_md = _replace_top_level_open_with_refs(patched_source)
+    # 4. Compute the set of uuids that ended up canonical in new_body.
+    from .parser import parse
+    new_parsed = parse(new_body)
+    moved_uuids: list[str] = []
+    seen: set[str] = set()
+    for t in new_parsed.get("tasks", []):
+        rid = t.get("attrs", {}).get("id")
+        if rid and rid not in seen:
+            seen.add(rid)
+            moved_uuids.append(rid)
+    return new_body, new_base, cur, nxt, archived_md, moved_uuids
 
 
 _ETA_TOKEN_RE = re.compile(r"#eta\s+\S+", re.IGNORECASE)
@@ -444,6 +504,90 @@ def rewrite_tasks_as_refs(md: str) -> str:
         if rest_clean:
             pieces.append(rest_clean)
         out.append(" ".join(p for p in pieces if p) + nl)
+    return "".join(out)
+
+
+def _render_ref_row_for_line(raw: str, ref_id: str, *, kind: str) -> str:
+    """Build a single ``- #task|#AR <ID> <title> [attrs]`` reference row from
+    a canonical ``!task`` / ``!AR`` declaration line.  Used by both
+    :func:`rewrite_tasks_as_refs` (full-file rewrite) and
+    :func:`_replace_top_level_open_with_refs` (archive-style rollover).
+    """
+    ref_keyword = "#AR" if kind.lower() == "ar" else "#task"
+    body = raw
+    nl = ""
+    while body.endswith("\n") or body.endswith("\r"):
+        nl = body[-1] + nl
+        body = body[:-1]
+    m_full = _TASK_LINE_FULL.match(raw)
+    if m_full:
+        lead = m_full.group("lead")
+        title = m_full.group("title").strip()
+        rest = (m_full.group("rest") or "").strip()
+    else:
+        m_kw = _BANG_KEYWORD_RE.match(raw)
+        lead_m = re.match(r"^(\s*(?:[-*+]\s+|\d+[.)]\s+)?)", raw)
+        lead = lead_m.group(1) if lead_m else ""
+        raw_rest = raw[m_kw.end():] if m_kw else ""
+        title = ""
+        rest = raw_rest.strip()
+    rest_clean = _ID_TOKEN_RE.sub("", rest).strip()
+    title_clean = _ID_TOKEN_RE.sub("", title).strip()
+    rest_clean = re.sub(r"\s{2,}", " ", rest_clean).strip()
+    pieces = [f"{lead}{ref_keyword} {ref_id}"]
+    if title_clean:
+        pieces.append(title_clean)
+    if rest_clean:
+        pieces.append(rest_clean)
+    return " ".join(p for p in pieces if p) + nl
+
+
+def _replace_top_level_open_with_refs(md: str) -> str:
+    """For the archive-style rollover (#251 follow-up): replace each
+    **top-level open** ``!task`` / ``!AR`` declaration with a ``#task <ID>``
+    reference row, dropping the entire indent block beneath it (children,
+    ``#note`` continuations).  Done top-level blocks are kept verbatim so
+    historical state is preserved in the archive.
+
+    Identifies top-level vs nested via the parser's ``parent_slug``:
+    ``parent_slug is None`` means the task has no preceding shallower-indent
+    task, regardless of whether bullets are mixed.
+    """
+    from .parser import parse
+    parsed = parse(md)
+    open_top: dict[int, dict] = {}
+    for t in parsed.get("tasks", []):
+        if t.get("parent_slug") is not None:
+            continue
+        if t.get("status") == "done":
+            continue
+        rid = t.get("attrs", {}).get("id")
+        if not rid:
+            continue
+        line_no = t.get("line")
+        if not isinstance(line_no, int):
+            continue
+        open_top[line_no] = {
+            "kind": t.get("kind", "task"),
+            "indent": t.get("indent", 0),
+            "ref_id": rid,
+        }
+    lines = md.splitlines(keepends=True)
+    out: list[str] = []
+    skip_indent: int | None = None
+    for i, raw in enumerate(lines):
+        if skip_indent is not None:
+            if not raw.strip():
+                continue
+            if _line_indent(raw) > skip_indent:
+                continue
+            skip_indent = None
+        if i in open_top:
+            info = open_top[i]
+            out.append(_render_ref_row_for_line(raw, info["ref_id"], kind=info["kind"]))
+            skip_indent = info["indent"]
+            continue
+        out.append(raw)
     return "".join(out)
 
 
