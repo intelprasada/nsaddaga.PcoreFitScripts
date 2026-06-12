@@ -15,6 +15,12 @@ class Note(SQLModel, table=True):
     mtime: float = 0.0
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    # When True, the note has been rolled past its active week and lives
+    # under a sibling ``_archive/`` folder.  Single-active-file model:
+    # popover/PATCH writes against archived notes are restricted to
+    # project managers (#251 follow-up).  Default views hide archived
+    # notes unless the caller passes ``include_archived=1``.
+    archived: bool = Field(default=False, index=True)
 
 
 class Task(SQLModel, table=True):

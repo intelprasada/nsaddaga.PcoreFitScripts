@@ -47,23 +47,31 @@ def test_roll_to_next_week_strips_done_and_bumps_title_only():
         "\t#status done\n"
         "\t#eta ww16.1\n"
     )
-    new_md, new_base, cur, nxt, _src = roll_to_next_week(md, "sprint-ww16.md")
+    new_md, new_base, cur, nxt, archived_md, moved_uuids = roll_to_next_week(md, "sprint-ww16.md")
     assert (cur, nxt) == (16, 17)
     assert new_base == "sprint-ww17.md"
-    # done parent + its (also-done) nested item dropped
+    # done parent + its (also-done) nested item dropped from the new file
     assert "Done parent" not in new_md
     assert "finished sub" not in new_md
     # done task whose status is on a continuation line is also dropped
     assert "Continuation done" not in new_md
-    # active items survive
+    # active items survive AS CANONICAL declarations (single-active-file model)
+    assert "!task Active" in new_md or "!task #id" in new_md
     assert "Active" in new_md
-    assert "still open" in new_md
+    assert "still open" in new_md  # nested AR moves with its open parent
     # title bumped
     assert "# Sprint ww17" in new_md
     # ETA values are NOT bumped — user reviews/marks done or sets new ETA
     assert "#eta ww16.3" in new_md
     assert "#eta ww17.2" in new_md
     assert "#eta ww17.3" not in new_md
+    # Archive: done blocks stay canonical, open blocks become ref rows
+    assert "Done parent" in archived_md
+    assert "finished sub" in archived_md
+    assert "#task T-" in archived_md  # ref row for "Active"
+    assert "!task Active" not in archived_md
+    # moved_uuids covers every open task that ended up canonical in new_md
+    assert len(moved_uuids) >= 2  # Active + Future (top-level open)
 
 
 def test_roll_keeps_parent_when_children_unfinished():
@@ -116,25 +124,34 @@ def test_inject_missing_ids_idempotent():
             assert "#id T-" in line
 
 
-def test_roll_emits_refs_and_patches_source():
+def test_roll_moves_open_canonical_archive_keeps_done():
+    """Single-active-file rollover: open top-level tasks move canonically
+    to the new ww file; archive keeps done canonical + ref row stubs for
+    moved tasks (#251 follow-up).
+    """
     from app.markdown_ops import roll_to_next_week
     md = (
         "# Sprint ww30\n"
         "- !task Carry over #status todo #priority P1\n"
         "- !task Done item #status done\n"
     )
-    new_md, new_base, cur, nxt, patched = roll_to_next_week(md, "x-ww30.md")
+    new_md, new_base, cur, nxt, archived_md, moved_uuids = roll_to_next_week(md, "x-ww30.md")
     assert (cur, nxt) == (30, 31)
     assert new_base == "x-ww31.md"
-    assert "#id T-" in patched  # ID injected back into source
-    assert "Done item" not in new_md  # done stripped
-    assert "!task Carry over" not in new_md  # rewritten as ref row
-    assert "#task T-" in new_md  # ref row emitted
-    assert "Carry over" in new_md  # title preserved
-    # Source carries IDs right after the !task keyword; title follows the ID
-    assert "!task #id T-" in patched
-    assert "Carry over" in patched
-    assert "#task T-" not in patched
+    # New file: open task is CANONICAL (not a ref row)
+    assert "!task" in new_md
+    assert "Carry over" in new_md
+    assert "#id T-" in new_md  # canonical declaration carries its #id
+    assert "#task T-" not in new_md  # no ref rows in the new file
+    assert "Done item" not in new_md  # top-level done dropped from new file
+    # Archive: open task becomes a ref row, done task stays canonical
+    assert "#task T-" in archived_md
+    assert "!task Carry over" not in archived_md
+    assert "Done item" in archived_md  # canonical declaration preserved
+    assert "!task #id T-" in archived_md  # canonical with injected id
+    # moved_uuids includes the carry-over task uuid
+    assert len(moved_uuids) == 1
+    assert moved_uuids[0].startswith("T-")
 
 
 def test_parser_ref_rows():
@@ -434,7 +451,10 @@ def test_strip_done_ar_continuation_status_under_open_parent():
 
 
 def test_roll_forward_open_ar_carried_done_ar_dropped():
-    """Full roll: open AR survives as #AR ref row; done AR is dropped."""
+    """Single-active-file rollover: the open parent's entire indent block
+    moves canonically (including done children — their final state goes
+    with the parent for context).  An entirely-done top-level block is
+    kept canonical only in the archive (#251 follow-up)."""
     from app.markdown_ops import roll_to_next_week
     md = (
         "# Sprint ww16\n"
@@ -445,19 +465,32 @@ def test_roll_forward_open_ar_carried_done_ar_dropped():
         "!task All done parent #status done\n"
         "\t!AR Done child AR #status done\n"
     )
-    new_md, new_base, cur, nxt, _ = roll_to_next_week(md, "sprint-ww16.md")
+    new_md, new_base, cur, nxt, archived_md, moved_uuids = roll_to_next_week(
+        md, "sprint-ww16.md",
+    )
     assert (cur, nxt) == (16, 17)
-    # All-done parent + all-done AR → entire block stripped
+    # New file: open parent + its entire indent block (open & done children)
+    # move canonically.
+    assert "!task" in new_md
+    assert "Active" in new_md
+    assert "Open action" in new_md
+    # Done children of an open parent now move with the parent (their final
+    # state is preserved for historical context in the active week).
+    assert "Done action" in new_md
+    assert "#task T-" not in new_md  # no ref rows in the active-week file
+    # All-done top-level block is dropped from the new file …
     assert "All done parent" not in new_md
     assert "Done child AR" not in new_md
-    # Open parent carries forward as #task ref row
-    assert "Active" in new_md
-    assert "#task T-" in new_md
-    # Open AR carries forward as #AR ref row (not #task)
-    assert "Open action" in new_md
-    assert "#AR T-" in new_md
-    # Done AR dropped
-    assert "Done action" not in new_md
+    # … and stays canonical in the archive.
+    assert "All done parent" in archived_md
+    assert "Done child AR" in archived_md
+    # Open parent becomes a ref row in the archive (its block is dropped).
+    assert "#task T-" in archived_md
+    assert "!task Active" not in archived_md
+    # moved_uuids covers every task that ended up canonical in the new
+    # file — parent + child ARs.  These are the rows whose ``note_id``
+    # the API caller will bulk-reassign to the new note id.
+    assert len(moved_uuids) == 3
 
 
 

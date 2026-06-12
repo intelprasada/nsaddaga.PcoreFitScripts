@@ -1689,3 +1689,271 @@ def test_audit_delete_event_emitted(client):
     meta = rows[0]["meta"]
     assert meta["title"] == "Doomed task"
     assert meta["note_path"] == "audit3.md"
+
+
+# ── Rollover / archive (single-active-file model, #251 follow-up) ─────────
+
+
+def test_rollover_moves_open_canonical_archives_source(client):
+    """POST /notes/next-week moves open top-level !task declarations
+    canonically into the next ww file, archives the source under
+    sibling _archive/<basename>, and flips Note.archived on the old row.
+    """
+    md = (
+        "# Weekly ww40\n"
+        "!task Carry over @alice #id T-ROLL01 #status todo\n"
+        "!task Already done @alice #id T-ROLL02 #status done\n"
+    )
+    r = client.put(
+        "/api/notes",
+        json={"path": "ww40.md", "body_md": md},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+
+    r = client.post(
+        "/api/notes/next-week",
+        json={"path": "ww40.md"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["from_ww"] == 40
+    assert out["to_ww"] == 41
+    assert out["path"] == "ww41.md"
+    assert out["archived_path"] == "_archive/ww40.md"
+    assert out["moved_count"] == 1  # only the open task moved
+
+    # Source file is gone from disk; archive + new file exist.
+    assert not (DATA / "notes" / "ww40.md").exists()
+    new_md = (DATA / "notes" / "ww41.md").read_text(encoding="utf-8")
+    archived_md = (DATA / "notes" / "_archive" / "ww40.md").read_text(encoding="utf-8")
+    # New file: open task is canonical.
+    assert "!task" in new_md
+    assert "Carry over" in new_md
+    assert "T-ROLL01" in new_md
+    assert "Already done" not in new_md  # done top-level dropped
+    assert "#task T-" not in new_md  # no ref rows in active week
+    # Archive: open task became a ref row, done task stays canonical.
+    assert "#task T-ROLL01" in archived_md
+    assert "!task Carry over" not in archived_md
+    assert "T-ROLL02" in archived_md
+    assert "Already done" in archived_md
+
+
+def test_rollover_relinks_task_note_id(client):
+    """After rollover, the moved Task row's note_id points at the new
+    note (not the archived one) so popover writes target the active
+    week's file."""
+    md = (
+        "# WW42\n"
+        "!task Hello @alice #id T-ROLL10 #status todo\n"
+    )
+    client.put(
+        "/api/notes",
+        json={"path": "ww42.md", "body_md": md},
+        headers={"Authorization": AUTH},
+    )
+    r = client.post(
+        "/api/notes/next-week",
+        json={"path": "ww42.md"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+    new_note_id = r.json()["id"]
+
+    # GET the task — its note_id should be the new file's note id.
+    r = client.get("/api/tasks/T-ROLL10", headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+    assert r.json()["note_id"] == new_note_id
+
+
+def test_rollover_old_note_flagged_archived_and_hidden_from_tree(client):
+    """The old Note row is flipped to archived=True and hidden from the
+    default /api/tree view; ?include_archived=1 surfaces it."""
+    md = "# WW43\n!task Some task #id T-ROLL20 #status todo\n"
+    client.put(
+        "/api/notes",
+        json={"path": "ww43.md", "body_md": md},
+        headers={"Authorization": AUTH},
+    )
+    r = client.post(
+        "/api/notes/next-week",
+        json={"path": "ww43.md"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+
+    # Default /api/tree does NOT include the archived note.
+    r = client.get("/api/tree", headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+    paths_default: set[str] = set()
+    for grp in r.json():
+        for n in grp.get("notes", []):
+            paths_default.add(n["path"])
+    assert "_archive/ww43.md" not in paths_default
+    assert "ww44.md" in paths_default
+
+    # include_archived=1 shows it with archived flag set.
+    r = client.get(
+        "/api/tree?include_archived=1",
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+    archived_entries: list[dict] = []
+    for grp in r.json():
+        for n in grp.get("notes", []):
+            if n["path"] == "_archive/ww43.md":
+                archived_entries.append(n)
+    assert len(archived_entries) == 1
+    assert archived_entries[0]["archived"] is True
+
+
+def test_archived_note_patch_denied_for_non_manager(client):
+    """A member who owns a task in an archived note still cannot patch
+    it — archived notes are manager-only."""
+    # Set up a project + a member who owns a task.
+    client.post(
+        "/api/projects",
+        json={"name": "rollproj"},
+        headers={"Authorization": AUTH},
+    )
+    _create_user(client, "rollmember", "pw12345pw")
+    client.put(
+        f"/api/projects/rollproj/members/rollmember",
+        json={"user_name": "rollmember", "role": "member"},
+        headers={"Authorization": AUTH},
+    )
+    # Note in the project, with a task @rollmember owns.
+    md = (
+        "# rollproj ww50\n"
+        "!task Member task @rollmember #id T-ROLL50 #status todo\n"
+    )
+    client.put(
+        "/api/notes",
+        json={"path": "rollproj/ww50.md", "body_md": md},
+        headers={"Authorization": AUTH},
+    )
+    # Roll forward.
+    r = client.post(
+        "/api/notes/next-week",
+        json={"path": "rollproj/ww50.md"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+
+    # The moved canonical task is now in rollproj/ww51.md → patches there
+    # by the owner-member should still succeed.
+    member_auth = "Basic " + base64.b64encode(b"rollmember:pw12345pw").decode()
+    r = client.patch(
+        "/api/tasks/T-ROLL50",
+        json={"status": "in-progress"},
+        headers={"Authorization": member_auth},
+    )
+    assert r.status_code == 200, r.text  # active week → owner can edit
+
+    # Now flip the *active* note to archived directly in DB to simulate a
+    # second rollover and confirm patches against an archived note are
+    # 403 for members but 200 for managers/admin.
+    from app.db import session_scope
+    from app.models import Note as NoteModel
+    from sqlmodel import select
+    with session_scope() as s:
+        n = s.exec(select(NoteModel).where(NoteModel.path == "rollproj/ww51.md")).first()
+        assert n is not None
+        n.archived = True
+        s.add(n)
+
+    # Owner-member can no longer patch.
+    r = client.patch(
+        "/api/tasks/T-ROLL50",
+        json={"status": "done"},
+        headers={"Authorization": member_auth},
+    )
+    assert r.status_code == 403, r.text
+    assert "archived" in r.json()["detail"].lower()
+
+    # Admin (manager) still can.
+    r = client.patch(
+        "/api/tasks/T-ROLL50",
+        json={"status": "done"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_resolve_destination_skips_archived(client):
+    """POST /api/tasks with project= must land on the live week, not on
+    a more-recently-modified archived note."""
+    client.post(
+        "/api/projects",
+        json={"name": "destproj"},
+        headers={"Authorization": AUTH},
+    )
+    client.put(
+        "/api/notes",
+        json={"path": "destproj/ww60.md",
+              "body_md": "# destproj ww60\n!task Seed #id T-DEST01 #status todo\n"},
+        headers={"Authorization": AUTH},
+    )
+    r = client.post(
+        "/api/notes/next-week",
+        json={"path": "destproj/ww60.md"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+
+    # Touch the archive's mtime so it's "most recently modified" — to
+    # force the old (broken) resolver to pick it.  The new resolver
+    # should still pick ww61.md (the live note).
+    arch = DATA / "notes" / "destproj" / "_archive" / "ww60.md"
+    import time
+    later = time.time() + 100
+    os.utime(arch, (later, later))
+
+    r = client.post(
+        "/api/tasks",
+        json={
+            "title": "Brand new task",
+            "project": "destproj",
+            "status": "todo",
+            "owners": ["admin"],
+        },
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 201, r.text
+    new_path = r.json()["note_path"]
+    assert new_path == "destproj/ww61.md"
+
+
+def test_rollover_rejects_target_collision(client):
+    """A second roll with overwrite=False must 409 when the target ww
+    file (or archive) already exists."""
+    md = "# WW80\n!task Solo80 #id T-ROLL80 #status todo\n"
+    client.put(
+        "/api/notes",
+        json={"path": "ww80.md", "body_md": md},
+        headers={"Authorization": AUTH},
+    )
+    r = client.post(
+        "/api/notes/next-week",
+        json={"path": "ww80.md"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+
+    # Recreate the source with DIFFERENT uuids so reindex doesn't trip
+    # the global Task.task_uuid UNIQUE constraint.  Then try to roll —
+    # ww81.md already exists from the first roll → 409.
+    md2 = "# WW80\n!task SoloAgain #id T-ROLL80B #status todo\n"
+    client.put(
+        "/api/notes",
+        json={"path": "ww80.md", "body_md": md2},
+        headers={"Authorization": AUTH},
+    )
+    r = client.post(
+        "/api/notes/next-week",
+        json={"path": "ww80.md"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 409, r.text
