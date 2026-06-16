@@ -2121,3 +2121,145 @@ def test_rollover_rejects_target_collision(client):
         headers={"Authorization": AUTH},
     )
     assert r.status_code == 409, r.text
+
+
+# ---------------------------------------------------------------------------
+# Design 8d: two-axis etag (prose + tasks)
+# ---------------------------------------------------------------------------
+
+def _put_8d(client, path: str, body_md: str, *, if_match: str | None = None,
+             if_match_prose: str | None = None) -> object:
+    payload = {"path": path, "body_md": body_md}
+    if if_match_prose is not None:
+        payload["if_match_prose"] = if_match_prose
+    headers = {"Authorization": AUTH}
+    if if_match is not None:
+        headers["If-Match"] = if_match
+    return client.put("/api/notes", json=payload, headers=headers)
+
+
+def test_8d_get_endpoints_return_split_etags(client):
+    """``GET /notes/etag`` and ``GET /notes/{id}`` both expose
+    ``prose_etag`` + ``tasks_etag`` alongside the legacy byte-level etag.
+
+    Without these axes the editor's 5 s freshness poll cannot tell
+    "popover patched a task line" apart from "someone else edited the
+    prose underneath you", and every popover write triggers a false
+    conflict banner.
+    """
+    body = (
+        "# 8d header\n\n"
+        "@admin\n\n"
+        "- !task Foo #id T-8DAA01 #owner @admin #status todo\n"
+        "- !task Bar #id T-8DAA02 #owner @admin #status todo\n\n"
+        "free prose tail\n"
+    )
+    r = _put_8d(client, "8d_split.md", body)
+    assert r.status_code == 200, r.text
+    note_id = r.json()["id"]
+    assert "prose_etag" in r.json() and "tasks_etag" in r.json()
+
+    r = client.get(f"/api/notes/{note_id}", headers={"Authorization": AUTH})
+    assert r.status_code == 200
+    assert "prose_etag" in r.json() and "tasks_etag" in r.json()
+    assert r.json()["prose_etag"] != r.json()["tasks_etag"]
+
+    r = client.get("/api/notes/etag?path=8d_split.md", headers={"Authorization": AUTH})
+    assert r.status_code == 200
+    assert "prose_etag" in r.json() and "tasks_etag" in r.json()
+
+
+def test_8d_typing_prose_while_popover_patches_task_no_conflict(client):
+    """Reproduces the user-visible "constant disk-changed" UX bug.
+
+    Sequence:
+      1. User opens a note (captures prose_etag P0, byte etag E0).
+      2. While they're typing, a popover ``PATCH /tasks/...`` rewrites
+         a task line on disk. Byte etag becomes E1, prose etag stays P0.
+      3. User saves their prose edits, sending ``if_match_prose: P0``.
+
+    Pre-8d: step 3 would 409 stale_write (E0 != E1) and the user would
+    be forced to reload, losing in-progress edits or accept a confirm
+    dialog.
+
+    Post-8d: step 3 succeeds (200) because the prose axis still
+    matches, and the popover task change is preserved via
+    ``merge_with_disk_tasks``.
+    """
+    body = (
+        "# 8d typing\n\n"
+        "@admin\n\n"
+        "- !task Touch me #id T-8DBB01 #owner @admin #status todo\n\n"
+        "original prose\n"
+    )
+    r = _put_8d(client, "8d_typing.md", body)
+    assert r.status_code == 200, r.text
+    p0 = r.json()["prose_etag"]
+
+    # Find the task in the DB-backed task list and patch it via the
+    # structured endpoint — same path the popover uses.
+    r = client.get("/api/tasks?q=Touch", headers={"Authorization": AUTH})
+    tasks = r.json()["tasks"]
+    assert tasks, r.text
+    tid = tasks[0]["id"]
+    r = client.patch(
+        f"/api/tasks/{tid}",
+        json={"status": "in-progress"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+
+    # User's editor now writes their prose edit. Their copy of the task
+    # line is still the pre-popover version (status: todo) — that's the
+    # exact stale-task scenario 8d targets.
+    edited = (
+        "# 8d typing — EDITED HEADING\n\n"
+        "@admin\n\n"
+        "- !task Touch me #id T-8DBB01 #owner @admin #status todo\n\n"
+        "original prose, plus a typed-in line\n"
+    )
+    r = _put_8d(client, "8d_typing.md", edited, if_match_prose=p0)
+    assert r.status_code == 200, r.text
+    saved = r.json()
+    # Re-read to confirm the merged file: prose is the editor's, task
+    # status is the popover's.
+    r = client.get("/api/notes/etag?path=8d_typing.md", headers={"Authorization": AUTH})
+    full = client.get(
+        f"/api/notes/{saved['id']}", headers={"Authorization": AUTH}
+    ).json()["body_md"]
+    assert "EDITED HEADING" in full, full
+    assert "typed-in line" in full, full
+    assert "in-progress" in full, full
+
+
+def test_8d_genuine_prose_conflict_returns_stale_prose(client):
+    """If the prose axis itself drifted (e.g. another user edited the
+    free text on disk), 8d still surfaces a 409 — this time with
+    ``error: 'stale_prose'`` and the new ``current_prose_etag`` /
+    ``current_tasks_etag`` so the frontend can populate the recovery
+    dialog from the same response.
+    """
+    body = (
+        "# 8d conflict\n\n"
+        "@admin\n\n"
+        "- !task X #id T-8DCC01 #owner @admin #status todo\n\n"
+        "version A\n"
+    )
+    r = _put_8d(client, "8d_conflict.md", body)
+    assert r.status_code == 200, r.text
+    p0 = r.json()["prose_etag"]
+
+    # Simulate another writer touching the prose axis.
+    body_b = body.replace("version A", "version B")
+    r = _put_8d(client, "8d_conflict.md", body_b)
+    assert r.status_code == 200, r.text
+
+    # Original client still thinks prose is at P0 — server must reject.
+    body_c = body.replace("version A", "version C")
+    r = _put_8d(client, "8d_conflict.md", body_c, if_match_prose=p0)
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    assert detail["error"] == "stale_prose"
+    assert "current_prose_etag" in detail
+    assert "current_tasks_etag" in detail
+    assert detail["current_content"] is not None

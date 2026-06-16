@@ -29,7 +29,7 @@ import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional
 
 
 class StaleWriteError(Exception):
@@ -82,6 +82,46 @@ def etag_for(path: Path) -> str:
 
 def etag_for_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def etag_components(md_text: str) -> Dict[str, str]:
+    """Compute two-axis etags (Design 8d) over a markdown buffer.
+
+    Returns a dict ``{'prose': sha256_hex, 'tasks': sha256_hex}`` where
+    each component hashes only the lines of that classification (see
+    :func:`app.parser.classify_lines`). Used by the editor concurrency
+    protocol so that:
+
+    - A popover ``PATCH /tasks/...`` that rewrites only ``task`` lines
+      changes ``tasks`` etag but leaves ``prose`` etag stable. The
+      free-text editor's poll loop, keyed on ``prose`` etag, doesn't see
+      a conflict and the user keeps typing.
+    - A free-text edit that touches only prose lines changes ``prose``
+      etag. The popover side tolerates ``tasks`` drift implicitly because
+      its writes are uuid-keyed.
+    - A genuine prose-vs-prose race still raises ``409 stale_prose`` and
+      the existing conflict-resolution UI fires.
+
+    Lazy-imports ``classify_lines`` to avoid the parser <-> safe_io
+    circular at module load time. ``blank`` lines are folded into the
+    prose component (they belong to free-text whitespace; the popover
+    never inserts/removes blank lines).
+    """
+    from .parser import classify_lines  # local import to break cycle
+
+    lines = md_text.splitlines()
+    classes = classify_lines(md_text)
+    prose_buf: List[str] = []
+    task_buf: List[str] = []
+    for line, cls in zip(lines, classes):
+        if cls == "task":
+            task_buf.append(line)
+        else:
+            prose_buf.append(line)
+    return {
+        "prose": hashlib.sha256("\n".join(prose_buf).encode("utf-8")).hexdigest(),
+        "tasks": hashlib.sha256("\n".join(task_buf).encode("utf-8")).hexdigest(),
+    }
 
 
 def _backup_path(notes_dir: Path, target: Path) -> Path:

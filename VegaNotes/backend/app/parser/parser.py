@@ -354,6 +354,81 @@ def parse(md: str) -> Dict[str, Any]:
     }
 
 
+def classify_lines(md: str) -> List[str]:
+    """Return per-line classification ``'task' | 'prose' | 'blank'`` for ``md``.
+
+    Used by Design 8d (decoupled-write-paths) to split the file's address
+    space into two axes:
+
+    - ``'task'`` lines participate in a parsed task record. These are the
+      lines the popover / PATCH endpoints surgically rewrite. Specifically:
+
+        * ``!task`` / ``!AR`` declaration lines.
+        * Ref rows whose first non-bullet token is ``#task <id>`` or
+          ``#ar <id>`` (cross-file references the popover propagates into).
+        * Attribute-only continuation lines indented strictly deeper than
+          the most recent task declaration (e.g. ``#note ...``,
+          indented ``#status``, etc).
+
+    - ``'prose'`` lines are everything else the user freely edits in the
+      .md editor: free text, headings, top-level context lines (``@admin``,
+      ``#project gfc``), etc. Popover writes never touch these.
+
+    - ``'blank'`` lines reset both the parser's task/context stacks and
+      this classifier's "current task" anchor. Counted as prose for
+      etag-component purposes.
+
+    Mirrors the line-by-line dispatch in :func:`parse` so a line's
+    classification matches the parser's actual disposition. If the parser
+    semantics ever diverge between the two paths, write-time behaviour
+    will drift from save-time concurrency expectations — keep them in
+    lock-step.
+    """
+    out: List[str] = []
+    current_task_indent: Optional[int] = None
+    for raw_line in md.splitlines():
+        if not raw_line.strip():
+            out.append("blank")
+            current_task_indent = None
+            continue
+        line_indent = _indent_level(raw_line)
+        items = lex(raw_line)
+        decl = next(
+            (x for x in items if isinstance(x, Token) and x.kind == "task_decl"),
+            None,
+        )
+        attr_toks = [x for x in items if isinstance(x, Token) and x.kind == "attr"]
+        if decl is not None:
+            out.append("task")
+            current_task_indent = line_indent
+            continue
+        if attr_toks:
+            ref = _is_ref_row(items)
+            if ref is not None:
+                out.append("task")
+                continue
+            if _is_context_only_line(items):
+                # Continuation if indented strictly deeper than the most
+                # recent open task; otherwise a top-level context line
+                # (prose for etag-component purposes — popover writes
+                # don't touch these).
+                if current_task_indent is not None and line_indent > current_task_indent:
+                    out.append("task")
+                else:
+                    out.append("prose")
+                continue
+            # Mixed prose+attr line attached to current task — attrs flow
+            # into the task record so we treat it as task content.
+            if current_task_indent is not None and line_indent > current_task_indent:
+                out.append("task")
+            else:
+                out.append("prose")
+            continue
+        # Plain prose (no tokens at all).
+        out.append("prose")
+    return out
+
+
 def _rollup_to_parents(tasks: List[ParsedTask]) -> None:
     """Back-propagate child state to parents:
 

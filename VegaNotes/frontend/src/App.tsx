@@ -40,7 +40,18 @@ function ViewSwitcher({ selectedPath, setSelectedPath, draft, setDraft }: {
   }
 }
 
-type DraftEntry = { body: string; saved: string; savedAt: number; etag: string };
+type DraftEntry = {
+  body: string;
+  saved: string;
+  savedAt: number;
+  etag: string;
+  // Design 8d: track per-axis etags so the 5 s freshness poll can
+  // distinguish prose conflicts (must surface) from task-line drift
+  // (popover writes — silent merge), and the save path can use
+  // ``if_match_prose`` instead of byte-level ``If-Match``.
+  proseEtag: string;
+  tasksEtag: string;
+};
 type DraftMap = Record<string, DraftEntry>;
 
 function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
@@ -102,24 +113,33 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
   useEffect(() => {
     if (!selectedPath || !noteQuery.data) return;
     const fresh = noteQuery.data;
+    const proseEtag = fresh.prose_etag ?? "";
+    const tasksEtag = fresh.tasks_etag ?? "";
     setDraft((prev) => {
       const cur = prev[selectedPath];
       if (!cur) {
         return { ...prev, [selectedPath]: {
           body: fresh.body_md, saved: fresh.body_md,
           savedAt: Date.now(), etag: fresh.etag,
+          proseEtag, tasksEtag,
         }};
       }
       if (cur.body === cur.saved && cur.body !== fresh.body_md) {
         return { ...prev, [selectedPath]: {
           body: fresh.body_md, saved: fresh.body_md,
           savedAt: Date.now(), etag: fresh.etag,
+          proseEtag, tasksEtag,
         }};
       }
-      // Clean draft, body already matches — just refresh the etag in case
-      // a no-op write (e.g. whitespace normalization) bumped it server-side.
-      if (cur.body === cur.saved && cur.etag !== fresh.etag) {
-        return { ...prev, [selectedPath]: { ...cur, etag: fresh.etag } };
+      // Clean draft, body already matches — refresh etags in case a
+      // no-op write (whitespace normalization, popover task patch, etc)
+      // bumped them server-side.
+      if (cur.body === cur.saved && (
+        cur.etag !== fresh.etag ||
+        cur.proseEtag !== proseEtag ||
+        cur.tasksEtag !== tasksEtag
+      )) {
+        return { ...prev, [selectedPath]: { ...cur, etag: fresh.etag, proseEtag, tasksEtag } };
       }
       return prev;
     });
@@ -146,11 +166,26 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
 
   const flushSave = async (path: string, text: string) => {
     setStatus("saving");
-    const expected = draft[path]?.etag;
+    const cur = draft[path];
+    const expected = cur?.etag;
+    // Design 8d: if we have a prose-axis etag, prefer the prose-aware
+    // save path so the user's free-text edits don't 409 against
+    // popover-driven task-line writes that landed during the typing
+    // session.  Falls back to plain byte-level ``If-Match`` for legacy
+    // / non-editor callers (e.g. drafts opened before the etag was
+    // populated).
+    const ifMatchProse = cur?.proseEtag && cur.proseEtag.length > 0 ? cur.proseEtag : undefined;
     try {
-      const r = await api.saveNote(path, text, expected);
+      const r = await api.saveNote(path, text, expected, { ifMatchProse });
       setDraft((prev) => prev[path]
-        ? { ...prev, [path]: { ...prev[path], saved: text, savedAt: Date.now(), etag: r.etag } }
+        ? { ...prev, [path]: {
+            ...prev[path],
+            saved: text,
+            savedAt: Date.now(),
+            etag: r.etag,
+            proseEtag: r.prose_etag ?? prev[path].proseEtag,
+            tasksEtag: r.tasks_etag ?? prev[path].tasksEtag,
+          } }
         : prev);
       invalidateAfterSave(path);
       setStatus("saved");
@@ -160,8 +195,12 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
         // Surface a user-controlled recovery rather than letting the next
         // autosave silently clobber whichever side won the race.
         const detail = (e.body as { detail?: { error?: string;
-          current_content?: string; current_etag?: string } } | null)?.detail;
-        if (detail?.error === "stale_write" && typeof detail.current_etag === "string") {
+          current_content?: string; current_etag?: string;
+          current_prose_etag?: string; current_tasks_etag?: string } } | null)?.detail;
+        if (
+          (detail?.error === "stale_write" || detail?.error === "stale_prose")
+          && typeof detail.current_etag === "string"
+        ) {
           const reload = window.confirm(
             `${path} changed on disk since you opened it.\n\n` +
             `OK = reload disk content (your unsaved edits will be lost).\n` +
@@ -173,16 +212,23 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
               [path]: {
                 body: fresh, saved: fresh,
                 savedAt: Date.now(), etag: detail.current_etag!,
+                proseEtag: detail.current_prose_etag ?? "",
+                tasksEtag: detail.current_tasks_etag ?? "",
               },
             }));
             qcLocal.invalidateQueries({ queryKey: ["note", noteId] });
             setStatus("saved");
             return;
           }
-          // User chose to overwrite — adopt the disk etag so the next save
-          // will succeed. Their current `body` is preserved as-is.
+          // User chose to overwrite — adopt the disk etags so the next
+          // save will succeed. Their current `body` is preserved as-is.
           setDraft((prev) => prev[path]
-            ? { ...prev, [path]: { ...prev[path], etag: detail.current_etag! } }
+            ? { ...prev, [path]: {
+                ...prev[path],
+                etag: detail.current_etag!,
+                proseEtag: detail.current_prose_etag ?? prev[path].proseEtag,
+                tasksEtag: detail.current_tasks_etag ?? prev[path].tasksEtag,
+              } }
             : prev);
           setStatus("idle");
           return;
@@ -239,8 +285,31 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
         if (cancelled) return;
         const cur = draftRef.current[selectedPath];
         if (!cur) return;
-        if (r.etag === cur.etag) {
-          // Disk still matches what we have — clear any stale banner.
+        // Design 8d: only treat *prose-axis* drift as a real freshness
+        // event for the editor.  Task-line drift (popover writes) is
+        // resolved silently at save time via ``merge_with_disk_tasks``,
+        // so it shouldn't trip the conflict banner or force a refetch
+        // mid-typing.  Compare on prose etag when available, fall back
+        // to byte-level etag for older backends.
+        const curProse = cur.proseEtag || cur.etag;
+        const diskProse = r.prose_etag ?? r.etag;
+        const curTasks = cur.tasksEtag;
+        const diskTasks = r.tasks_etag ?? "";
+        if (curProse === diskProse) {
+          // Prose stable.  If only the task axis drifted *and* the
+          // buffer is clean, silently refresh so the editor picks up
+          // popover-driven task-line edits without flicker.
+          if (cur.body === cur.saved && curTasks && diskTasks && curTasks !== diskTasks) {
+            if (noteId != null) qcLocal.invalidateQueries({ queryKey: ["note", noteId] });
+          } else if (cur.body === cur.saved && curTasks && diskTasks && curTasks === diskTasks) {
+            // Fully in sync — also patch any drifted byte-level etag so
+            // the next save's ``If-Match`` doesn't 409.
+            if (cur.etag !== r.etag) {
+              setDraft((prev) => prev[selectedPath]
+                ? { ...prev, [selectedPath]: { ...prev[selectedPath], etag: r.etag } }
+                : prev);
+            }
+          }
           if (diskConflict?.path === selectedPath) setDiskConflict(null);
           return;
         }
@@ -249,7 +318,7 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
           if (noteId != null) qcLocal.invalidateQueries({ queryKey: ["note", noteId] });
           if (diskConflict?.path === selectedPath) setDiskConflict(null);
         } else {
-          // Both sides moved → surface the banner.
+          // Both sides' prose moved → surface the banner.
           setDiskConflict({ path: selectedPath, diskEtag: r.etag });
         }
       } catch { /* network blip — ignore */ }
@@ -269,6 +338,8 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
         saved: prev[selectedPath]?.saved ?? v,
         savedAt: prev[selectedPath]?.savedAt ?? 0,
         etag: prev[selectedPath]?.etag ?? "",
+        proseEtag: prev[selectedPath]?.proseEtag ?? "",
+        tasksEtag: prev[selectedPath]?.tasksEtag ?? "",
       },
     }));
   };
@@ -305,6 +376,8 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
         [selectedPath]: {
           body: fresh.body_md, saved: fresh.body_md,
           savedAt: Date.now(), etag: fresh.etag,
+          proseEtag: fresh.prose_etag ?? "",
+          tasksEtag: fresh.tasks_etag ?? "",
         },
       }));
       qcLocal.invalidateQueries({ queryKey: ["note", noteId] });
@@ -343,6 +416,8 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
           body: r.body_md, saved: r.body_md,
           savedAt: Date.now(),
           etag: fresh?.etag ?? "",
+          proseEtag: fresh?.prose_etag ?? "",
+          tasksEtag: fresh?.tasks_etag ?? "",
         },
       }));
       qcLocal.invalidateQueries({ queryKey: ["notes"] });
@@ -373,7 +448,11 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
       const n = await api.note(meta.id);
       setDraft((prev) => ({
         ...prev,
-        [selectedPath]: { body: n.body_md, saved: n.body_md, savedAt: Date.now(), etag: n.etag },
+        [selectedPath]: {
+          body: n.body_md, saved: n.body_md, savedAt: Date.now(), etag: n.etag,
+          proseEtag: n.prose_etag ?? "",
+          tasksEtag: n.tasks_etag ?? "",
+        },
       }));
       qcLocal.invalidateQueries({ queryKey: ["note", meta.id] });
       qcLocal.invalidateQueries({ queryKey: ["notes"] });
