@@ -1,45 +1,11 @@
 {
-  "nsaddaga": {
-    "idsid": "nsaddaga",
-    "display": "Prasad Addagarla",
-    "email": "prasad.addagarla@intel.com",
+  "abolisaw": {
+    "idsid": "abolisaw",
+    "display": "Aboli Sawant",
+    "email": "aboli.sawant@intel.com",
     "aliases": [
-      "prasad",
-      "addagarla",
-      "prasad addagarla",
-      "p addagarla",
-      "admin"
-    ],
-    "prefer_subtrees": [
-      "eyitav"
-    ]
-  },
-  "nchatla": {
-    "idsid": "nchatla",
-    "display": "Niharika Chatla",
-    "email": "niharika1.chatla@intel.com",
-    "aliases": [
-      "chatla",
-      "chatla niharika",
-      "chatla, niharika",
-      "chatla, niharika1",
-      "niharika",
-      "niharika chatla",
-      "niharika1",
-      "niharika1.chatla"
-    ]
-  },
-  "yongxili": {
-    "idsid": "yongxili",
-    "display": "Yongxi Li",
-    "email": "yongxi.li@intel.com",
-    "aliases": [
-      "li",
-      "li yongxi",
-      "li, yongxi",
-      "yongxi",
-      "yongxi li",
-      "yongxi.li"
+      "aboli",
+      "aboli.sawant"
     ]
   },
   "alonhers": {
@@ -55,30 +21,13 @@
       "hershkovitz, alon"
     ]
   },
-  "ehezi": {
-    "idsid": "ehezi",
-    "display": "Elad Hezi",
-    "email": "elad.hezi@intel.com",
+  "ashar10": {
+    "idsid": "ashar10",
+    "display": "Atul Sharma",
+    "email": "atul.z.sharma@intel.com",
     "aliases": [
-      "elad",
-      "elad hezi",
-      "elad.hezi",
-      "hezi",
-      "hezi elad",
-      "hezi, elad"
-    ]
-  },
-  "ylaizer": {
-    "idsid": "ylaizer",
-    "display": "Yakir Laizer",
-    "email": "yakir.laizer@intel.com",
-    "aliases": [
-      "laizer",
-      "laizer yakir",
-      "laizer, yakir",
-      "yakir",
-      "yakir laizer",
-      "yakir.laizer"
+      "atul",
+      "atul.z.sharma"
     ]
   },
   "ayastein": {
@@ -116,6 +65,19 @@
       "edwin.f.mendez.valverde"
     ]
   },
+  "ehezi": {
+    "idsid": "ehezi",
+    "display": "Elad Hezi",
+    "email": "elad.hezi@intel.com",
+    "aliases": [
+      "elad",
+      "elad hezi",
+      "elad.hezi",
+      "hezi",
+      "hezi elad",
+      "hezi, elad"
+    ]
+  },
   "gajith": {
     "idsid": "gajith",
     "display": "Gautham Ajith",
@@ -123,6 +85,18 @@
     "aliases": [
       "gautham",
       "gautham.ajith"
+    ]
+  },
+  "gbandana": {
+    "idsid": "gbandana",
+    "display": "Gnanamaria Kushwanth Bandanadham",
+    "email": "gnanamaria.kushwanth.bandanadham@intel.com",
+    "aliases": [
+      "kushwanth",
+      "gnanamaria",
+      "bandanadham",
+      "gnanamaria kushwanth bandanadham",
+      "gnanamaria.kushwanth.bandanadham"
     ]
   },
   "khbyers": {
@@ -143,6 +117,21 @@
       "muana.kasongo"
     ]
   },
+  "nchatla": {
+    "idsid": "nchatla",
+    "display": "Niharika Chatla",
+    "email": "niharika1.chatla@intel.com",
+    "aliases": [
+      "chatla",
+      "chatla niharika",
+      "chatla, niharika",
+      "chatla, niharika1",
+      "niharika",
+      "niharika chatla",
+      "niharika1",
+      "niharika1.chatla"
+    ]
+  },
   "njammala": {
     "idsid": "njammala",
     "display": "Namratha Jammalamadugu",
@@ -150,6 +139,21 @@
     "aliases": [
       "namratha",
       "namratha.jammalamadugu"
+    ]
+  },
+  "nsaddaga": {
+    "idsid": "nsaddaga",
+    "display": "Prasad Addagarla",
+    "email": "prasad.addagarla@intel.com",
+    "aliases": [
+      "prasad",
+      "addagarla",
+      "prasad addagarla",
+      "p addagarla",
+      "admin"
+    ],
+    "prefer_subtrees": [
+      "eyitav"
     ]
   },
   "rnagarat": {
@@ -170,22 +174,30 @@
       "sachin.bhattad"
     ]
   },
-  "abolisaw": {
-    "idsid": "abolisaw",
-    "display": "Aboli Sawant",
-    "email": "aboli.sawant@intel.com",
+  "ylaizer": {
+    "idsid": "ylaizer",
+    "display": "Yakir Laizer",
+    "email": "yakir.laizer@intel.com",
     "aliases": [
-      "aboli",
-      "aboli.sawant"
+      "laizer",
+      "laizer yakir",
+      "laizer, yakir",
+      "yakir",
+      "yakir laizer",
+      "yakir.laizer"
     ]
   },
-  "ashar10": {
-    "idsid": "ashar10",
-    "display": "Atul Sharma",
-    "email": "atul.z.sharma@intel.com",
+  "yongxili": {
+    "idsid": "yongxili",
+    "display": "Yongxi Li",
+    "email": "yongxi.li@intel.com",
     "aliases": [
-      "atul",
-      "atul.z.sharma"
+      "li",
+      "li yongxi",
+      "li, yongxi",
+      "yongxi",
+      "yongxi li",
+      "yongxi.li"
     ]
   }
 }
