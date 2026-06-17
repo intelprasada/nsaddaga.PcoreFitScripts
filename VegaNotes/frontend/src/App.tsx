@@ -18,6 +18,7 @@ import { ChangePasswordModal } from "./components/Auth/ChangePasswordModal";
 import { QuoteBar } from "./components/QuoteBar/QuoteBar";
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "./api/client";
+import { loadPersistedDrafts, persistDirtyDrafts } from "./store/draftStorage";
 
 const qc = new QueryClient();
 
@@ -369,6 +370,19 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
   // Banner actions for the disk-watch conflict surface (#153).
   const onConflictReload = async () => {
     if (!selectedPath || noteId == null) return;
+    // Destructive: overwrites the dirty buffer with disk content.
+    // Require an explicit confirm so a misclick on the banner button
+    // doesn't silently nuke unsaved typing — the buffer survives a
+    // page reload now (localStorage), but only if we don't first
+    // overwrite it here. See "yes" follow-up to design 8d.
+    const cur = draftRef.current[selectedPath];
+    if (cur && cur.body !== cur.saved) {
+      const ok = window.confirm(
+        `${selectedPath} — discard your unsaved edits and load disk contents?\n\n` +
+        `Cancel keeps your edits; the next Save will overwrite disk.`,
+      );
+      if (!ok) return;
+    }
     try {
       const fresh = await api.note(noteId);
       setDraft((prev) => ({
@@ -393,6 +407,17 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
       : prev);
     setDiskConflict(null);
   };
+
+  // Auto-dismiss the banner once the buffer goes clean (e.g. after a
+  // successful save or a deliberate Reload). Without this the banner
+  // can linger after the user has already resolved the conflict, and
+  // the destructive "Reload" button would still be one careless click
+  // away from clobbering a now-clean disk match.
+  useEffect(() => {
+    if (!diskConflict) return;
+    if (!entry) return;
+    if (entry.body === entry.saved) setDiskConflict(null);
+  }, [entry, diskConflict]);
 
   const onStampIds = async () => {
     if (!selectedPath || !entry) return;
@@ -494,10 +519,14 @@ function EditorPane({ selectedPath, setSelectedPath, draft, setDraft }: {
       {diskConflict && diskConflict.path === selectedPath && (
         <div className="rounded border border-amber-400 bg-amber-50 px-3 py-2 text-sm text-amber-900 flex items-center gap-3 flex-wrap">
           <span>⚠ <b>{selectedPath}</b> changed on disk while you have unsaved edits.</span>
-          <button className="rounded bg-white border border-amber-400 px-2 py-0.5 text-xs hover:bg-amber-100"
-            onClick={onConflictReload}>Reload from disk</button>
-          <button className="rounded bg-white border border-amber-400 px-2 py-0.5 text-xs hover:bg-amber-100"
+          {/* Primary / safe action first so a reflexive "first button"
+              click protects edits rather than discarding them. */}
+          <button autoFocus
+            className="rounded bg-amber-600 text-white px-2 py-0.5 text-xs hover:bg-amber-700"
             onClick={onConflictKeep}>Keep my edits (overwrite on next save)</button>
+          <button
+            className="rounded bg-white border border-red-400 text-red-700 px-2 py-0.5 text-xs hover:bg-red-50"
+            onClick={onConflictReload}>Reload (discard your edits)</button>
           <button className="ml-auto text-xs underline"
             onClick={() => setDiskConflict(null)}>dismiss</button>
         </div>
@@ -698,9 +727,21 @@ function NavBar() {
   );
 }
 
+// localStorage key for persisting dirty drafts across page reloads /
+// HMR / browser tab discards. The ``loadPersistedDrafts`` /
+// ``persistDirtyDrafts`` helpers live in ``store/draftStorage.ts``
+// so they can be unit-tested in isolation.
+
 export default function App() {
   const [selectedPath, setSelectedPath] = useState<string>("");
-  const [draft, setDraft] = useState<DraftMap>({});
+  // Lazy-init from localStorage so a page reload (F5, HMR, browser
+  // tab discard) preserves any unsaved edits the user had open. The
+  // pre-localStorage behaviour silently nuked in-flight typing on any
+  // SPA remount — same effect as a save-then-discard. Persistence is
+  // limited to *dirty* entries so a clean re-open doesn't shadow the
+  // authoritative disk content.
+  const [draft, setDraft] = useState<DraftMap>(loadPersistedDrafts);
+  useEffect(() => { persistDirtyDrafts(draft); }, [draft]);
   return (
     <QueryClientProvider client={qc}>
       <div className="min-h-screen flex flex-col">
