@@ -27,6 +27,7 @@ from ..markdown_ops import (
     inject_missing_ids, replace_attr, replace_multi_attr, replace_notes,
     append_note, generate_task_id, existing_ids, delete_task_block,
     insert_ar_under_task,
+    merge_with_disk_tasks,
     remove_attr, roll_to_next_week, update_task_status,
     find_ref_row_lines, patch_ref_rows, insert_ar_ref_row_after,
 )
@@ -36,7 +37,8 @@ from ..models import (
 )
 from ..parser import parse
 from ..safe_io import (
-    StaleWriteError, _safe_write_unlocked, etag_for, etag_for_bytes, safe_write, with_file_lock,
+    StaleWriteError, _safe_write_unlocked, etag_components, etag_for,
+    etag_for_bytes, safe_write, with_file_lock,
 )
 from .. import gamify
 from ..phonebook import get_phonebook
@@ -439,6 +441,13 @@ class NoteIn(BaseModel):
     # etag to match exactly. Mismatch -> 409 with the current content + etag
     # so the client can reconcile. See issue #60.
     if_match: Optional[str] = None
+    # Design 8d: two-axis etag. When ``if_match_prose`` is provided the
+    # server only requires the *prose* component of the disk etag to
+    # match; popover-driven task-line drift on disk is reconciled via
+    # :func:`merge_with_disk_tasks` so the user's free-text edits land
+    # without colliding on every concurrent ``PATCH /tasks/...``. See
+    # checkpoint "Implementing two-axis etag design 8d".
+    if_match_prose: Optional[str] = None
 
 
 @router.get("/notes")
@@ -476,9 +485,12 @@ def note_etag(
     if not full.exists() or not full.is_file():
         raise HTTPException(404, "note not found")
     disk_md = full.read_text(encoding="utf-8")
+    components = etag_components(disk_md)
     return {
         "path": path,
         "etag": etag_for_bytes(disk_md.encode()),
+        "prose_etag": components["prose"],
+        "tasks_etag": components["tasks"],
         "mtime": full.stat().st_mtime,
     }
 
@@ -503,10 +515,13 @@ def get_note(
     else:
         disk_md = n.body_md  # fallback if file somehow missing
         disk_etag = etag_for(full)
+    components = etag_components(disk_md)
     return {
         "id": n.id, "path": n.path, "title": n.title,
         "body_md": disk_md, "updated_at": n.updated_at,
         "etag": disk_etag,
+        "prose_etag": components["prose"],
+        "tasks_etag": components["tasks"],
     }
 
 
@@ -531,14 +546,48 @@ def upsert_note(
     expected = body.if_match if body.if_match is not None else if_match
     pre_existing = full.exists()
     pre_body = full.read_text(encoding="utf-8") if pre_existing else ""
+
+    # Design 8d: prose-aware concurrency. If the client sent
+    # ``if_match_prose`` we ignore byte-level ``if_match`` and instead
+    # accept the write as long as the *prose* component of the on-disk
+    # file matches what the client started from. We then merge the
+    # client's prose with whatever task lines are currently on disk so
+    # popover ``PATCH /tasks/...`` writes that landed during the typing
+    # session are preserved. See checkpoint
+    # "Implementing two-axis etag design 8d".
+    write_md = body.body_md
+    if body.if_match_prose is not None and pre_existing:
+        with with_file_lock(full):
+            disk_now = full.read_text(encoding="utf-8")
+            disk_components = etag_components(disk_now)
+            if disk_components["prose"] != body.if_match_prose:
+                # Genuine prose-vs-prose conflict — surface to the user.
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "stale_prose",
+                        "message": "the prose changed under you; reload before saving",
+                        "current_content": disk_now,
+                        "current_etag": etag_for_bytes(disk_now.encode()),
+                        "current_prose_etag": disk_components["prose"],
+                        "current_tasks_etag": disk_components["tasks"],
+                    },
+                )
+            # Prose matches — overlay disk's task lines onto the
+            # incoming prose buffer and rewrite. Bypass the byte-etag
+            # check below by clearing ``expected``: the prose-axis
+            # check we just performed is the authoritative gate.
+            write_md = merge_with_disk_tasks(body.body_md, disk_now)
+            expected = None
     try:
         new_etag = safe_write(
-            full, body.body_md,
+            full, write_md,
             notes_dir=settings.notes_dir, expected_etag=expected,
         )
     except StaleWriteError as e:
         # 409 Conflict — body carries current content + etag for the
         # client to surface a recovery / merge UI. See issue #60.
+        cur_components = etag_components(e.current_content or "")
         raise HTTPException(
             status_code=409,
             detail={
@@ -546,17 +595,27 @@ def upsert_note(
                 "message": "the file changed under you; reload before saving",
                 "current_content": e.current_content,
                 "current_etag": e.current_etag,
+                "current_prose_etag": cur_components["prose"],
+                "current_tasks_etag": cur_components["tasks"],
             },
         )
     note = reindex_file(full, s)
     awarded: list[str] = []
     if not pre_existing:
         awarded = gamify.record_event(s, user, gamify.NOTE_CREATED, ref=body.path)
-    elif pre_body.strip() != body.body_md.strip():
+    elif pre_body.strip() != write_md.strip():
         # Skip whitespace-only / no-op writes so streaks aren't gamed by
         # repeatedly saving an unchanged file.
         awarded = gamify.record_event(s, user, gamify.NOTE_EDITED, ref=body.path)
-    out: dict[str, Any] = {"id": note.id, "path": note.path, "etag": new_etag}
+    final_md = full.read_text(encoding="utf-8") if full.exists() else write_md
+    final_components = etag_components(final_md)
+    out: dict[str, Any] = {
+        "id": note.id,
+        "path": note.path,
+        "etag": new_etag,
+        "prose_etag": final_components["prose"],
+        "tasks_etag": final_components["tasks"],
+    }
     if awarded:
         out["awarded_badges"] = awarded
     return out

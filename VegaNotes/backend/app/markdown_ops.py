@@ -1060,3 +1060,162 @@ def insert_ar_ref_row_after(
     new_line = new_line + nl
     new_lines = lines[: insert_after + 1] + [new_line] + lines[insert_after + 1 :]
     return "".join(new_lines), True
+
+
+# Match any of the canonical task-id token prefixes anywhere in a line:
+#   - a declaration carries `#id T-XXX`
+#   - a ref row leads with `#task T-XXX` or `#AR T-XXX`
+# All three resolve to the same uuid so the merge can identify "same task"
+# regardless of whether the line is the source-of-truth declaration or a
+# cross-file reference.
+_TASK_UUID_RE = re.compile(r"#(?:id|task|ar)\s+(T-[A-Za-z0-9]+)", re.IGNORECASE)
+
+
+def _task_uuid(line: str) -> Optional[str]:
+    m = _TASK_UUID_RE.search(line)
+    return m.group(1).upper() if m else None
+
+
+def _split_into_blocks(md: str) -> list[tuple[str, list[str], Optional[str]]]:
+    """Split ``md`` into ordered ``(kind, lines, uuid)`` blocks.
+
+    A block is one of:
+
+    - ``("prose", [line], None)`` — a single non-task line (free text,
+      heading, top-level ``@admin`` / ``#project`` context, blank line).
+      Each prose line is its own block so ordering relative to surrounding
+      task blocks survives the merge.
+
+    - ``("task", [decl_line, *continuations], uuid)`` — a contiguous run
+      starting with the first task-classified line that carries an
+      identifiable uuid (declaration **or** ref row), plus any following
+      task-classified continuation/ref lines that don't introduce a new
+      uuid. The block's ``uuid`` is the first uuid encountered. Lines
+      with no identifiable uuid produce an "anonymous" task block (uuid
+      is ``None``) which the merge keeps verbatim from the incoming side
+      because we have no way to align them to the disk version.
+
+    Used by :func:`merge_with_disk_tasks` to align incoming and disk task
+    blocks by uuid and emit a 3-way-style result without having to do a
+    real diff.
+    """
+    from .parser import classify_lines  # lazy: parser imports may cycle
+
+    lines = md.splitlines()
+    classes = classify_lines(md)
+    out: list[tuple[str, list[str], Optional[str]]] = []
+    cur: list[str] = []
+    cur_uuid: Optional[str] = None
+    cur_open = False
+
+    def flush() -> None:
+        nonlocal cur, cur_uuid, cur_open
+        if cur_open and cur:
+            out.append(("task", cur, cur_uuid))
+        cur = []
+        cur_uuid = None
+        cur_open = False
+
+    for line, cls in zip(lines, classes):
+        if cls != "task":
+            flush()
+            out.append(("prose", [line], None))
+            continue
+        u = _task_uuid(line)
+        if u is not None:
+            # New task block whenever a uuid-bearing line appears: start a
+            # fresh block keyed on this uuid. Continuations without their
+            # own uuid then attach to it below.
+            flush()
+            cur = [line]
+            cur_uuid = u
+            cur_open = True
+            continue
+        if cur_open:
+            cur.append(line)
+        else:
+            # Task-classified line with no uuid and no open block — keep it
+            # as an anonymous task block of one line. (Rare: malformed or
+            # mid-edit task line. The merge will keep it verbatim.)
+            out.append(("task", [line], None))
+    flush()
+    return out
+
+
+def merge_with_disk_tasks(incoming: str, disk: str) -> str:
+    """Merge a free-text-edited buffer with the live disk task overlay.
+
+    Design 8d ("two-axis etag") server-side merge: the editor sends an
+    ``incoming`` buffer that the user has been freely typing in. While
+    they were typing, popover ``PATCH /tasks/...`` operations may have
+    rewritten task lines on disk. The naive write would clobber those
+    popover edits.
+
+    This helper rebuilds the file by:
+
+    1. Walking ``incoming`` block-by-block (see :func:`_split_into_blocks`).
+       Every prose block is emitted **as-is** — these are the user's
+       free-text edits, the source of truth for the prose axis.
+    2. For each incoming task block with a uuid, look up the same uuid
+       in ``disk``. If found, emit ``disk``'s version of that block
+       instead — popover writes win on the task axis. If not found
+       (task was deleted via popover while the user was typing), drop
+       it from the output.
+    3. Anonymous task blocks (no uuid) and uuid-less continuations are
+       emitted from ``incoming``.
+    4. After the walk, append any disk-only task blocks (uuids the
+       popover added that the editor didn't have) at the end of the
+       file, separated by a single blank line.
+
+    Trailing newline is preserved if ``incoming`` had one. Whitespace
+    normalization is left to ``safe_io._normalize_for_disk`` which runs
+    after merge in the write path.
+
+    Note: this is **not** a general 3-way text merge. It assumes the
+    only structured edits to task lines come through the popover/PATCH
+    path. If a user typed inside a task line in the editor while a
+    popover ran for the same task, the popover wins (consistent with
+    the popover being the structured-write source of truth). The user's
+    in-buffer edit to that task line is discarded — the
+    "tasks_etag drifted" signal in ``current_state`` lets the frontend
+    show a non-blocking notification later if desired.
+    """
+    inc_blocks = _split_into_blocks(incoming)
+    disk_blocks = _split_into_blocks(disk)
+    disk_by_uuid: dict[str, list[str]] = {}
+    disk_order: list[str] = []
+    for kind, lines, uuid in disk_blocks:
+        if kind == "task" and uuid is not None:
+            disk_by_uuid[uuid] = lines
+            disk_order.append(uuid)
+
+    consumed: set[str] = set()
+    out_lines: list[str] = []
+    for kind, lines, uuid in inc_blocks:
+        if kind == "prose":
+            out_lines.extend(lines)
+            continue
+        if uuid is None:
+            out_lines.extend(lines)
+            continue
+        if uuid in disk_by_uuid:
+            out_lines.extend(disk_by_uuid[uuid])
+            consumed.add(uuid)
+        # else: popover-deleted, drop the block.
+
+    # Append disk-only task blocks (popover-added during edit) in disk order
+    # at the end, with a separating blank line for readability.
+    appended_any = False
+    for uuid in disk_order:
+        if uuid in consumed:
+            continue
+        if not appended_any:
+            if out_lines and out_lines[-1].strip():
+                out_lines.append("")
+            appended_any = True
+        out_lines.extend(disk_by_uuid[uuid])
+
+    merged = "\n".join(out_lines)
+    if incoming.endswith("\n") and not merged.endswith("\n"):
+        merged += "\n"
+    return merged

@@ -145,18 +145,36 @@ export interface ProjectMember {
 
 export const api = {
   notes: () => req<{ id: number; path: string; title: string }[]>("/notes"),
-  note:  (id: number) => req<{ id: number; path: string; title: string; body_md: string; etag: string }>(`/notes/${id}`),
+  note:  (id: number) => req<{ id: number; path: string; title: string; body_md: string; etag: string; prose_etag?: string; tasks_etag?: string }>(`/notes/${id}`),
   noteEtag: (path: string) =>
-    req<{ path: string; etag: string; mtime: number }>(
+    req<{ path: string; etag: string; prose_etag?: string; tasks_etag?: string; mtime: number }>(
       `/notes/etag?path=${encodeURIComponent(path)}`,
     ),
-  saveNote: (path: string, body_md: string, ifMatch?: string) =>
-    req<{ id: number; path: string; etag: string }>("/notes", {
+  saveNote: (
+    path: string,
+    body_md: string,
+    ifMatch?: string,
+    opts?: { ifMatchProse?: string },
+  ) =>
+    req<{
+      id: number;
+      path: string;
+      etag: string;
+      prose_etag?: string;
+      tasks_etag?: string;
+    }>("/notes", {
       method: "PUT",
-      body: JSON.stringify({ path, body_md }),
-      // Optimistic concurrency: backend safe_write compares this against the
-      // file's current sha256 etag and returns 409 stale_write on mismatch.
-      // `""` means "I expect this path to be new" (the create case).
+      // Design 8d: when ifMatchProse is supplied the backend gates the
+      // write on the prose-axis etag and merges live disk task lines on
+      // top of the incoming prose. This stops popover ``PATCH /tasks/...``
+      // writes from triggering false-positive 409s while the user is
+      // typing. Plain `ifMatch` (byte-level) still works for legacy /
+      // non-editor callers.
+      body: JSON.stringify({
+        path,
+        body_md,
+        ...(opts?.ifMatchProse !== undefined ? { if_match_prose: opts.ifMatchProse } : {}),
+      }),
       headers: ifMatch !== undefined ? { "If-Match": ifMatch } : {},
     }),
   deleteNote: (id: number) => req(`/notes/${id}`, { method: "DELETE" }),
