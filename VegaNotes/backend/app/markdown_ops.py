@@ -168,6 +168,12 @@ def strip_top_level_done_tasks(md: str) -> str:
     historical context.
 
     Used by the new archive-style rollover (#251 follow-up).
+
+    Reminder on rollup semantics: ``t.status`` here is the rolled-up status
+    from :func:`_rollup_to_parents`. A literally-``#status done`` parent
+    that still has an open AR child is downgraded to ``in-progress`` and
+    is therefore kept by this function — open sub-items survive into the
+    next week with their parent (#260).
     """
     from .parser import parse
     parsed = parse(md)
@@ -249,9 +255,15 @@ def roll_to_next_week(
     nxt = cur + 1
     # 1. Inject missing IDs first so both files share the canonical IDs.
     patched_source, _ = inject_missing_ids(md)
-    # 2. New (next-week) file: drop only top-level done blocks; keep open
-    #    parents' indent blocks intact (so done children of open parents
-    #    move with their parent).  Then bump prose ww references.
+    # 2. New (next-week) file: drop only top-level done blocks. Done ARs
+    #    that live under an OPEN parent ride along with their parent so
+    #    the active week keeps the audit trail of completed sub-items
+    #    against still-open work (per user request, #260).
+    #    A "done" parent in this rollup-aware view means EVERY descendant
+    #    is also done (otherwise _rollup_to_parents downgrades the parent
+    #    to in-progress). So this rule equals: "drop a done leaf or a
+    #    fully-completed top-level subtree; keep any AR whose top-level
+    #    parent is still open".
     new_pruned = strip_top_level_done_tasks(patched_source)
     new_body = _bump_ww_outside_eta(new_pruned, cur, nxt)
     new_base = bump_ww(basename, cur, nxt)
@@ -552,9 +564,16 @@ def _replace_top_level_open_with_refs(md: str) -> str:
     Identifies top-level vs nested via the parser's ``parent_slug``:
     ``parent_slug is None`` means the task has no preceding shallower-indent
     task, regardless of whether bullets are mixed.
+
+    Skip-block pivots are stored in :func:`_line_indent` units (column
+    count) so they're directly comparable with the per-line indent of the
+    walker. Mixing parser-level units with line-column units used to swallow
+    every later top-level row beyond the first open one (issue #260, bug
+    #2) — a real data-loss path for top-level done declarations.
     """
     from .parser import parse
     parsed = parse(md)
+    lines = md.splitlines(keepends=True)
     open_top: dict[int, dict] = {}
     for t in parsed.get("tasks", []):
         if t.get("parent_slug") is not None:
@@ -565,14 +584,16 @@ def _replace_top_level_open_with_refs(md: str) -> str:
         if not rid:
             continue
         line_no = t.get("line")
-        if not isinstance(line_no, int):
+        if not isinstance(line_no, int) or not (0 <= line_no < len(lines)):
             continue
         open_top[line_no] = {
             "kind": t.get("kind", "task"),
-            "indent": t.get("indent", 0),
+            # Use line-column indent so the comparator below is in the
+            # same unit (#260 bug #2). Was previously t.get("indent", 0)
+            # which is parser-level units, off by 2x for tab indents.
+            "indent": _line_indent(lines[line_no]),
             "ref_id": rid,
         }
-    lines = md.splitlines(keepends=True)
     out: list[str] = []
     skip_indent: int | None = None
     for i, raw in enumerate(lines):
