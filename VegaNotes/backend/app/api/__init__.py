@@ -1345,7 +1345,16 @@ def list_tasks(
     sort: Optional[str] = None,
     limit: Optional[int] = Query(default=None, ge=1, le=2000),
     offset: int = Query(default=0, ge=0),
+    # #258: scope done tasks to non-archived notes by default. "active" hides
+    # done tasks that live in archived (rolled-over) weekly md files; "all"
+    # is the historical behaviour. Open tasks are unaffected — only the
+    # `status = done` set is scoped.
+    done_scope: str = Query(default="active"),
 ) -> dict[str, Any]:
+    if done_scope not in ("active", "all"):
+        raise HTTPException(
+            422, f"done_scope must be 'active' or 'all', got {done_scope!r}",
+        )
     sql = ["SELECT DISTINCT t.id FROM task t"]
     params: dict[str, Any] = {}
     expanding: list[str] = []
@@ -1354,6 +1363,12 @@ def list_tasks(
     _vis_admin, _vis_projects = _visible_projects(s, user)
     if not _vis_admin:
         sql.append("JOIN note rbac_n ON rbac_n.id = t.note_id")
+    # #258: separate join when we need archived-flag visibility for done
+    # scoping. We could in principle reuse `rbac_n` when it's present, but
+    # keeping the alias dedicated keeps the SQL readable and avoids coupling
+    # the two concerns.
+    if done_scope == "active":
+        sql.append("JOIN note done_n ON done_n.id = t.note_id")
 
     def _join_multi(table: str, name_table: str, names: list[str], alias: str) -> None:
         if not names:
@@ -1384,6 +1399,12 @@ def list_tasks(
         where.append("t.status IN :statuses")
         params["statuses"] = tuple(statuses)
         expanding.append("statuses")
+    # #258: when done_scope="active", drop done tasks whose source note is
+    # archived. Open tasks (todo/in-progress/blocked) are intentionally
+    # unaffected — they're either still relevant on the active week or
+    # candidates for sweeping (separate concern).
+    if done_scope == "active":
+        where.append("NOT (t.status = 'done' AND done_n.archived = 1)")
     prios = _collect_filter(priority)
     if prios:
         sql.append("JOIN taskattr pa ON pa.task_id = t.id AND pa.key='priority'")

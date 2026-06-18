@@ -6,6 +6,7 @@ import { TaskEditPopover } from "../Tasks/TaskEditPopover";
 import { NewTaskComposer } from "../Tasks/NewTaskComposer";
 import { useUI, filtersToParams } from "../../store/ui";
 import { useFontScale, type FontScale } from "../../store/fontScale";
+import { loadDoneScope, saveDoneScope, type DoneScope } from "../../store/doneScope";
 import { KanbanEmailModal } from "./KanbanEmailModal";
 
 const SCALES: { value: FontScale; label: string; title: string }[] = [
@@ -29,14 +30,22 @@ export function KanbanBoard() {
   const [composerColumn, setComposerColumn] = useState<string | null>(null);
   const [emailOpen, setEmailOpen] = useState(false);
   const { scale, setScale } = useFontScale();
+  // #258: scope done tasks to non-archived notes by default. Persists per
+  // view in localStorage; flipping in MyTasks doesn't change Kanban.
+  const [doneScope, setDoneScope] = useState<DoneScope>(() => loadDoneScope("kanban"));
+  const updateDoneScope = (v: DoneScope) => {
+    setDoneScope(v);
+    saveDoneScope("kanban", v);
+  };
   const { data } = useQuery({
-    queryKey: ["tasks", filters, "kanban"],
+    queryKey: ["tasks", filters, "kanban", doneScope],
     queryFn: () =>
       api.tasks({
         ...filtersToParams(filters),
         hide_done: false,
         top_level_only: true,
         include_children: true,
+        done_scope: doneScope,
       }),
   });
   const tasks = data?.tasks ?? [];
@@ -51,6 +60,18 @@ export function KanbanBoard() {
     <>
       {/* toolbar */}
       <div className="flex items-center justify-end gap-1 px-4 pt-3 pb-1">
+        <label
+          className="mr-2 flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer select-none rounded border border-slate-200 bg-slate-50 px-2 py-1"
+          title="When on, the Done column shows only tasks from active (non-archived) notes. Turn off to include done tasks from archived weekly files."
+        >
+          <input
+            type="checkbox"
+            checked={doneScope === "active"}
+            onChange={(e) => updateDoneScope(e.target.checked ? "active" : "all")}
+            className="rounded"
+          />
+          done from active files only
+        </label>
         <button
           onClick={() => setEmailOpen(true)}
           title="Send a snapshot of the current Kanban view via email"

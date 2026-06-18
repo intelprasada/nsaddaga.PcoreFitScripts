@@ -20,6 +20,7 @@ import { NewTaskComposer } from "./NewTaskComposer";
 import { StatusChip, PriorityChip, EtaChip, OwnersChips } from "./QuickChips";
 import { BulkEditBar } from "./BulkEditBar";
 import { useUI } from "../../store/ui";
+import { loadDoneScope, saveDoneScope, type DoneScope } from "../../store/doneScope";
 
 // ── selection helpers (issue #33) ─────────────────────────────────────────────
 
@@ -368,16 +369,22 @@ export function MyTasksView() {
 
   const [groupBy,  setGroupBy]  = useState<GroupBy>("status");
   const [hideDone, setHideDone] = useState(true);
+  // #258: scope done tasks to non-archived notes by default.
+  const [doneScope, setDoneScope] = useState<DoneScope>(() => loadDoneScope("my-tasks"));
+  const updateDoneScope = (v: DoneScope) => {
+    setDoneScope(v);
+    saveDoneScope("my-tasks", v);
+  };
   const [editing,  setEditing]  = useState<Task | null>(null);
   // Single-active composer: either a group key (per-group "+") or "__top".
   const [composerOpen, setComposerOpen] = useState<string | null>(null);
   const { filters } = useUI();
 
   const { data, isLoading } = useQuery({
-    queryKey: ["my-tasks", me?.name, hideDone],
+    queryKey: ["my-tasks", me?.name, hideDone, doneScope],
     queryFn: () =>
       me?.name
-        ? api.tasks({ owner: me.name, hide_done: hideDone, top_level_only: true, include_children: true })
+        ? api.tasks({ owner: me.name, hide_done: hideDone, top_level_only: true, include_children: true, done_scope: doneScope })
         : Promise.resolve(null),
     enabled: !!me?.name,
   });
@@ -515,6 +522,24 @@ export function MyTasksView() {
                 className="rounded"
               />
               hide done
+            </label>
+
+            {/* #258: done-scope toggle. Disabled when "hide done" is on
+                because no done tasks would be visible anyway. */}
+            <label
+              className={`flex items-center gap-1.5 text-xs cursor-pointer select-none rounded border border-slate-200 bg-slate-50 px-2 py-1 ${hideDone ? "opacity-40 cursor-not-allowed" : "text-slate-600"}`}
+              title={hideDone
+                ? "Turn off 'hide done' first to choose between active and all done tasks"
+                : "When on, the Done set shows only tasks from active (non-archived) notes."}
+            >
+              <input
+                type="checkbox"
+                checked={doneScope === "active"}
+                disabled={hideDone}
+                onChange={(e) => updateDoneScope(e.target.checked ? "active" : "all")}
+                className="rounded"
+              />
+              done from active files only
             </label>
           </div>
         </div>
