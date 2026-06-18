@@ -2263,3 +2263,139 @@ def test_8d_genuine_prose_conflict_returns_stale_prose(client):
     assert "current_prose_etag" in detail
     assert "current_tasks_etag" in detail
     assert detail["current_content"] is not None
+
+
+# ── #258: done_scope (active vs all) ──────────────────────────────────────
+def _make_archived_done_fixture(client):
+    """Build a project with one active note (ww70 — has one open + one done
+    task) and one archived note (ww69 — flagged Note.archived=True, holds
+    one done task that should be hidden by default).
+
+    Returns (active_uuid_open, active_uuid_done, archived_uuid_done).
+    """
+    from app.db import session_scope
+    from app.models import Note
+    from sqlmodel import select as _select
+
+    client.post("/api/projects", json={"name": "donescope"},
+                headers={"Authorization": AUTH})
+    client.put("/api/notes",
+               json={"path": "donescope/ww70.md",
+                     "body_md": (
+                         "# donescope ww70\n"
+                         "@admin\n"
+                         "\t!task #id T-DSACTOPEN Active open #status todo\n"
+                         "\t!task #id T-DSACTDONE Active done #status done\n"
+                     )},
+               headers={"Authorization": AUTH})
+    client.put("/api/notes",
+               json={"path": "donescope/_archive/ww69.md",
+                     "body_md": (
+                         "# donescope ww69 (archived)\n"
+                         "@admin\n"
+                         "\t!task #id T-DSARCDONE Archived done #status done\n"
+                     )},
+               headers={"Authorization": AUTH})
+    with session_scope() as s:
+        n = s.exec(_select(Note).where(
+            Note.path == "donescope/_archive/ww69.md")).one()
+        n.archived = True
+        s.add(n)
+    return ("T-DSACTOPEN", "T-DSACTDONE", "T-DSARCDONE")
+
+
+def test_done_scope_active_hides_archived_done(client):
+    """#258: GET /tasks?done_scope=active (default) excludes done tasks
+    whose source Note is archived. Open tasks in archived notes are
+    unaffected — only the done set is scoped."""
+    open_uuid, act_done_uuid, arc_done_uuid = _make_archived_done_fixture(client)
+
+    r = client.get("/api/tasks?done_scope=active",
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+    uuids = {t["task_uuid"] for t in r.json()["tasks"]}
+    assert open_uuid in uuids, "active-week open task must remain visible"
+    assert act_done_uuid in uuids, "active-week done task must remain visible"
+    assert arc_done_uuid not in uuids, (
+        "archived-week done task must be hidden by done_scope=active "
+        "(this is the whole point of #258)"
+    )
+
+
+def test_done_scope_default_is_active(client):
+    """No explicit done_scope → behave as 'active' (the new default)."""
+    _, _, arc_done_uuid = _make_archived_done_fixture(client)
+    r = client.get("/api/tasks", headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+    uuids = {t["task_uuid"] for t in r.json()["tasks"]}
+    assert arc_done_uuid not in uuids
+
+
+def test_done_scope_all_includes_archived_done(client):
+    """done_scope=all preserves the historical behaviour — archived-week
+    done tasks are returned alongside active-week ones."""
+    open_uuid, act_done_uuid, arc_done_uuid = _make_archived_done_fixture(client)
+    r = client.get("/api/tasks?done_scope=all", headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+    uuids = {t["task_uuid"] for t in r.json()["tasks"]}
+    assert open_uuid in uuids
+    assert act_done_uuid in uuids
+    assert arc_done_uuid in uuids
+
+
+def test_done_scope_does_not_filter_open_tasks_in_archived_notes(client):
+    """Sanity: only `status = done` is scoped. An open task accidentally
+    left in an archived note must still be visible regardless of scope —
+    those tasks need attention, not hiding."""
+    from app.db import session_scope
+    from app.models import Note
+    from sqlmodel import select as _select
+
+    client.post("/api/projects", json={"name": "dsopenarc"},
+                headers={"Authorization": AUTH})
+    client.put("/api/notes",
+               json={"path": "dsopenarc/ww50.md",
+                     "body_md": "# dsopenarc ww50\n@admin\n\t!task #id T-DSACTIVE seed #status todo\n"},
+               headers={"Authorization": AUTH})
+    client.put("/api/notes",
+               json={"path": "dsopenarc/_archive/ww49.md",
+                     "body_md": (
+                         "# dsopenarc ww49 (archived)\n"
+                         "@admin\n"
+                         "\t!task #id T-DSOPENARC stuck open #status in-progress\n"
+                     )},
+               headers={"Authorization": AUTH})
+    with session_scope() as s:
+        n = s.exec(_select(Note).where(
+            Note.path == "dsopenarc/_archive/ww49.md")).one()
+        n.archived = True
+        s.add(n)
+
+    r = client.get("/api/tasks?done_scope=active",
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+    uuids = {t["task_uuid"] for t in r.json()["tasks"]}
+    assert "T-DSOPENARC" in uuids, (
+        "open task in archived note must NOT be hidden by done_scope=active"
+    )
+
+
+def test_done_scope_invalid_value_returns_422(client):
+    r = client.get("/api/tasks?done_scope=bogus",
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 422
+    assert "active" in r.json()["detail"]
+
+
+def test_done_scope_active_composes_with_owner_filter(client):
+    """done_scope=active still respects other filters (owner here). The
+    archived-done filter is applied as an extra WHERE clause, not as a
+    replacement for the existing query plan."""
+    open_uuid, act_done_uuid, arc_done_uuid = _make_archived_done_fixture(client)
+    r = client.get("/api/tasks?owner=admin&done_scope=active",
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+    uuids = {t["task_uuid"] for t in r.json()["tasks"]}
+    assert open_uuid in uuids
+    assert act_done_uuid in uuids
+    assert arc_done_uuid not in uuids
