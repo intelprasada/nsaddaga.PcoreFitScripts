@@ -1,4 +1,4 @@
-# FIT Val weekly ww25
+# FIT Val weekly ww26
 
 #opens
 
@@ -42,17 +42,7 @@
 
 @Muana
 	#project jnc
-		!task #id T-8V3204 IFU ramp up #status done
-			!AR #id T-5DY4HK Study in use bit and array concept #status done
-			!AR #id T-XHZD85 Study MITE reduction penalty feature #status done
-			!AR #id T-1RMTZT iTLB #eta ww18 #status done
-		!task #id T-SYNYEP Use GHCP to study fv_VIdPid_chk #eta ww19 #status done
-			!AR #id T-J0DHG8 Convert to SMT #eta ww19 #status done
 	#project gfc
-		!task #id T-0C8D86 bucket debug #status done
-			!AR #id T-V8XDP2 fe::Formal::Assert::cex::bpu.bpsyncs.R_BpNextFLTakenAndTknErr::gfc-a0  #status done
-			!AR #id T-191DAC fe::Formal::Assert::cex::bpu.bpsyncs.R_BpNextFLTakenErr::gfc-a0  #status done #eta ww18
-
 @Kushwanth
 	#project jnc
 		!task #id T-N1KE10 IDQ Ramp up #eta ww17 
@@ -88,16 +78,6 @@
 
 @Gautham
 	#project jnc
-		!task #id T-WCF4H6 updating coverage for fe_idq_tlm_cov.e for SMT #status done #eta WW25 #priority P0
-			!AR #id T-PZQ4CK updated code to handle threads @Gautham #status done
-			!AR #id T-4SPN38 add missing signals to packet @Gautham #status done
-			!AR #id T-ZVSM2W verify cover groups collected @Gautham #status done
-			!AR #id T-VFRC9F turn in without thread-aware 148h signals @Gautham #status done
-			!AR #id T-P51GT4 investigate 148H signals @Gautham #status done
-			!AR #id T-Q1C4MS update coverage to handle 148h signals @Gautham #status done
-			!AR #id T-5A2J1D debugging why more failing tests @gajith #status done
-			!AR #id T-5YB2ZX verify lsd coverage w MT1 / MT0 comparison @gajith #status done
-			!AR #id T-7FZYNJ debug missing coverage scores for MT0 @gajith #status done
 @Yongxi
 	#project csk
 @Niharika
@@ -139,15 +119,13 @@
 
 !task #id T-Z3Z4VD SEC Proof for STSR @abolisaw #eta 2026-06-26
 
-!task #id T-5WGW2J ww25_JNC_Bucket_Debug @khbyers #status in-progress #eta WW24.5
+!task #id T-5WGW2J ww26_JNC_Bucket_Debug @khbyers #status in-progress #eta WW24.5
 	!AR #id T-0JK45W DSB Thread hang due to non-threaded dsbq ctl sync signal @khbyers #status done
 	!AR #id T-XNRPX1 branch skid issue with nuke BPU assertion @khbyers #status done
 	!AR #id T-YTVX7Y DSBQ Full Stall @khbyers #status in-progress
 	!AR #id T-N9YPVR MJEU SAR violation @khbyers #status in-progress
 	!AR #id T-0W7ZZR RAStall Stuck High, ROBFull @khbyers #status in-progress
 	!AR #id T-YXPN95 minTe thread hang @khbyers #status done
-
-!task #id T-N3BSET Create Thread Mode Log @khbyers #status done #eta WW24.5
 
 !task #id T-1QHX29 IDQ Ramp plan @gajith @Kushwanth #status in-progress #eta WW 25
 	#note develop plan of ramp up for DV:
@@ -190,11 +168,6 @@
 	!AR #id T-J00YA2 Test and TI Fix suggested by Edwin in GFC @abolisaw #status done
 	!AR #id T-7WWR6A reproduce the emu failure 2 in FV @abolisaw #status in-progress
 
-!task #id T-KCDNNA GFC a0 paranoia @abolisaw #status done
-	#note remove CORE_OR_ABOVE in stsr_iq_intf files
-
-!task #id T-QSV8YA Bucket Debug @mkasongo #priority P0 #eta fe::Formal::Assert::cex::bpu.fv_bpsyncs_bpu_intf_chk.T_FPV_FE_BPSYNCS_Assume_TakenOfstCmp::gfc-a0 #status done
-
 !task #id T-6Z48Q7 iTLB coverage - thread scope @rnagarat #eta WW26
 
 !task #id T-YWG1CV DSB flush modelling in iTLB @rnagarat #eta WW25 #status in-progress
@@ -207,7 +180,7 @@
 	!AR #id T-VDR5HH EID::1696676::TXTE_MSG_TLB_LOOKUP_OUT_ItCacheableM122H_mismatch @rnagarat
 
 !task #id T-1NW5RS MSID JNC SMT Critical violations model from Michal FV failures to be fixed #priority P0 #eta ww25.5 @abolisaw
-	#note nfs/site/disks/mnemirov_wa/SMT_Cleanup_WW25.4/regression/fe/fe_fv_level0.list/
+	#note nfs/site/disks/mnemirov_wa/SMT_Cleanup_ww26.4/regression/fe/fe_fv_level0.list/
 
 #project gfc 
 !task #id T-HJ5GFM fe::EID::1687794::actual_sb_way_is_different_than_exp,::gfc-a0	@sbhattad	Known RTL
