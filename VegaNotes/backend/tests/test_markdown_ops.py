@@ -688,3 +688,126 @@ def test_safe_write_skips_non_md(tmp_path):
     p = tmp_path / "x.txt"
     safe_write(p, "  preserved\n", notes_dir=tmp_path)
     assert p.read_text() == "  preserved\n"
+
+
+# ── #260: rollover bugs ──────────────────────────────────────────────────
+_ROLL_FIXTURE_260 = (
+    "# weekly ww30\n"
+    "@admin\n"
+    "\t!task #id T-OPENPAR Open parent\n"
+    "\t\t!AR #id T-OPENAR open ar #status todo\n"
+    "\t\t!AR #id T-DONEAR1 done ar under open parent #status done\n"
+    "\t\t!AR #id T-DONEAR2 also done ar under open parent #status done\n"
+    "\t!task #id T-DONETOP Done top-level no kids #status done\n"
+    "\t!task #id T-DONEPAR Done parent with done kids #status done\n"
+    "\t\t!AR #id T-DONEAR3 done ar #status done\n"
+    "\t!task #id T-DONEPAROPEN Literal-done parent with open kid #status done\n"
+    "\t\t!AR #id T-OPENAR2 still open #status in-progress\n"
+)
+
+
+def test_260_archive_preserves_top_level_done_after_open_parent():
+    """Bug #2: ``_replace_top_level_open_with_refs`` used the parser's
+    abstract ``t.indent`` (level units) as the skip-block pivot but
+    compared each line with ``_line_indent`` (column count), causing
+    every later top-level row to be swallowed once the first open task
+    fired. Top-level done declarations vanished from the archive — true
+    data loss. This is now fixed by storing the pivot in line-column
+    units."""
+    from app.markdown_ops import roll_to_next_week
+    _, _, _, _, archived_md, _ = roll_to_next_week(_ROLL_FIXTURE_260, "ww30.md")
+    # The previously-lost declarations must reappear in the archive.
+    assert "T-DONETOP" in archived_md, "T-DONETOP swallowed by indent-unit bug"
+    assert "T-DONEPAR" in archived_md, "T-DONEPAR swallowed by indent-unit bug"
+    assert "T-DONEAR3" in archived_md, (
+        "T-DONEAR3 (child of done parent) lost with its parent"
+    )
+    # Ref rows for the open top-levels stay as-is.
+    assert "#task T-OPENPAR" in archived_md
+    # T-DONEPAROPEN is rolled UP to in-progress (open child) → treated as
+    # open → archive carries a ref row, not the canonical declaration.
+    assert "#task T-DONEPAROPEN" in archived_md
+
+
+def test_260_archive_drops_indent_blocks_under_open_top_levels():
+    """Open top-levels become single-line ref rows in the archive — their
+    children/continuations should NOT also appear there."""
+    from app.markdown_ops import roll_to_next_week
+    _, _, _, _, archived_md, _ = roll_to_next_week(_ROLL_FIXTURE_260, "ww30.md")
+    # Children of T-OPENPAR (an open task) must NOT be in the archive.
+    assert "T-OPENAR" not in archived_md, "open AR child of open parent leaked"
+    assert "T-DONEAR1" not in archived_md, (
+        "done AR child of open parent leaked into archive — those move "
+        "forward with the parent, the archive only has the ref row"
+    )
+
+
+def test_260_next_week_keeps_done_ars_under_open_parent():
+    """Per user request (#260 follow-up): when the parent task is NOT
+    done (literal status open OR rolled-up-to-open via mixed children),
+    its done AR children move forward with it so the next week shows
+    the audit trail of completed sub-items against still-open work."""
+    from app.markdown_ops import roll_to_next_week
+    new_md, *_ = roll_to_next_week(_ROLL_FIXTURE_260, "ww30.md")
+    # Open parent + every AR underneath survives.
+    assert "T-OPENPAR" in new_md
+    assert "T-OPENAR" in new_md      # open AR
+    assert "T-DONEAR1" in new_md     # done AR — KEEP because parent open
+    assert "T-DONEAR2" in new_md     # done AR — KEEP because parent open
+    # Literal-done parent with open kid → rolled up to in-progress →
+    # parent and its open AR survive.
+    assert "T-DONEPAROPEN" in new_md
+    assert "T-OPENAR2" in new_md
+
+
+def test_260_next_week_drops_top_level_done_subtrees():
+    """A top-level subtree where every node is rolled-up done falls out
+    of the next-week file entirely — nothing left to track there."""
+    from app.markdown_ops import roll_to_next_week
+    new_md, *_ = roll_to_next_week(_ROLL_FIXTURE_260, "ww30.md")
+    assert "T-DONETOP" not in new_md, "top-level standalone-done leaked"
+    assert "T-DONEPAR " not in new_md, "rolled-up done parent leaked"
+    assert "T-DONEAR3" not in new_md, "child of rolled-up done parent leaked"
+
+
+def test_260_next_week_no_orphan_done_children_in_archive_either():
+    """Sanity: T-DONEAR1/2 belong in the active week (their parent is
+    still open) and NOT duplicated into the archive — the archive's ref
+    row for T-OPENPAR is the only trace there."""
+    from app.markdown_ops import roll_to_next_week
+    new_md, _, _, _, archived_md, _ = roll_to_next_week(_ROLL_FIXTURE_260, "ww30.md")
+    # New week has them.
+    assert new_md.count("T-DONEAR1") == 1
+    # Archive does not.
+    assert "T-DONEAR1" not in archived_md
+    assert "T-DONEAR2" not in archived_md
+
+
+def test_260_repro_from_issue_goes_green():
+    """End-to-end: the repro pasted in #260 must produce the documented
+    "after fix" content, verbatim modulo trailing whitespace."""
+    from app.markdown_ops import roll_to_next_week
+    new_md, _, _, _, archived_md, _ = roll_to_next_week(_ROLL_FIXTURE_260, "ww30.md")
+
+    expected_new = (
+        "# weekly ww31\n"
+        "@admin\n"
+        "\t!task #id T-OPENPAR Open parent\n"
+        "\t\t!AR #id T-OPENAR open ar #status todo\n"
+        "\t\t!AR #id T-DONEAR1 done ar under open parent #status done\n"
+        "\t\t!AR #id T-DONEAR2 also done ar under open parent #status done\n"
+        "\t!task #id T-DONEPAROPEN Literal-done parent with open kid #status done\n"
+        "\t\t!AR #id T-OPENAR2 still open #status in-progress\n"
+    )
+    assert new_md == expected_new
+
+    expected_archive = (
+        "# weekly ww30\n"
+        "@admin\n"
+        "\t#task T-OPENPAR Open parent\n"
+        "\t!task #id T-DONETOP Done top-level no kids #status done\n"
+        "\t!task #id T-DONEPAR Done parent with done kids #status done\n"
+        "\t\t!AR #id T-DONEAR3 done ar #status done\n"
+        "\t#task T-DONEPAROPEN Literal-done parent with open kid #status done\n"
+    )
+    assert archived_md == expected_archive

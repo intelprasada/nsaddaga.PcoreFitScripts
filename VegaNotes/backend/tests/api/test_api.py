@@ -2399,3 +2399,63 @@ def test_done_scope_active_composes_with_owner_filter(client):
     assert open_uuid in uuids
     assert act_done_uuid in uuids
     assert arc_done_uuid not in uuids
+
+# ── #260: rollover (POST /api/notes/next-week) ───────────────────────────
+def test_260_rollover_archive_has_done_blocks_active_drops_done_top_levels(client):
+    """Issue #260: the previous indent-unit bug in
+    ``_replace_top_level_open_with_refs`` caused every top-level row past
+    the first open task to be dropped from the archive (data loss). Post
+    fix, top-level done declarations are preserved in the archive while
+    being absent from the active week."""
+    client.post("/api/projects", json={"name": "rollbug260"},
+                headers={"Authorization": AUTH})
+    body = (
+        "# weekly ww30\n"
+        "@admin\n"
+        "\t!task #id T-RB260OP Open parent\n"
+        "\t\t!AR #id T-RB260OAR open ar #status todo\n"
+        "\t\t!AR #id T-RB260DAR1 done ar under open parent #status done\n"
+        "\t!task #id T-RB260DTOP Done top-level standalone #status done\n"
+        "\t!task #id T-RB260DPAR Done parent with done kids #status done\n"
+        "\t\t!AR #id T-RB260DAR2 done ar #status done\n"
+    )
+    r = client.put("/api/notes",
+                   json={"path": "rollbug260/weekly ww30.md", "body_md": body},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    r = client.post("/api/notes/next-week",
+                    json={"path": "rollbug260/weekly ww30.md"},
+                    headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+    new_path = r.json()["path"]
+    archive_path = r.json()["archived_path"]
+    assert new_path == "rollbug260/weekly ww31.md"
+
+    new_disk = (DATA / "notes" / new_path).read_text(encoding="utf-8")
+    arch_disk = (DATA / "notes" / archive_path).read_text(encoding="utf-8")
+
+    # Active week: open parent + all its ARs (open and done) survive;
+    # top-level done blocks are gone.
+    assert "T-RB260OP" in new_disk
+    assert "T-RB260OAR" in new_disk
+    assert "T-RB260DAR1" in new_disk, (
+        "done AR under open parent should ride forward (#260 follow-up)"
+    )
+    assert "T-RB260DTOP" not in new_disk
+    assert "T-RB260DPAR" not in new_disk
+
+    # Archive: top-level done declarations preserved (Bug #2 fix); open
+    # top-level becomes a ref row only.
+    assert "#task T-RB260OP" in arch_disk
+    assert "T-RB260DAR1" not in arch_disk, (
+        "done AR child of open parent must NOT duplicate into archive"
+    )
+    assert "T-RB260DTOP" in arch_disk, (
+        "top-level done declaration was previously swallowed by the "
+        "indent-unit bug; archive must preserve it"
+    )
+    assert "T-RB260DPAR" in arch_disk
+    assert "T-RB260DAR2" in arch_disk, (
+        "child of canonical-done parent must travel with the parent into archive"
+    )
