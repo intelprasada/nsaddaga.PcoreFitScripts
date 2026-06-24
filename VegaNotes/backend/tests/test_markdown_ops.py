@@ -811,3 +811,48 @@ def test_260_repro_from_issue_goes_green():
         "\t#task T-DONEPAROPEN Literal-done parent with open kid #status done\n"
     )
     assert archived_md == expected_archive
+
+
+# ── #263: only the H1 heading bumps wwN; task/note body is preserved ──
+def test_263_h1_bumps_but_task_and_note_body_do_not():
+    """Rolling forward must rewrite only the H1 ``wwN`` token. Task
+    titles, ``#note`` continuations, and any other body prose stay
+    verbatim (same policy as ``#eta``)."""
+    from app.markdown_ops import roll_to_next_week
+    md = (
+        "# FIT Val weekly ww25\n"
+        "@nancy\n"
+        "\n"
+        "\t!task #id T-OPEN1 prep ww25 dashboard #status wip\n"
+        "\t\t#note shared with ww25 cohort, see ww24 thread\n"
+        "\t\t!AR #id T-AR1 follow up with ww25 attendees #status todo\n"
+        "\t!task #id T-OPEN2 ww25 retrospective notes #eta ww25.3\n"
+    )
+    new_md, new_base, *_ = roll_to_next_week(md, "FIT weekly ww25.md")
+
+    assert new_base == "FIT weekly ww26.md"
+    assert "# FIT Val weekly ww26" in new_md
+    assert "# FIT Val weekly ww25" not in new_md
+    assert "prep ww25 dashboard" in new_md
+    assert "prep ww26 dashboard" not in new_md
+    assert "shared with ww25 cohort, see ww24 thread" in new_md
+    assert "follow up with ww25 attendees" in new_md
+    assert "ww25 retrospective notes" in new_md
+    assert "#eta ww25.3" in new_md
+    assert "#eta ww26.3" not in new_md
+
+
+def test_263_only_first_h1_is_bumped():
+    """If a stray ``# wwN`` line appears later in the body, leave it
+    alone — only the first H1 (the document title) bumps."""
+    from app.markdown_ops import roll_to_next_week
+    md = (
+        "# FIT Val weekly ww25\n"
+        "@nancy\n"
+        "\n"
+        "\t!task #id T-OPEN1 keep going #status wip\n"
+        "\t\t#note historical context from # ww25 status memo\n"
+    )
+    new_md, *_ = roll_to_next_week(md, "FIT weekly ww25.md")
+    assert new_md.count("ww26") == 1
+    assert "historical context from # ww25 status memo" in new_md
