@@ -232,9 +232,11 @@ def roll_to_next_week(
       ``!task`` / ``!AR`` declarations are MOVED here verbatim (with their
       entire indent block: nested children, ``#note`` continuations,
       done children of an open parent).  Done top-level blocks are
-      dropped — their canonical declarations stay in the archive.  Prose
-      ``wwN[.x]`` references matching ``current_ww`` are bumped by +1
-      (but never inside ``#eta`` values).
+      dropped — their canonical declarations stay in the archive.  The
+      ``wwN`` token in the H1 heading is bumped by +1; task titles,
+      ``#note`` continuations, and every other body line are preserved
+      verbatim (the user reviews/edits them deliberately — same policy
+      as ``#eta``).  See #263.
     * ``archived_md`` — contents to write to the source file's archive
       location.  Open top-level declarations are replaced with a single
       ``- #task <ID> <title>`` (or ``- #AR …``) reference row, with their
@@ -265,7 +267,7 @@ def roll_to_next_week(
     #    fully-completed top-level subtree; keep any AR whose top-level
     #    parent is still open".
     new_pruned = strip_top_level_done_tasks(patched_source)
-    new_body = _bump_ww_outside_eta(new_pruned, cur, nxt)
+    new_body = _bump_ww_in_h1(new_pruned, cur, nxt)
     new_base = bump_ww(basename, cur, nxt)
     # 3. Archive: replace top-level OPEN declarations with ref rows,
     #    drop their indent blocks.  Top-level DONE blocks stay canonical.
@@ -284,27 +286,41 @@ def roll_to_next_week(
 
 
 _ETA_TOKEN_RE = re.compile(r"#eta\s+\S+", re.IGNORECASE)
+# Match an H1 line (starts with a single `#` followed by space + content).
+_H1_LINE_RE = re.compile(r"^#\s+\S")
 
 
-def _bump_ww_outside_eta(text: str, cur: int, nxt: int) -> str:
-    """Bump `wwN` → `wwN+1` everywhere except inside `#eta <value>` tokens."""
-    eta_spans: list[tuple[int, int]] = [m.span() for m in _ETA_TOKEN_RE.finditer(text)]
+def _bump_ww_in_h1(text: str, cur: int, nxt: int) -> str:
+    """Bump ``wwN`` → ``wwN+1`` (where ``N == cur``) **only inside the first
+    H1 heading line** (e.g. ``# FIT Val weekly ww25``).
 
-    def in_eta(pos: int) -> bool:
-        for a, b in eta_spans:
-            if a <= pos < b:
-                return True
-        return False
-
-    def _sub(m: re.Match) -> str:
-        if in_eta(m.start()):
-            return m.group(0)
-        if int(m.group(1)) != cur:
-            return m.group(0)
-        frac = m.group(2) or ""
-        return f"ww{nxt}{frac}"
-
-    return _WW_NUM_RE.sub(_sub, text)
+    All other content — task titles, ``#note`` continuations, ``#eta``
+    values, and prose anywhere else in the file — is preserved verbatim.
+    Rolling a week forward must not silently rewrite historical body
+    text the user wrote with the previous week number in mind (#263).
+    """
+    in_fence = False
+    out: list[str] = []
+    bumped = False
+    for raw in text.splitlines(keepends=True):
+        if _FENCE_RE.match(raw):
+            in_fence = not in_fence
+            out.append(raw)
+            continue
+        if bumped or in_fence:
+            out.append(raw)
+            continue
+        if _H1_LINE_RE.match(raw):
+            def _sub(m: re.Match) -> str:
+                if int(m.group(1)) != cur:
+                    return m.group(0)
+                frac = m.group(2) or ""
+                return f"ww{nxt}{frac}"
+            out.append(_WW_NUM_RE.sub(_sub, raw))
+            bumped = True
+        else:
+            out.append(raw)
+    return "".join(out)
 
 
 def generate_task_id(existing: set[str] | None = None) -> str:
