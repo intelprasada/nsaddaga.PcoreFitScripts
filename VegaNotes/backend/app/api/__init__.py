@@ -1938,7 +1938,7 @@ def list_projects(
     nd = settings.notes_dir
     nd.mkdir(parents=True, exist_ok=True)
     for child in sorted(nd.iterdir()):
-        if not child.is_dir() or child.name.startswith("."):
+        if not child.is_dir() or child.name.startswith(".") or child.name == "_meta":
             continue
         role = _user_role_for_project(s, user, child.name)
         if role == "none":
@@ -2057,7 +2057,7 @@ def tree(
     nd.mkdir(parents=True, exist_ok=True)
     # Top-level projects (folders)
     for child in sorted(nd.iterdir()):
-        if not child.is_dir() or child.name.startswith("."):
+        if not child.is_dir() or child.name.startswith(".") or child.name == "_meta":
             continue
         role = _user_role_for_project(s, user, child.name)
         if role == "none":
@@ -3132,3 +3132,79 @@ def admin_watcher_status(
     """
     from ..indexer import WATCHER_STATE
     return dict(WATCHER_STATE)
+
+
+# ── Focus of the Week (#266) ─────────────────────────────────────────
+# Free-form team / project goal of the week, stored as a single
+# markdown file at ``<notes_dir>/_meta/focus.md``. The indexer skips
+# ``_meta/`` entirely (see indexer/__init__.py); the file lives on
+# disk for git tracking and is read/written exclusively through these
+# endpoints. No parsing, no task extraction — the body is the source
+# of truth.
+
+FOCUS_REL_PATH = "_meta/focus.md"
+
+
+class FocusWeekIn(BaseModel):
+    markdown: str
+
+
+def _focus_full_path() -> Path:
+    return settings.notes_dir / FOCUS_REL_PATH
+
+
+@router.get("/focus-week")
+def get_focus_week(
+    _user: str = Depends(require_user),
+) -> dict[str, Any]:
+    """Return the current Focus of the Week markdown.
+
+    Response: ``{"markdown": str, "updated_at": ISO8601 str, "path": str}``.
+    Returns 404 if the file does not exist; the frontend hides the
+    banner in that case.
+    """
+    full = _focus_full_path()
+    if not full.exists():
+        raise HTTPException(404, "focus file not set")
+    try:
+        markdown = full.read_text(encoding="utf-8")
+    except OSError as e:
+        raise HTTPException(500, f"failed to read focus file: {e}")
+    mtime = datetime.utcfromtimestamp(full.stat().st_mtime).replace(microsecond=0)
+    return {
+        "markdown": markdown,
+        "updated_at": mtime.isoformat() + "Z",
+        "path": FOCUS_REL_PATH,
+    }
+
+
+@router.put("/focus-week")
+def put_focus_week(
+    body: FocusWeekIn,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    """Overwrite ``_meta/focus.md``. Admin only.
+
+    Empty/whitespace-only markdown deletes the file so the banner
+    auto-hides — saves clients from having to call a separate DELETE.
+    """
+    _require_root_admin(s, user, "edit focus-of-the-week")
+    full = _focus_full_path()
+    full.parent.mkdir(parents=True, exist_ok=True)
+
+    stripped = body.markdown.strip()
+    if not stripped:
+        if full.exists():
+            with with_file_lock(full):
+                if full.exists():
+                    full.unlink()
+        return {"markdown": "", "updated_at": None, "path": FOCUS_REL_PATH}
+
+    safe_write(full, body.markdown, notes_dir=settings.notes_dir)
+    mtime = datetime.utcfromtimestamp(full.stat().st_mtime).replace(microsecond=0)
+    return {
+        "markdown": body.markdown,
+        "updated_at": mtime.isoformat() + "Z",
+        "path": FOCUS_REL_PATH,
+    }

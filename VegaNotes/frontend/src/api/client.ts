@@ -396,7 +396,28 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ tokens }),
     }),
+
+  // ----- Focus of the Week (#266) ---------------------------------------
+  getFocusWeek: async (): Promise<FocusWeek | null> => {
+    try {
+      return await req<FocusWeek>("/focus-week");
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }
+  },
+  setFocusWeek: (markdown: string) =>
+    req<FocusWeek>("/focus-week", {
+      method: "PUT",
+      body: JSON.stringify({ markdown }),
+    }),
 };
+
+export interface FocusWeek {
+  markdown: string;
+  updated_at: string | null;
+  path: string;
+}
 
 export interface PhonebookEntry {
   idsid: string;
