@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type ChildTask, type Task } from "../../api/client";
@@ -6,6 +6,9 @@ import { formatIntelWw } from "@veganotes/parser";
 import { useFontScale, FONT_SCALE_MAP } from "../../store/fontScale";
 import { QuickChips } from "../Tasks/QuickChips";
 import { copyToClipboard } from "../../lib/clipboard";
+import { isGamifyEnabled, subscribeGamify } from "../../lib/gamify";
+import { shouldShowReplayButton } from "../../lib/p0Burst";
+import { triggerCelebration } from "../../lib/celebration";
 
 interface Props { task: Task; onOpen?: (t: Task) => void; canWrite?: boolean; }
 
@@ -64,6 +67,26 @@ export function TaskCard({ task, onOpen, canWrite = true }: Props) {
   const { scale } = useFontScale();
   const fs = FONT_SCALE_MAP[scale];
 
+  // ── #180: P0 close-celebration replay button ────────────────────────
+  // The actual on-close burst is fired by the API client interceptor
+  // (api/client.ts → _maybeFireCelebration) so it survives Kanban
+  // re-bucketing remounts. This card only owns the manual replay button.
+  const [gamifyOn, setGamifyOn] = useState<boolean>(() => isGamifyEnabled());
+  useEffect(() => subscribeGamify(setGamifyOn), []);
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const replayBurst = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const rect = cardRef.current?.getBoundingClientRect();
+    triggerCelebration({
+      priority: "P0",
+      sourceId: task.task_uuid ?? undefined,
+      origin: rect
+        ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+        : undefined,
+    });
+  };
+  const showReplay = shouldShowReplayButton(task.status, prio, gamifyOn);
+
   const cycleAr = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) =>
       api.updateTask(id, { status }),
@@ -78,10 +101,22 @@ export function TaskCard({ task, onOpen, canWrite = true }: Props) {
 
   return (
     <motion.div layout
+      ref={cardRef}
       onClick={() => onOpen?.(task)}
-      className={`card border-l-4 ${accent} cursor-pointer`}>
+      className={`card border-l-4 ${accent} cursor-pointer relative`}>
       <div className="flex items-start justify-between gap-2">
         <div className={`font-medium ${fs.title}`}>{task.title}</div>
+        {showReplay && (
+          <button
+            type="button"
+            onClick={replayBurst}
+            title="Replay celebration 🎉"
+            aria-label="Replay P0 close celebration"
+            className="shrink-0 rounded-full border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 hover:border-rose-300 transition-colors px-1.5 py-0.5 text-[11px] leading-none"
+          >
+            🎉
+          </button>
+        )}
       </div>
       <div className="mt-2 flex flex-wrap gap-1">
         {task.task_uuid && <UuidChip uuid={task.task_uuid} />}
