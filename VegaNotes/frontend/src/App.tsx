@@ -9,6 +9,7 @@ import { GraphView } from "./components/Graph/GraphView";
 import { MyTasksView } from "./components/Tasks/MyTasksView";
 import { MeView } from "./components/Me/MeView";
 import { UnlockToast } from "./components/Me/UnlockToast";
+import { CelebrationOverlay } from "./components/Celebration/CelebrationOverlay";
 import { HelpView } from "./components/Help/HelpView";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { NoteEditor } from "./components/Editor/NoteEditor";
@@ -769,6 +770,7 @@ export default function App() {
         </div>
         <CommandPalette />
         <UnlockToast />
+        <CelebrationOverlay />
       </div>
     </QueryClientProvider>
   );

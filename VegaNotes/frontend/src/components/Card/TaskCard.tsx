@@ -7,8 +7,8 @@ import { useFontScale, FONT_SCALE_MAP } from "../../store/fontScale";
 import { QuickChips } from "../Tasks/QuickChips";
 import { copyToClipboard } from "../../lib/clipboard";
 import { isGamifyEnabled, subscribeGamify } from "../../lib/gamify";
-import { shouldFireP0Burst, shouldShowReplayButton } from "../../lib/p0Burst";
-import { ConfettiBurst } from "./ConfettiBurst";
+import { shouldShowReplayButton } from "../../lib/p0Burst";
+import { triggerCelebration } from "../../lib/celebration";
 
 interface Props { task: Task; onOpen?: (t: Task) => void; canWrite?: boolean; }
 
@@ -67,21 +67,23 @@ export function TaskCard({ task, onOpen, canWrite = true }: Props) {
   const { scale } = useFontScale();
   const fs = FONT_SCALE_MAP[scale];
 
-  // ── #180: P0 close-celebration burst ────────────────────────────────
+  // ── #180: P0 close-celebration replay button ────────────────────────
+  // The actual on-close burst is fired by the API client interceptor
+  // (api/client.ts → _maybeFireCelebration) so it survives Kanban
+  // re-bucketing remounts. This card only owns the manual replay button.
   const [gamifyOn, setGamifyOn] = useState<boolean>(() => isGamifyEnabled());
   useEffect(() => subscribeGamify(setGamifyOn), []);
-  const [burstKey, setBurstKey] = useState(0);
-  const prevStatusRef = useRef<string | null>(null);
-  useEffect(() => {
-    const prev = prevStatusRef.current;
-    prevStatusRef.current = task.status;
-    if (shouldFireP0Burst(prev, task.status, prio, gamifyOn)) {
-      setBurstKey((k) => k + 1);
-    }
-  }, [task.status, prio, gamifyOn]);
+  const cardRef = useRef<HTMLDivElement | null>(null);
   const replayBurst = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setBurstKey((k) => k + 1);
+    const rect = cardRef.current?.getBoundingClientRect();
+    triggerCelebration({
+      priority: "P0",
+      sourceId: task.task_uuid ?? undefined,
+      origin: rect
+        ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+        : undefined,
+    });
   };
   const showReplay = shouldShowReplayButton(task.status, prio, gamifyOn);
 
@@ -99,9 +101,9 @@ export function TaskCard({ task, onOpen, canWrite = true }: Props) {
 
   return (
     <motion.div layout
+      ref={cardRef}
       onClick={() => onOpen?.(task)}
       className={`card border-l-4 ${accent} cursor-pointer relative`}>
-      <ConfettiBurst burstKey={burstKey} />
       <div className="flex items-start justify-between gap-2">
         <div className={`font-medium ${fs.title}`}>{task.title}</div>
         {showReplay && (
