@@ -10,7 +10,7 @@
  * features edits.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { api, type ChildTask, type Task } from "../../api/client";
@@ -21,6 +21,9 @@ import { StatusChip, PriorityChip, EtaChip, OwnersChips } from "./QuickChips";
 import { BulkEditBar } from "./BulkEditBar";
 import { useUI } from "../../store/ui";
 import { loadDoneScope, saveDoneScope, type DoneScope } from "../../store/doneScope";
+import { isGamifyEnabled, subscribeGamify } from "../../lib/gamify";
+import { shouldShowReplayButton } from "../../lib/p0Burst";
+import { triggerCelebration } from "../../lib/celebration";
 
 // ── selection helpers (issue #33) ─────────────────────────────────────────────
 
@@ -157,6 +160,27 @@ function TaskRow({
   const [expanded, setExpanded] = useState(false);
   const qc = useQueryClient();
 
+  // ── #180: P0 close-celebration replay button ────────────────────────
+  // The on-close burst is fired globally by the API client interceptor
+  // (api/client.ts → _maybeFireCelebration). This row only owns the
+  // manual replay control, mirroring the Kanban TaskCard.
+  const prio = (task.attrs.priority as string) ?? "";
+  const [gamifyOn, setGamifyOn] = useState<boolean>(() => isGamifyEnabled());
+  useEffect(() => subscribeGamify(setGamifyOn), []);
+  const rowRef = useRef<HTMLTableRowElement | null>(null);
+  const replayBurst = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const rect = rowRef.current?.getBoundingClientRect();
+    triggerCelebration({
+      priority: "P0",
+      sourceId: task.task_uuid ?? undefined,
+      origin: rect
+        ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+        : undefined,
+    });
+  };
+  const showReplay = shouldShowReplayButton(task.status, prio, gamifyOn);
+
   const cycleAr = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) =>
       api.updateTask(id, { status }),
@@ -181,6 +205,7 @@ function TaskRow({
   return (
     <>
       <tr
+        ref={rowRef}
         onClick={handleRowClick}
         className={`group cursor-pointer border-b border-slate-100 transition-colors ${
           selected ? "bg-sky-50" : "hover:bg-sky-50/40"
@@ -205,8 +230,21 @@ function TaskRow({
 
         {/* Title + project/feature chips + AR toggle */}
         <td className="py-2.5 pl-1 pr-2 min-w-[200px]">
-          <div className="font-medium text-slate-800 text-sm leading-snug group-hover:text-sky-800 transition-colors">
-            {task.title}
+          <div className="flex items-center gap-1.5">
+            <div className="font-medium text-slate-800 text-sm leading-snug group-hover:text-sky-800 transition-colors">
+              {task.title}
+            </div>
+            {showReplay && (
+              <button
+                type="button"
+                onClick={replayBurst}
+                title="Replay celebration 🎉"
+                aria-label="Replay P0 close celebration"
+                className="shrink-0 rounded-full border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 hover:border-rose-300 transition-colors px-1.5 py-0.5 text-[11px] leading-none"
+              >
+                🎉
+              </button>
+            )}
           </div>
           {(task.projects.length > 0 || task.features.length > 0) && (
             <div className="flex flex-wrap gap-1 mt-1">
