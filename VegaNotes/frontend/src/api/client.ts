@@ -1,6 +1,8 @@
 // Tiny typed API client. Auth is HTTP Basic; in single-pod mode the browser
 // re-uses the credentials it already negotiated with the page itself.
 
+import { triggerCelebration } from "../lib/celebration";
+
 export interface ChildTask {
   id: number;
   task_uuid: string | null;
@@ -95,6 +97,33 @@ function _maybeFireBadges(method: string, body: unknown) {
   }
 }
 
+function _maybeFireCelebration(
+  path: string,
+  method: string,
+  reqBody: unknown,
+  respBody: unknown,
+) {
+  // Only PATCH /tasks/<ref> is a candidate (Kanban drag, QuickChips,
+  // TaskEditPopover, MyTasksView, cycleAr all funnel through here).
+  if (method !== "PATCH") return;
+  if (!/^\/tasks\/[^/]+$/.test(path)) return;
+  if (!reqBody || typeof reqBody !== "object") return;
+  if ((reqBody as { status?: unknown }).status !== "done") return;
+  if (!respBody || typeof respBody !== "object") return;
+  const resp = respBody as Partial<Task>;
+  // Skip AR closures — only top-level task closures celebrate.
+  if (resp.kind && resp.kind !== "task") return;
+  const prio = (resp.attrs as Record<string, unknown> | undefined)?.priority;
+  const prioStr = typeof prio === "string" ? prio.trim().toUpperCase() : "";
+  if (prioStr !== "P0") return;
+  triggerCelebration({
+    priority: "P0",
+    sourceId: resp.task_uuid ?? undefined,
+    // No origin — overlay defaults to viewport center. Per-card replay
+    // buttons still pass an origin when called directly.
+  });
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const r = await fetch(BASE + path, {
@@ -118,6 +147,11 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   }
   const parsed = (await r.json()) as T;
   _maybeFireBadges(method, parsed);
+  let parsedReq: unknown = undefined;
+  if (typeof init?.body === "string") {
+    try { parsedReq = JSON.parse(init.body); } catch { /* non-JSON body */ }
+  }
+  _maybeFireCelebration(path, method, parsedReq, parsed);
   return parsed;
 }
 
