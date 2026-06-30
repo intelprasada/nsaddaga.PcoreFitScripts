@@ -768,6 +768,7 @@ def reindex_all(session: Session) -> int:
     """
     n = 0
     present: set[str] = set()
+    archived_paths: set[str] = set()
     for path in sorted(settings.notes_dir.rglob("*.md")):
         # Skip the per-write backup tree — paths under any ``.trash`` segment
         # are not real notes.  ``rglob('*.md')`` already excludes ``.bak``
@@ -780,6 +781,17 @@ def reindex_all(session: Session) -> int:
         if rel.startswith(".trash/") or "/.trash/" in rel or "/." in "/" + rel:
             # Skip dotfile dirs (.trash, .git, .vscode, etc.)
             continue
+        # Skip rolled-forward weekly archives.  After ``roll_to_next_week``
+        # moves canonical Task rows by uuid to the new ww file, the archived
+        # markdown still carries a body-prose copy of the same ``#task T-XXX``
+        # stamps — reindexing those copies would try to INSERT a Task with a
+        # ``task_uuid`` that already lives on the new note, hitting UNIQUE.
+        # The archived ``Note`` row is preserved (orphan sweep skips it
+        # below) so the body-prose copy stays browsable via
+        # ``?include_archived=1``; we just don't re-derive its tasks.
+        if "/_archive/" in f"/{rel}/":
+            archived_paths.add(rel)
+            continue
         reindex_file(path, session)
         present.add(rel)
         n += 1
@@ -789,10 +801,16 @@ def reindex_all(session: Session) -> int:
     # mounts where inotify is unreliable) leaves orphan tasks haunting the
     # UI and search results forever.  remove_path() cascades through
     # _delete_task_children + notes_fts.  See issue #207.
+    #
+    # NOTE: ``present`` only contains files we actually indexed.  Files
+    # under ``_archive/`` are intentionally not indexed (see above) but
+    # MUST be kept in the DB so the archive remains queryable, so we
+    # union them in here before the sweep.
+    keep = present | archived_paths
     orphans = 0
     all_notes = session.exec(select(Note)).all()
     for note in all_notes:
-        if note.path not in present:
+        if note.path not in keep:
             remove_path(note.path, session)
             orphans += 1
     if orphans:
@@ -978,6 +996,16 @@ async def watch_loop() -> None:
                 try:
                     rel = str(path.relative_to(settings.notes_dir))
                 except ValueError:
+                    continue
+                # Mirror reindex_all's skip list so a stray write/touch to a
+                # rolled-forward weekly archive can't re-introduce the
+                # duplicate-UUID INSERT crash.
+                if (
+                    rel.startswith(".trash/")
+                    or "/.trash/" in rel
+                    or "/." in "/" + rel
+                    or "/_archive/" in f"/{rel}/"
+                ):
                     continue
                 if change == Change.deleted or not path.exists():
                     remove_path(rel, s)
