@@ -123,8 +123,27 @@ def _upsert_task_attrs(session: Session, tid: int, pt: dict, folder_project: str
         session.add(Link(src_task_id=tid, dst_slug=ref["dst_slug"], kind=ref["kind"]))
 
 
-def reindex_file(path: Path, session: Session) -> Note:
+def _is_skipped_path(rel: str) -> bool:
+    """Centralized skip rule for paths the indexer must never touch.
+
+    Currently covers only the ``_meta/`` namespace for app-managed team
+    artifacts like ``_meta/focus.md`` (see #266). Other skips
+    (``.trash/``, ``_archive/``) are enforced at the bulk-walker layer
+    only (``reindex_all`` / watcher) because direct callers like
+    ``roll_to_next_week`` legitimately re-index archived files by
+    explicit path.
+    """
+    return rel.startswith("_meta/") or "/_meta/" in f"/{rel}/"
+
+
+def reindex_file(path: Path, session: Session) -> Note | None:
     rel = str(path.relative_to(settings.notes_dir))
+    # Guard against callers (``/api/tree``, ``/api/projects/{p}/notes``,
+    # ``run_watcher``) that walk the disk and would otherwise force-index
+    # a hidden ``_meta/`` artifact.  Returning ``None`` lets the caller
+    # treat the path as "no Note row" without raising.
+    if _is_skipped_path(rel):
+        return None
     body = path.read_text(encoding="utf-8")
     parsed = parse(body)
     title = next((ln.lstrip("# ").strip() for ln in body.splitlines() if ln.startswith("#")), rel)
@@ -781,6 +800,14 @@ def reindex_all(session: Session) -> int:
         if rel.startswith(".trash/") or "/.trash/" in rel or "/." in "/" + rel:
             # Skip dotfile dirs (.trash, .git, .vscode, etc.)
             continue
+        # Skip the ``_meta/`` namespace — these files are app-managed
+        # team artifacts (e.g. ``_meta/focus.md`` from issue #266) and
+        # are intentionally not surfaced as notes / tasks. They live on
+        # disk for git tracking and direct editing but the indexer
+        # ignores them entirely (no Note row, no orphan sweep, no
+        # watcher reindex).
+        if rel.startswith("_meta/") or "/_meta/" in f"/{rel}/":
+            continue
         # Skip rolled-forward weekly archives.  After ``roll_to_next_week``
         # moves canonical Task rows by uuid to the new ww file, the archived
         # markdown still carries a body-prose copy of the same ``#task T-XXX``
@@ -1005,6 +1032,8 @@ async def watch_loop() -> None:
                     or "/.trash/" in rel
                     or "/." in "/" + rel
                     or "/_archive/" in f"/{rel}/"
+                    or rel.startswith("_meta/")
+                    or "/_meta/" in f"/{rel}/"
                 ):
                     continue
                 if change == Change.deleted or not path.exists():

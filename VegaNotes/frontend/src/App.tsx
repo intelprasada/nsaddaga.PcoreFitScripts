@@ -17,6 +17,7 @@ import { Sidebar } from "./components/Sidebar/Sidebar";
 import { AdminPanel } from "./components/Admin/AdminPanel";
 import { ChangePasswordModal } from "./components/Auth/ChangePasswordModal";
 import { QuoteBar } from "./components/QuoteBar/QuoteBar";
+import { FocusBanner } from "./components/FocusBanner/FocusBanner";
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "./api/client";
 import { loadPersistedDrafts, persistDirtyDrafts } from "./store/draftStorage";
@@ -747,6 +748,7 @@ export default function App() {
     <QueryClientProvider client={qc}>
       <div className="min-h-screen flex flex-col">
         <QuoteBar />
+        <FocusBanner />
         <NavBar />
         <FilterBar />
         <div className="flex-1 flex overflow-hidden">
