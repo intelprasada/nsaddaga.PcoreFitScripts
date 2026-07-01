@@ -1000,3 +1000,137 @@ def test_linux_idsid_missing_ypcat_returns_empty(monkeypatch):
     monkeypatch.setattr(pi.subprocess, "run", fnf)
     assert pi.linux_idsid_for_wwid("11894199") == ""
     pi.reset_nis_cache_for_test()
+
+
+# ---------------------------------------------------------------------------
+# #271 — exact-idsid short-circuit for scraper hits.
+#
+# When a user types a fully qualified handle (linux idsid like ``avruddhu``
+# or dotted corporate idsid like ``akash.kumar.vruddhula``), the scraper
+# returns exactly the right person but the first-name prefix filter (#215)
+# would otherwise discard it because the query is not a prefix of the
+# person's first name. The resolver must short-circuit on exact
+# ``linux_idsid`` / ``idsid`` matches before applying name filters.
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_exact_linux_idsid_bypasses_first_name_filter(monkeypatch, tmp_path):
+    """@avruddhu -> Akash Kumar Vruddhula, even though 'Akash' doesn't
+    start with 'avruddhu'."""
+    from app.phonebook import Phonebook
+    monkeypatch.setattr(settings, "phonebook_scraper_enabled", True, raising=False)
+    pb_file = tmp_path / "pb.json"
+    pb_file.write_text("{}")
+    pb = Phonebook(path=pb_file)
+    hit = phonebook_intel.IntelPhonebookHit(
+        display="Akash Kumar Vruddhula",
+        email="akash.kumar.vruddhula@intel.com",
+        idsid="akash.kumar.vruddhula",
+        wwid="12345678",
+        first_name="Akash",
+        last_name="Vruddhula",
+        linux_idsid="avruddhu",
+    )
+    monkeypatch.setattr(phonebook_intel, "cached_lookup", lambda q: [hit])
+    monkeypatch.setattr(phonebook_intel, "manager_email_for_wwid", lambda w: None)
+    entry, candidates = pb.resolve("@avruddhu")
+    assert entry is not None
+    assert entry.idsid == "avruddhu"
+    assert entry.display == "Akash Kumar Vruddhula"
+    assert candidates == []
+
+
+def test_resolve_exact_dotted_idsid_bypasses_first_name_filter(monkeypatch, tmp_path):
+    """@akash.kumar.vruddhula (email local-part idsid) also short-circuits."""
+    from app.phonebook import Phonebook
+    monkeypatch.setattr(settings, "phonebook_scraper_enabled", True, raising=False)
+    pb_file = tmp_path / "pb.json"
+    pb_file.write_text("{}")
+    pb = Phonebook(path=pb_file)
+    hit = phonebook_intel.IntelPhonebookHit(
+        display="Akash Kumar Vruddhula",
+        email="akash.kumar.vruddhula@intel.com",
+        idsid="akash.kumar.vruddhula",
+        wwid="12345678",
+        first_name="Akash",
+        last_name="Vruddhula",
+        linux_idsid="avruddhu",
+    )
+    monkeypatch.setattr(phonebook_intel, "cached_lookup", lambda q: [hit])
+    monkeypatch.setattr(phonebook_intel, "manager_email_for_wwid", lambda w: None)
+    entry, _ = pb.resolve("@akash.kumar.vruddhula")
+    assert entry is not None
+    assert entry.idsid == "avruddhu"  # prefers linux_idsid when present
+
+
+def test_resolve_exact_idsid_case_insensitive(monkeypatch, tmp_path):
+    from app.phonebook import Phonebook
+    monkeypatch.setattr(settings, "phonebook_scraper_enabled", True, raising=False)
+    pb_file = tmp_path / "pb.json"
+    pb_file.write_text("{}")
+    pb = Phonebook(path=pb_file)
+    hit = phonebook_intel.IntelPhonebookHit(
+        display="Akash Kumar Vruddhula",
+        email="akash.kumar.vruddhula@intel.com",
+        idsid="akash.kumar.vruddhula",
+        wwid="12345678",
+        first_name="Akash", last_name="Vruddhula",
+        linux_idsid="avruddhu",
+    )
+    monkeypatch.setattr(phonebook_intel, "cached_lookup", lambda q: [hit])
+    monkeypatch.setattr(phonebook_intel, "manager_email_for_wwid", lambda w: None)
+    entry, _ = pb.resolve("@AVRUDDHU")
+    assert entry is not None
+    assert entry.idsid == "avruddhu"
+
+
+def test_resolve_name_token_still_first_name_filtered(monkeypatch, tmp_path):
+    """Regression guard: a name-shaped token that matches no idsid must
+    still be dropped by the first-name filter — the short-circuit only
+    fires on exact idsid matches, not on any single-hit scrape."""
+    from app.phonebook import Phonebook
+    monkeypatch.setattr(settings, "phonebook_scraper_enabled", True, raising=False)
+    pb_file = tmp_path / "pb.json"
+    pb_file.write_text("{}")
+    pb = Phonebook(path=pb_file)
+    # Scrape returns Ioana Pavel — a last-name hit for @pavel.
+    hit = phonebook_intel.IntelPhonebookHit(
+        display="Ioana Pavel",
+        email="ioana.pavel@intel.com",
+        idsid="ioana.pavel",
+        wwid="99999999",
+        first_name="Ioana", last_name="Pavel",
+        linux_idsid="ipavel",
+    )
+    monkeypatch.setattr(phonebook_intel, "cached_lookup", lambda q: [hit])
+    monkeypatch.setattr(phonebook_intel, "manager_email_for_wwid", lambda w: None)
+    entry, candidates = pb.resolve("@pavel")
+    # 'pavel' doesn't match linux_idsid 'ipavel' nor idsid 'ioana.pavel',
+    # and first-name 'Ioana' doesn't start with 'pavel' → dropped.
+    assert entry is None
+    assert candidates == []
+
+
+def test_resolve_exact_idsid_ambiguous_falls_through_to_filter(monkeypatch, tmp_path):
+    """If two hits share the same linux_idsid (shouldn't happen, but
+    defensive), the short-circuit declines and falls back to the
+    existing name-filter/ranking path so behavior stays predictable."""
+    from app.phonebook import Phonebook
+    monkeypatch.setattr(settings, "phonebook_scraper_enabled", True, raising=False)
+    pb_file = tmp_path / "pb.json"
+    pb_file.write_text("{}")
+    pb = Phonebook(path=pb_file)
+    h1 = phonebook_intel.IntelPhonebookHit(
+        display="Person One", email="p1@intel.com", idsid="p.one", wwid="1",
+        first_name="Person", last_name="One", linux_idsid="dup",
+    )
+    h2 = phonebook_intel.IntelPhonebookHit(
+        display="Person Two", email="p2@intel.com", idsid="p.two", wwid="2",
+        first_name="Person", last_name="Two", linux_idsid="dup",
+    )
+    monkeypatch.setattr(phonebook_intel, "cached_lookup", lambda q: [h1, h2])
+    monkeypatch.setattr(phonebook_intel, "manager_email_for_wwid", lambda w: None)
+    entry, _ = pb.resolve("@dup")
+    # Both hits' first_name 'Person' doesn't start with 'dup', so the
+    # first-name filter drops both → resolver returns None.
+    assert entry is None

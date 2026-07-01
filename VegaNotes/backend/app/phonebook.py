@@ -279,6 +279,26 @@ class Phonebook:
             return None, []
         if not hits:
             return None, []
+        # #271: exact-idsid short-circuit. If the caller typed a fully
+        # qualified handle (linux idsid like ``avruddhu`` or dotted
+        # corporate idsid like ``akash.kumar.vruddhula``) and the
+        # scraper returned that person, use it directly — the name
+        # filters below are only meaningful for name-shaped tokens and
+        # would otherwise drop this exact match when the first name
+        # doesn't share a prefix with the idsid.
+        q_lower = query.strip().lower()
+        exact_idsid = [
+            h for h in hits
+            if (h.linux_idsid or "").lower() == q_lower
+            or (h.idsid or "").lower() == q_lower
+        ]
+        if len(exact_idsid) == 1:
+            h = exact_idsid[0]
+            return PhonebookEntry(
+                idsid=(h.linux_idsid or h.idsid),
+                display=h.display, email=h.email,
+                manager_email=phonebook_intel.manager_email_for_wwid(h.wwid),
+            ), []
         # First-name-only filter (#215). Phonebook returns last-name
         # matches and team-metadata matches too, which we never want for
         # an owner token like ``@Pavel``. Filter before ranking so a
