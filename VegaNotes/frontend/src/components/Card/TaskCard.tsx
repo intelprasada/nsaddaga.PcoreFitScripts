@@ -9,6 +9,7 @@ import { copyToClipboard } from "../../lib/clipboard";
 import { isGamifyEnabled, subscribeGamify } from "../../lib/gamify";
 import { shouldShowReplayButton } from "../../lib/p0Burst";
 import { triggerCelebration } from "../../lib/celebration";
+import { TitleWithBreakHints } from "../../lib/titleWrap";
 
 interface Props { task: Task; onOpen?: (t: Task) => void; canWrite?: boolean; }
 
@@ -105,7 +106,12 @@ export function TaskCard({ task, onOpen, canWrite = true }: Props) {
       onClick={() => onOpen?.(task)}
       className={`card border-l-4 ${accent} cursor-pointer relative`}>
       <div className="flex items-start justify-between gap-2">
-        <div className={`font-medium ${fs.title}`}>{task.title}</div>
+        <div
+          className={`font-medium ${fs.title} line-clamp-2 [overflow-wrap:anywhere] min-w-0 flex-1`}
+          title={task.title}
+        >
+          <TitleWithBreakHints text={task.title} />
+        </div>
         {showReplay && (
           <button
             type="button"
@@ -177,8 +183,16 @@ function ArRow({ ar, arClass, bubbleClass, onCycle }: {
       >
         {statusLabel}
       </button>
-      <span className={done ? "line-through text-slate-400 font-medium" : "text-slate-700 font-medium"}>
-        {ar.title}
+      <span
+        className={
+          (done
+            ? "line-through text-slate-400 font-medium"
+            : "text-slate-700 font-medium") +
+          " min-w-0 flex-1 line-clamp-2 [overflow-wrap:anywhere]"
+        }
+        title={ar.title}
+      >
+        <TitleWithBreakHints text={ar.title} />
       </span>
       {ar.eta && <span className={`chip chip-eta ${bubbleClass}`} title={ar.eta}>{etaLabel(ar.eta)}</span>}
     </li>
