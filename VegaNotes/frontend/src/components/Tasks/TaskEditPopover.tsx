@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, type Task } from "../../api/client";
+import { TitleWithBreakHints } from "../../lib/titleWrap";
 
 const STATUSES = ["todo", "in-progress", "blocked", "done"];
 const PRIORITIES = ["", "P0", "P1", "P2", "P3"];
@@ -154,12 +155,14 @@ export function TaskEditPopover({ task, onClose }: Props) {
         className="bg-white rounded-lg shadow-xl w-[480px] max-w-[95vw] p-5 space-y-4"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between">
-          <div>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
             <div className="text-xs text-slate-500 font-mono">
               T-{task.id} · {task.kind}
             </div>
-            <h3 className="font-semibold text-base mt-0.5">{task.title}</h3>
+            <h3 className="font-semibold text-base mt-0.5 [overflow-wrap:anywhere]">
+              <TitleWithBreakHints text={task.title} />
+            </h3>
           </div>
           <button
             onClick={onClose}

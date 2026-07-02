@@ -24,6 +24,7 @@ import { loadDoneScope, saveDoneScope, type DoneScope } from "../../store/doneSc
 import { isGamifyEnabled, subscribeGamify } from "../../lib/gamify";
 import { shouldShowReplayButton } from "../../lib/p0Burst";
 import { triggerCelebration } from "../../lib/celebration";
+import { TitleWithBreakHints } from "../../lib/titleWrap";
 
 // ── selection helpers (issue #33) ─────────────────────────────────────────────
 
@@ -134,8 +135,16 @@ function ArRow({ ar, onCycle }: { ar: ChildTask; onCycle: () => void }) {
       >
         {statusLabel}
       </button>
-      <span className={done ? "line-through text-slate-400 font-medium" : "text-slate-700 font-medium"}>
-        {ar.title}
+      <span
+        className={
+          (done
+            ? "line-through text-slate-400 font-medium"
+            : "text-slate-700 font-medium") +
+          " min-w-0 truncate [overflow-wrap:anywhere]"
+        }
+        title={ar.title}
+      >
+        <TitleWithBreakHints text={ar.title} />
       </span>
       {ar.eta && <span className="chip chip-eta text-[10px]" title={ar.eta}>{etaLabel(ar.eta)}</span>}
     </li>
@@ -231,8 +240,11 @@ function TaskRow({
         {/* Title + project/feature chips + AR toggle */}
         <td className="py-2.5 pl-1 pr-2 min-w-[200px]">
           <div className="flex items-center gap-1.5">
-            <div className="font-medium text-slate-800 text-sm leading-snug group-hover:text-sky-800 transition-colors">
-              {task.title}
+            <div
+              className="font-medium text-slate-800 text-sm leading-snug group-hover:text-sky-800 transition-colors min-w-0 truncate max-w-[42ch] [overflow-wrap:anywhere]"
+              title={task.title}
+            >
+              <TitleWithBreakHints text={task.title} />
             </div>
             {showReplay && (
               <button
