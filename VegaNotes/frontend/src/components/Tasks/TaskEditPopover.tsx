@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, type Task } from "../../api/client";
 import { TitleWithBreakHints } from "../../lib/titleWrap";
+import { extraTagChips } from "../../lib/tagChips";
 
 const STATUSES = ["todo", "in-progress", "blocked", "done"];
 const PRIORITIES = ["", "P0", "P1", "P2", "P3"];
@@ -211,6 +212,23 @@ export function TaskEditPopover({ task, onClose }: Props) {
               value={features} onChange={(e) => setFeatures(e.target.value)}
               placeholder="auth, billing" />
           </Field>
+
+          {extraTagChips(task).length > 0 && (
+            <Field label="Tags" hint="Bare `#tag` attributes parsed from the .md file. Add or remove by editing the source markdown.">
+              <div className="flex flex-wrap gap-1">
+                {extraTagChips(task).map((c) => (
+                  <span
+                    key={c.reactKey}
+                    className="chip chip-tag"
+                    title={c.value ? `${c.key} = ${c.value}` : `Tag: #${c.key}`}
+                  >
+                    #{c.key}
+                    {c.value ? <span className="opacity-60">={c.value}</span> : null}
+                  </span>
+                ))}
+              </div>
+            </Field>
+          )}
 
           {task.kind === "task" && (
             <Field label="Add an AR (action request)" hint="Inserted as an `!AR` child line under this task in the .md file. Inherits the same project context. Press Enter to add — the popover stays open so you can add several.">

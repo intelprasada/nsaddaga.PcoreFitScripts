@@ -25,6 +25,7 @@ import { isGamifyEnabled, subscribeGamify } from "../../lib/gamify";
 import { shouldShowReplayButton } from "../../lib/p0Burst";
 import { triggerCelebration } from "../../lib/celebration";
 import { TitleWithBreakHints } from "../../lib/titleWrap";
+import { TagChips, extraTagChips } from "../../lib/tagChips";
 
 // ── selection helpers (issue #33) ─────────────────────────────────────────────
 
@@ -258,7 +259,7 @@ function TaskRow({
               </button>
             )}
           </div>
-          {(task.projects.length > 0 || task.features.length > 0) && (
+          {(task.projects.length > 0 || task.features.length > 0 || extraTagChips(task).length > 0) && (
             <div className="flex flex-wrap gap-1 mt-1">
               {task.projects.map((p) => (
                 <span key={p} className="chip chip-project" style={{ fontSize: "10px" }}>#{p}</span>
@@ -266,6 +267,7 @@ function TaskRow({
               {task.features.map((f) => (
                 <span key={f} className="chip chip-feature" style={{ fontSize: "10px" }}>★{f}</span>
               ))}
+              <TagChips task={task} size="xs" />
             </div>
           )}
           {ars.length > 0 && (

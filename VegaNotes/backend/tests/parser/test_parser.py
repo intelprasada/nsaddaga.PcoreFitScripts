@@ -119,3 +119,84 @@ def test_title_no_title_is_empty():
     tasks = result["tasks"]
     assert len(tasks) == 1
     assert tasks[0]["title"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Parser: bare-hashtag presence attributes (#275)
+#
+# Rule: on any line the parser attaches to a task, a bare `#foo` (no
+# whitespace-separated value token following) becomes attrs['foo'] = [''].
+# Reserved names (#priority, #eta, ...) with no value still fall through
+# as prose — that's the "typo-safe" guard.
+# ---------------------------------------------------------------------------
+
+def test_bare_hashtag_on_task_line():
+    from app.parser import parse
+    result = parse("!task Rewrite scheduler #priority P0 #gfc\n")
+    tasks = result["tasks"]
+    assert len(tasks) == 1
+    assert tasks[0]["attrs"].get("priority") == "P0"
+    assert tasks[0]["attrs"].get("gfc") == [""]
+
+
+def test_multiple_bare_hashtags_on_task_line():
+    from app.parser import parse
+    result = parse("!task X #gfc #urgent #hpc\n")
+    tasks = result["tasks"]
+    assert tasks[0]["attrs"].get("gfc") == [""]
+    assert tasks[0]["attrs"].get("urgent") == [""]
+    assert tasks[0]["attrs"].get("hpc") == [""]
+
+
+def test_bare_hashtag_on_note_continuation():
+    from app.parser import parse
+    md = "!task X\n    #note Blocked on stuff\n    Continued work on #wiki\n"
+    result = parse(md)
+    tasks = result["tasks"]
+    assert tasks[0]["attrs"].get("wiki") == [""]
+
+
+def test_bare_hashtag_on_ref_row():
+    from app.parser import parse
+    result = parse("#ar T-ABC12 #urgent\n")
+    ref_rows = result["ref_rows"]
+    assert len(ref_rows) == 1
+    assert ref_rows[0]["attrs"].get("urgent") == [""]
+
+
+def test_bare_hashtag_dropped_in_top_level_prose():
+    """A hashtag in narrative prose with no current task must NOT
+    become an attr — backwards-compat with pre-#275 behavior."""
+    from app.parser import parse
+    md = "## Background\n\nThe #hpc cluster was down last week.\n"
+    result = parse(md)
+    assert result["tasks"] == []
+
+
+def test_reserved_name_with_empty_value_stays_prose():
+    """`#priority` with no value is almost certainly a typo/edit-in-progress
+    and must NOT create attrs['priority'] = ['']."""
+    from app.parser import parse
+    result = parse("!task X #priority\n")
+    tasks = result["tasks"]
+    assert "priority" not in tasks[0]["attrs"] or tasks[0]["attrs"].get("priority") == ""
+
+
+def test_bare_hashtag_after_valued_attr_at_eol():
+    """`#foo P0 #bar` — the `stop_at_delimiter` fix must prevent `#foo`
+    from swallowing `#bar` as its value."""
+    from app.parser import parse
+    result = parse("!task X #priority P0 #gfc\n")
+    tasks = result["tasks"]
+    assert tasks[0]["attrs"].get("priority") == "P0"
+    assert tasks[0]["attrs"].get("gfc") == [""]
+
+
+def test_bare_hashtag_case_preserved_in_key():
+    """Bare `#GFC` is stored under the exact spelling — no lowering."""
+    from app.parser import parse
+    result = parse("!task X #GFC\n")
+    tasks = result["tasks"]
+    # The lexer emits the name as spelled; downstream may lowercase.
+    keys = list(tasks[0]["attrs"].keys())
+    assert "GFC" in keys or "gfc" in keys

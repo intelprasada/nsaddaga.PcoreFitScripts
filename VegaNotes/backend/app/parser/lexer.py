@@ -74,16 +74,27 @@ _GAL_TAIL_STOPWORDS = frozenset({
 _TOKEN_NAMES_NEEDING_VALUE = {"task"}  # !task always takes a value (the title)
 
 
-def _read_value(s: str, i: int, *, until_hash: bool = False) -> tuple[str, int]:
+def _read_value(s: str, i: int, *, until_hash: bool = False,
+                stop_at_delimiter: bool = False) -> tuple[str, int]:
     """Read a value starting at index i. Returns (value, end_index).
 
     Skips leading whitespace. Supports double-quoted strings. For ``!task``
     titles (``until_hash=True``) the value runs until the next known
     ``#token`` or EOL. Otherwise it reads a single whitespace-delimited word.
+
+    When ``stop_at_delimiter=True`` (used for ``#name`` attribute reads
+    other than ``status`` / ``note``), if the first non-whitespace char
+    after ``i`` is ``#`` or ``@`` the value is empty and we return the
+    *original* i so the caller can decide how to advance past ``#name``
+    without swallowing the next token. This makes ``#foo #bar`` lex as
+    two separate bare hashtags instead of ``#foo`` with value ``#bar``.
     """
     n = len(s)
+    orig_i = i
     while i < n and s[i] in " \t":
         i += 1
+    if stop_at_delimiter and i < n and s[i] in ("#", "@"):
+        return "", orig_i
     if i < n and s[i] == '"':
         j = i + 1
         out = []
@@ -168,21 +179,41 @@ def lex(line: str) -> List[Union[TextChunk, Token]]:
             last = end
         else:
             name = m.group("name")
-            # Read the value the way the spec dictates; for unknown names
-            # use the default whitespace-delimited word.  An attribute with
-            # an *empty* value is treated as prose (a `#hashtag` with no
-            # value, e.g. trailing `#urgent` at EOL): we copy the literal
-            # text through so existing notes that use `#foo` as a tag in
-            # prose continue to render unchanged.
+            # Read the value. For status/note we use until_hash-style so
+            # multi-word values ("blocked by review") work; for everything
+            # else we use single-word reads with stop_at_delimiter so that
+            # `#foo #bar` lexes as two bare hashtags, not `foo="#bar"`.
             spec_known = is_known(name)
+            use_until_hash = spec_known and name in ("status", "note")
             value, end = _read_value(
                 line, m.end(),
-                until_hash=(spec_known and name in ("status", "note")),
+                until_hash=use_until_hash,
+                stop_at_delimiter=not use_until_hash,
             )
             if not value.strip():
-                out.append(TextChunk(line[start:end]))
-                i = end
-                last = end
+                # Empty value: is it a bare hashtag (presence tag on a
+                # task-attached line, #275) or a known-attr typo?
+                #
+                # Known/registry names (`#priority`, `#eta`, `#project`,
+                # etc.) with no value are almost certainly a user typo
+                # or in-progress edit — dropping them as prose avoids
+                # corrupting attrs with empty values.
+                #
+                # Unknown names are the interesting case: emit as an
+                # ``attr`` token with empty value so the parser can
+                # attach it to the enclosing task as a presence tag
+                # (rendered as a `#tag` chip on cards, queryable via
+                # `@tag exists`). If the enclosing line is unattached
+                # top-level prose, the parser will simply ignore the
+                # token — matching prior behavior for narrative prose.
+                if spec_known:
+                    out.append(TextChunk(line[start:m.end()]))
+                else:
+                    raw = line[start:m.end()]
+                    out.append(Token(kind="attr", name=name, value="",
+                                     raw=raw, col=start))
+                i = m.end()
+                last = m.end()
                 continue
             raw = line[start:end]
             if name == "status":

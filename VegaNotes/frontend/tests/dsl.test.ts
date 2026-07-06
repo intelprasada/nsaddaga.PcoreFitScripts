@@ -81,10 +81,60 @@ describe("renderClause round-trip", () => {
     "eta>=ww18",
     "priority in P0,P1",
     "priority not in P3",
+    "@gfc exists",
+    "@urgent nexists",
+    "#gfc",
   ])("re-renders %s", (clause) => {
     const c = parseClause(clause);
     const round = renderClause(c);
     // Re-parse round-trip equals the parsed canonical form.
     expect(parseClause(round)).toEqual(c);
+  });
+});
+
+describe("bare-hashtag + exists/nexists (issue #275)", () => {
+  it("treats bare #tag as sugar for @tag exists", () => {
+    expect(parseClause("#gfc")).toEqual({
+      lhs: "@gfc", isAttr: true, op: "exists", value: "",
+    });
+  });
+
+  it("lowercases and preserves dashes in bare #tag", () => {
+    expect(parseClause("#GFC-a0")).toEqual({
+      lhs: "@gfc-a0", isAttr: true, op: "exists", value: "",
+    });
+  });
+
+  it("parses @key exists", () => {
+    expect(parseClause("@risk exists")).toEqual({
+      lhs: "@risk", isAttr: true, op: "exists", value: "",
+    });
+  });
+
+  it("parses @key nexists (case-insensitive)", () => {
+    expect(parseClause("@Owner NEXISTS")).toEqual({
+      lhs: "@owner", isAttr: true, op: "nexists", value: "",
+    });
+  });
+
+  it("rejects exists on a non-@ key", () => {
+    expect(() => parseClause("owner exists")).toThrow(DSLError);
+  });
+
+  it("rejects bare hashtag with a value", () => {
+    // "#gfc P0" has whitespace + trailing token, so it should NOT match the
+    // bare-hash sugar and instead fail the other operators.
+    expect(() => parseClause("#gfc P0")).toThrow(DSLError);
+  });
+
+  it("compiles bare #tag to attr=key:exists:", () => {
+    expect(compileClauses(["#gfc"])).toEqual([["attr", "gfc:exists:"]]);
+  });
+
+  it("compiles @key exists / nexists", () => {
+    expect(compileClauses(["@risk exists", "@owner nexists"])).toEqual([
+      ["attr", "risk:exists:"],
+      ["attr", "owner:nexists:"],
+    ]);
   });
 });
