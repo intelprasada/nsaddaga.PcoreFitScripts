@@ -16,6 +16,11 @@ import pandas as pd
 from font_manager import FontManager
 from theme_manager import ThemeManager
 
+try:
+    from tk_widgets import WidgetTooltip
+except ImportError:  # tk_widgets is provided via lib/python on the PYTHONPATH
+    WidgetTooltip = None  # type: ignore
+
 # ── Email tool (scripts/email/email_sender.py) ────────────────────────────────
 _email_dir = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "email")
@@ -399,6 +404,16 @@ class FilteredTable(ttk.Frame):
         )
         self._filter_expr_entry.pack(side=tk.LEFT, padx=(0, 4), fill=tk.X, expand=True)
         self._filter_expr_entry.bind("<Return>", lambda e: self._apply_filters())
+        if WidgetTooltip is not None:
+            WidgetTooltip(
+                self._filter_expr_entry,
+                "Combine per-column filters by number (1, 2, …) using AND / OR / NOT / ( ).\n"
+                "Empty: all active column filters are AND'd together.\n"
+                "Non-empty: any column filter NOT mentioned in the expression is\n"
+                "automatically AND'd with the result (never silently ignored).\n"
+                "Click ? for full syntax.",
+                font=FontManager.get("small"),
+            )
         # Hint: shows which filter numbers map to which columns
         self._filter_hint_label = ttk.Label(expr_bar, text="", foreground=ThemeManager.get("hint_fg"))
         self._filter_hint_label.pack(side=tk.LEFT, padx=4)
@@ -419,7 +434,11 @@ class FilteredTable(ttk.Frame):
                 "  1 AND NOT 3         — rows matching filter 1 but NOT filter 3\n"
                 "  (1 OR 2) AND 4      — combined with filter 4\n\n"
                 "Leave blank for default behaviour: all active filters are AND'd together.\n\n"
-                "Active filter numbers are shown to the right of this box as you type.\n\n"
+                "When the expression is non-empty, any column filter NOT mentioned in\n"
+                "the expression is automatically AND'd with the result — so filters you\n"
+                "type into the column boxes are never silently ignored.\n\n"
+                "Active filter numbers are shown to the right of this box as you type.\n"
+                "Auto-AND'd (unreferenced) filters appear as [+ auto-AND: …].\n\n"
                 "── Column filter syntax ──────────────────────────────────────────────────\n\n"
                 "  hello              — substring match (case-insensitive)\n"
                 "  *                  — wildcard, matches every row (column stays active)\n"
@@ -1339,11 +1358,26 @@ class FilteredTable(ttk.Frame):
                     else:
                         masks[i] = all_true.copy()
 
-                self._filter_hint_label.configure(
-                    text=("Active: " + "  ".join(active_hints)) if active_hints else ""
-                )
+                active_nums = {i for i, (col, var) in enumerate(self._filter_vars.items(), start=1)
+                               if var.get().strip() and col in df.columns}
+                referenced_nums = {int(t) for t in re.findall(r'\d+', expr)}
+                unreferenced = sorted(active_nums - referenced_nums)
+
+                # Show which active filters are auto-AND'd because the logic bar
+                # didn't mention them — makes the behaviour transparent.
+                hint = "Active: " + "  ".join(active_hints) if active_hints else ""
+                if unreferenced:
+                    auto = "  ".join(
+                        f"{i}={col}" for i, (col, _) in
+                        enumerate(self._filter_vars.items(), start=1) if i in unreferenced
+                    )
+                    hint += f"   [+ auto-AND: {auto}]"
+                self._filter_hint_label.configure(text=hint)
                 try:
                     combined_mask = self._eval_filter_expr(expr, masks, df)
+                    # AND in any active filters not referenced in the expression.
+                    for i in unreferenced:
+                        combined_mask = combined_mask & masks[i]
                     self._filter_expr_entry.configure(bg=ThemeManager.get("ok_fg"))  # valid expr
                     df = df[combined_mask.values]
                 except Exception as exc:

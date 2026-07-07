@@ -9,6 +9,97 @@ import tkinter as tk
 from tkinter import ttk
 
 
+class WidgetTooltip:
+    """Simple hover tooltip for any Tk widget.
+
+    Usage::
+
+        WidgetTooltip(entry, "Explanatory text shown on hover.")
+        WidgetTooltip(button, "…", font=FontManager.get("small"))
+    """
+
+    _DELAY_MS = 600
+
+    def __init__(self, widget: "tk.Widget", text: str, font=None):
+        self._widget    = widget
+        self._text      = text
+        self._font      = font
+        self._win:      "tk.Toplevel | None" = None
+        self._after_id: "str | None"         = None
+
+        widget.bind("<Enter>", self._on_enter, add="+")
+        widget.bind("<Leave>", self._on_leave, add="+")
+        widget.bind("<ButtonPress>", self._on_leave, add="+")
+
+    def set_text(self, text: str):
+        self._text = text
+
+    def _on_enter(self, event: tk.Event):
+        self._cancel()
+        self._after_id = self._widget.after(
+            self._DELAY_MS,
+            lambda rx=event.x_root, ry=event.y_root: self._show(rx, ry),
+        )
+
+    def _on_leave(self, _event=None):
+        self._hide()
+
+    def _show(self, root_x: int, root_y: int):
+        self._after_id = None
+        if not self._text:
+            return
+        self._hide()
+        win = tk.Toplevel(self._widget)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        label_kw: dict = dict(
+            text=self._text,
+            background="#ffffe0",
+            foreground="#1a1a1a",
+            relief="solid",
+            borderwidth=1,
+            padx=8,
+            pady=4,
+            justify="left",
+        )
+        if self._font is not None:
+            label_kw["font"] = self._font
+        tk.Label(win, **label_kw).pack()
+        win.geometry("+0+0")
+        win.update_idletasks()
+        tw = win.winfo_reqwidth()
+        th = win.winfo_reqheight()
+        sw = win.winfo_screenwidth()
+        sh = win.winfo_screenheight()
+        x = root_x + 14
+        y = root_y + 20
+        if x + tw > sw:
+            x = sw - tw
+        if y + th > sh:
+            y = root_y - th - 4
+        x = max(0, x)
+        y = max(0, y)
+        win.geometry(f"+{x}+{y}")
+        self._win = win
+
+    def _cancel(self):
+        if self._after_id is not None:
+            try:
+                self._widget.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+
+    def _hide(self):
+        self._cancel()
+        if self._win is not None:
+            try:
+                self._win.destroy()
+            except Exception:
+                pass
+            self._win = None
+
+
 class TabTooltip:
     """Tooltip that shows a string when hovering over a ttk.Notebook tab.
 
