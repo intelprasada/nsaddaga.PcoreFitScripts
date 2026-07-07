@@ -1,11 +1,15 @@
 // Mini-DSL for the FilterBar chip input. Mirrors `tools/vn/vn/query.py` —
-// keep the two in sync. Operators: =, !=, >=, <=, >, <, in, not in, like.
+// keep the two in sync. Operators: =, !=, >=, <=, >, <, in, not in, like,
+// exists, nexists.
 // `@key` prefix routes to the generic TaskAttr filter; bare keys map to
 // the existing fixed columns (owner/project/feature/priority/status/eta).
+// Bare `#tag` (single word) is sugar for `@tag exists` — matches any task
+// carrying that bare hashtag as a presence attribute.
 
 export type OpCode =
   | "eq" | "ne" | "in" | "nin"
-  | "gte" | "lte" | "gt" | "lt" | "like";
+  | "gte" | "lte" | "gt" | "lt" | "like"
+  | "exists" | "nexists";
 
 export interface Clause {
   /** Original LHS as the user typed it, lowercased. ``@`` prefix preserved. */
@@ -31,6 +35,11 @@ const WORD_OPS: Array<[string, OpCode]> = [
   ["not in", "nin"], ["in", "in"], ["like", "like"],
 ];
 
+// Unary word ops — no RHS after the op keyword.
+const UNARY_WORD_OPS: Array<[string, OpCode]> = [
+  ["nexists", "nexists"], ["exists", "exists"],
+];
+
 const FIXED_COLUMNS = new Set(["owner", "project", "feature", "priority", "status"]);
 const FIXED_OPS = new Set<OpCode>(["eq", "ne", "in"]);
 
@@ -43,6 +52,35 @@ function normalizeLhs(raw: string): { lhs: string; isAttr: boolean } {
 export function parseClause(input: string): Clause {
   const s = input.trim();
   if (!s) throw new DSLError("empty clause");
+
+  // Sugar: bare `#tag` → `@tag exists`. Matches a single hashtag word with
+  // no operator or value after it.
+  const bareHash = /^#([a-zA-Z][\w-]*)$/.exec(s);
+  if (bareHash) {
+    return {
+      lhs: "@" + bareHash[1].toLowerCase(),
+      isAttr: true,
+      op: "exists",
+      value: "",
+    };
+  }
+
+  // Unary word ops: `@key exists`, `@key nexists`.
+  for (const [word, code] of UNARY_WORD_OPS) {
+    const re = new RegExp(`^(.+?)\\s+${word}\\s*$`, "i");
+    const m = re.exec(s);
+    if (m) {
+      const lhs = m[1].trim();
+      if (!lhs) throw new DSLError(`malformed clause: ${input}`);
+      const norm = normalizeLhs(lhs);
+      if (!norm.isAttr) {
+        throw new DSLError(
+          `${word} requires an @attr key (got "${lhs}"); use @${lhs} ${word}`,
+        );
+      }
+      return { lhs: norm.lhs, isAttr: norm.isAttr, op: code, value: "" };
+    }
+  }
 
   for (const [word, code] of WORD_OPS) {
     const re = new RegExp(`^(.+?)\\s+${word.replace(/ /g, "\\s+")}\\s+(.+)$`, "i");
@@ -68,7 +106,8 @@ export function parseClause(input: string): Clause {
   }
 
   throw new DSLError(
-    `no operator found in "${input}"; expected one of =, !=, >=, <=, >, <, 'in', 'not in'`,
+    `no operator found in "${input}"; expected one of =, !=, >=, <=, >, <, ` +
+    `'in', 'not in', 'exists', 'nexists' (or bare #tag)`,
   );
 }
 
@@ -87,7 +126,13 @@ function compileOne(c: Clause, raw: string): Array<[string, string]> {
   if (c.isAttr) {
     const key = c.lhs.slice(1);
     if (!key) throw new DSLError(`empty attr key in ${raw}`);
+    if (c.op === "exists" || c.op === "nexists") {
+      return [["attr", `${key}:${c.op}:`]];
+    }
     return [["attr", `${key}:${c.op}:${c.value}`]];
+  }
+  if (c.op === "exists" || c.op === "nexists") {
+    throw new DSLError(`${c.op} requires an @attr key (got "${c.lhs}")`);
   }
   if (c.lhs === "q") {
     if (c.op !== "eq") throw new DSLError(`q only supports '=' (got ${c.op})`);
@@ -137,8 +182,10 @@ export function renderClause(c: Clause): string {
   };
   const sym = symbolFor[c.op];
   if (sym) return `${c.lhs}${sym}${c.value}`;
-  if (c.op === "in")   return `${c.lhs} in ${c.value}`;
-  if (c.op === "nin")  return `${c.lhs} not in ${c.value}`;
-  if (c.op === "like") return `${c.lhs} like ${c.value}`;
+  if (c.op === "in")      return `${c.lhs} in ${c.value}`;
+  if (c.op === "nin")     return `${c.lhs} not in ${c.value}`;
+  if (c.op === "like")    return `${c.lhs} like ${c.value}`;
+  if (c.op === "exists")  return `${c.lhs} exists`;
+  if (c.op === "nexists") return `${c.lhs} nexists`;
   return `${c.lhs} ${c.op} ${c.value}`;
 }

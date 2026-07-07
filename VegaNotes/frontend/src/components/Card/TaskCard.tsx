@@ -10,6 +10,7 @@ import { isGamifyEnabled, subscribeGamify } from "../../lib/gamify";
 import { shouldShowReplayButton } from "../../lib/p0Burst";
 import { triggerCelebration } from "../../lib/celebration";
 import { TitleWithBreakHints } from "../../lib/titleWrap";
+import { TagChips } from "../../lib/tagChips";
 
 interface Props { task: Task; onOpen?: (t: Task) => void; canWrite?: boolean; }
 
@@ -129,6 +130,7 @@ export function TaskCard({ task, onOpen, canWrite = true }: Props) {
         <QuickChips task={task} canWrite={canWrite} />
         {task.projects.map((p) => <span key={p} className="chip chip-project">#{p}</span>)}
         {task.features.map((f) => <span key={f} className="chip chip-feature">★{f}</span>)}
+        <TagChips task={task} />
       </div>
 
       {ars.length > 0 && (

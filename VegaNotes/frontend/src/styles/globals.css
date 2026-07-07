@@ -15,6 +15,7 @@
   .chip-project  { @apply bg-violet-100 text-violet-900; }
   .chip-feature  { @apply bg-fuchsia-100 text-fuchsia-900; }
   .chip-eta      { @apply bg-rose-100 text-rose-900; }
+  .chip-tag      { @apply bg-slate-100 text-slate-700 border border-slate-200; }
 
   /* Editor (textarea + mirrored highlight overlay).
      CRITICAL for cursor-vs-display alignment:
