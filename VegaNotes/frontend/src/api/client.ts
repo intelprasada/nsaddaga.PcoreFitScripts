@@ -242,6 +242,7 @@ export const api = {
     features?: string[];
     add_note?: string;
     notes?: string;
+    title?: string;
   }) =>
     req<Task>(`/tasks/${ref}`, { method: "PATCH", body: JSON.stringify(patch) }),
 
@@ -262,6 +263,13 @@ export const api = {
       `/tasks/${ref}`,
       { method: "DELETE" },
     ),
+
+  getTask: (ref: number | string, opts?: { includeChildren?: boolean }) => {
+    const qs = new URLSearchParams();
+    if (opts?.includeChildren) qs.set("include_children", "true");
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return req<Task>(`/tasks/${ref}${suffix}`);
+  },
 
   addAr: (ref: number | string, body: { title: string; owners?: string[]; priority?: string; eta?: string; features?: string[] }) =>
     req<Task & { parent_task_uuid: string | null }>(
