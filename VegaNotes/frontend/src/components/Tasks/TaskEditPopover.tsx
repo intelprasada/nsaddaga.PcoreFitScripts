@@ -102,15 +102,26 @@ interface PopoverContentProps {
 function PopoverContent({
   activeRef, initialTask, parentTask, onSwapToAr, onBack, onClose,
 }: PopoverContentProps) {
-  // Fetch full task when drilled into an AR (initialTask is undefined).
-  const { data: fetched, isLoading, error: fetchError } = useQuery({
+  // Always subscribe to the task via useQuery so mutations that
+  // invalidate the ["task", ...] key (add/delete AR, patch title,
+  // patch fields, delete task, …) drive a refetch and the popover
+  // stays in sync with disk. `initialData` seeds the first render
+  // with the prop the caller already has so there's no loading
+  // flash on the root task view. On the AR-swap path `initialTask`
+  // is undefined, so the query fetches on mount just like before.
+  //
+  // `PopoverContent` is keyed on `activeRef` in the parent, so it
+  // remounts cleanly on AR navigation and `initialData` is applied
+  // fresh each time.
+  //
+  // See issue #287 — without this, adding or deleting an AR from
+  // the popover only showed up after close-and-reopen.
+  const { data: task, isLoading, error: fetchError } = useQuery({
     queryKey: ["task", String(activeRef), "with-children"],
     queryFn: () => api.getTask(activeRef, { includeChildren: true }),
-    enabled: !initialTask,
+    initialData: initialTask,
     staleTime: 0,
   });
-
-  const task: Task | undefined = initialTask ?? fetched;
 
   if (!task) {
     return (
