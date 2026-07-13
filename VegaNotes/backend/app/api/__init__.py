@@ -28,7 +28,7 @@ from ..markdown_ops import (
     append_note, generate_task_id, existing_ids, delete_task_block,
     insert_ar_under_task,
     merge_with_disk_tasks,
-    remove_attr, roll_to_next_week, update_task_status,
+    remove_attr, replace_task_title, roll_to_next_week, update_task_status,
     find_ref_row_lines, patch_ref_rows, insert_ar_ref_row_after,
 )
 from ..models import (
@@ -2208,6 +2208,10 @@ class TaskPatch(BaseModel):
     eta: Optional[str] = None       # e.g. "2026-W18", "2026-04-30", or "" to clear
     owners: Optional[list[str]] = None    # full replacement; [] clears
     features: Optional[list[str]] = None  # full replacement; [] clears
+    # New title text (trimmed). None = no change. Empty string is rejected
+    # because a blank declaration line cannot be re-parsed. The keyword
+    # (!task / !AR) and every trailing #attr / @owner token are preserved.
+    title: Optional[str] = None
     # Append a new `#note` continuation line under the task (preferred).
     # Multi-line input becomes one `#note` per non-empty line, all sharing
     # the same auto-prepended timestamp + author. Existing notes are kept.
@@ -2376,6 +2380,19 @@ def patch_task(
         changed = False
         old_status = t.status
         status_changed = False
+        old_title = t.title
+        title_changed = False
+        if body.title is not None:
+            new_title_stripped = body.title.strip()
+            if not new_title_stripped:
+                raise HTTPException(400, "title must not be blank")
+            if new_title_stripped != old_title:
+                try:
+                    md = replace_task_title(md, t.line, new_title_stripped)
+                except ValueError as e:
+                    raise HTTPException(400, f"could not rewrite title: {e}")
+                title_changed = True
+                changed = True
         if body.status is not None:
             md = update_task_status(md, t.line, body.status)
             status_changed = (body.status != old_status)
@@ -2449,6 +2466,7 @@ def patch_task(
             eta=body.eta,
             owners=body.owners,
             features=body.features,
+            title=body.title.strip() if body.title is not None else None,
             add_note=body.add_note,
         )
 
@@ -2578,6 +2596,12 @@ def patch_task(
                 ref=ev_ref,
                 meta={"from": [f for f in _old_features if f], "to": new_features_clean},
             )
+    if title_changed:
+        awarded += gamify.record_event(
+            s, user, gamify.TASK_TITLE_SET,
+            ref=ev_ref,
+            meta={"from": old_title, "to": body.title.strip() if body.title is not None else ""},
+        )
     if body.add_note is not None and body.add_note.strip():
         awarded += gamify.record_event(
             s, user, gamify.TASK_NOTE_ADDED,

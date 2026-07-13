@@ -201,6 +201,7 @@ def apply_single_task_patch_to_index(
     eta: str | None = None,
     owners: list[str] | None = None,
     features: list[str] | None = None,
+    title: str | None = None,
     add_note: str | None = None,
 ) -> None:
     """Cheap variant of :func:`reindex_file` for a single-task popover patch.
@@ -282,6 +283,24 @@ def apply_single_task_patch_to_index(
     if status is not None:
         task.status = status
         _set_attr("status", status)
+
+    if title is not None:
+        # Update the persisted title + regenerate slug. On collision (rare —
+        # another task in this note already slugifies to the same string),
+        # keep the old slug rather than picking a numeric suffix; the next
+        # full reindex_file() run will resolve the collision deterministically.
+        from ..parser.parser import slugify  # lazy: cross-package import
+        task.title = title
+        new_slug = slugify(title)
+        if new_slug != task.slug:
+            collision = session.exec(
+                text(
+                    "SELECT 1 FROM task WHERE note_id = :nid AND slug = :s "
+                    "AND id != :tid LIMIT 1"
+                ).bindparams(nid=note_id, s=new_slug, tid=task_id)
+            ).first()
+            if not collision:
+                task.slug = new_slug
 
     if priority is not None:
         _set_attr("priority", priority)

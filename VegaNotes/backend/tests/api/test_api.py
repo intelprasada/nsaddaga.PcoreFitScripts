@@ -2459,3 +2459,133 @@ def test_260_rollover_archive_has_done_blocks_active_drops_done_top_levels(clien
     assert "T-RB260DAR2" in arch_disk, (
         "child of canonical-done parent must travel with the parent into archive"
     )
+
+
+# ---------------------------------------------------------------------------
+# PATCH /tasks/{ref} with title (issue #283)
+# ---------------------------------------------------------------------------
+
+def test_patch_title_rewrites_declaration_line_on_disk(client):
+    """PATCH {title: ...} must rewrite the task-declaration line while
+    preserving indent, keyword, #id, and every trailing attr."""
+    body = (
+        "# Sprint\n"
+        "!task #id T-TITLE01 Original title #priority P0 @alice\n"
+    )
+    r = client.put("/api/notes",
+                   json={"path": "title-basic.md", "body_md": body},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    r = client.patch("/api/tasks/T-TITLE01",
+                     json={"title": "Renamed sharply"},
+                     headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+    assert r.json()["title"] == "Renamed sharply"
+
+    on_disk = (DATA / "notes" / "title-basic.md").read_text(encoding="utf-8")
+    assert "!task #id T-TITLE01 Renamed sharply #priority P0 @alice" in on_disk
+    # Everything else on the line is preserved
+    assert "Original title" not in on_disk
+
+
+def test_patch_title_indented_ar(client):
+    body = (
+        "# Sprint\n"
+        "!task #id T-TITLE02 Parent task #status todo\n"
+        "\t!AR #id T-TITLE02AR draft plan #status todo @alice\n"
+    )
+    r = client.put("/api/notes",
+                   json={"path": "title-ar.md", "body_md": body},
+                   headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    r = client.patch("/api/tasks/T-TITLE02AR",
+                     json={"title": "draft rollout plan"},
+                     headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    on_disk = (DATA / "notes" / "title-ar.md").read_text(encoding="utf-8")
+    # Indent (normalized to tab by the write path) + keyword + id preserved;
+    # title replaced; trailing attrs preserved.
+    assert "\t!AR #id T-TITLE02AR draft rollout plan" in on_disk
+    assert "#status todo" in on_disk
+    # Owner mention may render as `@alice` or `#owner alice` depending on the
+    # write path's normalization — either shape counts.
+    assert "@alice" in on_disk or "#owner alice" in on_disk
+
+
+def test_patch_title_blank_rejected(client):
+    body = "# S\n!task #id T-TITLE03 Foo #status todo\n"
+    client.put("/api/notes",
+               json={"path": "title-blank.md", "body_md": body},
+               headers={"Authorization": AUTH})
+    r = client.patch("/api/tasks/T-TITLE03",
+                     json={"title": "   "},
+                     headers={"Authorization": AUTH})
+    assert r.status_code == 400, r.text
+
+
+def test_patch_title_index_reflects_new_title(client):
+    body = "# S\n!task #id T-TITLE04 Old #status todo\n"
+    client.put("/api/notes",
+               json={"path": "title-idx.md", "body_md": body},
+               headers={"Authorization": AUTH})
+    r = client.patch("/api/tasks/T-TITLE04",
+                     json={"title": "Brand new title"},
+                     headers={"Authorization": AUTH})
+    assert r.status_code == 200
+
+    # Re-query the task; the index must show the new title.
+    r = client.get("/api/tasks?q=Brand+new", headers={"Authorization": AUTH})
+    hits = [t for t in r.json()["tasks"] if t.get("task_uuid") == "T-TITLE04"]
+    assert len(hits) == 1
+    assert hits[0]["title"] == "Brand new title"
+
+
+def test_patch_title_combined_with_status(client):
+    """Title patch composes cleanly with a status patch in the same call.
+    Uses an owner via #owner (not `@` mention) to sidestep an unrelated
+    `update_task_status` quirk with trailing `@user` mentions."""
+    body = "# S\n!task #id T-TITLE05 Do stuff #status todo #owner alice\n"
+    client.put("/api/notes",
+               json={"path": "title-combo.md", "body_md": body},
+               headers={"Authorization": AUTH})
+    r = client.patch("/api/tasks/T-TITLE05",
+                     json={"title": "Do better stuff", "status": "in-progress"},
+                     headers={"Authorization": AUTH})
+    assert r.status_code == 200
+
+    on_disk = (DATA / "notes" / "title-combo.md").read_text(encoding="utf-8")
+    assert "!task #id T-TITLE05 Do better stuff" in on_disk
+    assert "#status in-progress" in on_disk
+    assert "#owner alice" in on_disk
+
+
+def test_patch_title_null_leaves_title_alone(client):
+    """PATCH with no title field must not touch the title."""
+    body = "# S\n!task #id T-TITLE06 Stable title #status todo\n"
+    client.put("/api/notes",
+               json={"path": "title-null.md", "body_md": body},
+               headers={"Authorization": AUTH})
+    r = client.patch("/api/tasks/T-TITLE06",
+                     json={"status": "done"},
+                     headers={"Authorization": AUTH})
+    assert r.status_code == 200
+    assert r.json()["title"] == "Stable title"
+
+
+def test_patch_title_noop_when_unchanged(client):
+    """Sending the same title back should be a cheap no-op (no error, no
+    unnecessary rewrite of the file)."""
+    body = "# S\n!task #id T-TITLE07 Same title #status todo\n"
+    client.put("/api/notes",
+               json={"path": "title-noop.md", "body_md": body},
+               headers={"Authorization": AUTH})
+    before = (DATA / "notes" / "title-noop.md").read_text(encoding="utf-8")
+    r = client.patch("/api/tasks/T-TITLE07",
+                     json={"title": "Same title"},
+                     headers={"Authorization": AUTH})
+    assert r.status_code == 200
+    after = (DATA / "notes" / "title-noop.md").read_text(encoding="utf-8")
+    assert before == after

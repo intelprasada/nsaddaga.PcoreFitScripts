@@ -856,3 +856,107 @@ def test_263_only_first_h1_is_bumped():
     new_md, *_ = roll_to_next_week(md, "FIT weekly ww25.md")
     assert new_md.count("ww26") == 1
     assert "historical context from # ww25 status memo" in new_md
+
+
+# ---------------------------------------------------------------------------
+# replace_task_title (issue #283) — inline title edit in the popover
+# ---------------------------------------------------------------------------
+
+import pytest
+from app.markdown_ops import replace_task_title
+from app.parser import parse
+
+
+def test_replace_title_old_format():
+    md = "!task Old title #priority P0 @alice\n"
+    assert replace_task_title(md, 0, "New shiny title") == \
+        "!task New shiny title #priority P0 @alice\n"
+
+
+def test_replace_title_new_format_with_id():
+    md = "!task #id T-QWHHCP Old title #priority P0 @alice\n"
+    assert replace_task_title(md, 0, "Renamed") == \
+        "!task #id T-QWHHCP Renamed #priority P0 @alice\n"
+
+
+def test_replace_title_indented_ar_old_format():
+    md = "  !AR draft plan #eta 2026-W28\n"
+    assert replace_task_title(md, 0, "draft rollout plan") == \
+        "  !AR draft rollout plan #eta 2026-W28\n"
+
+
+def test_replace_title_indented_ar_new_format():
+    md = "  !AR #id T-8XTQ99 old ar title #status todo\n"
+    assert replace_task_title(md, 0, "why failing now") == \
+        "  !AR #id T-8XTQ99 why failing now #status todo\n"
+
+
+def test_replace_title_no_trailing_attrs():
+    md = "!task Only a title\n"
+    assert replace_task_title(md, 0, "Renamed only") == "!task Renamed only\n"
+
+
+def test_replace_title_preserves_owner_at_prefix():
+    md = "!task Foo bar #priority P1 @bob\n"
+    out = replace_task_title(md, 0, "Baz qux")
+    assert out == "!task Baz qux #priority P1 @bob\n"
+
+
+def test_replace_title_preserves_tab_indent():
+    md = "\t!AR indent by tab #owner alice\n"
+    assert replace_task_title(md, 0, "renamed") == "\t!AR renamed #owner alice\n"
+
+
+def test_replace_title_preserves_trailing_newline_style():
+    md = "!task Foo #status todo\r\n"
+    out = replace_task_title(md, 0, "Bar")
+    assert out.endswith("\r\n")
+
+
+def test_replace_title_rejects_blank():
+    with pytest.raises(ValueError):
+        replace_task_title("!task X\n", 0, "   ")
+
+
+def test_replace_title_rejects_hash_prefix():
+    with pytest.raises(ValueError):
+        replace_task_title("!task X\n", 0, "#urgent title")
+
+
+def test_replace_title_rejects_at_prefix():
+    with pytest.raises(ValueError):
+        replace_task_title("!task X\n", 0, "@handle title")
+
+
+def test_replace_title_rejects_bang_prefix():
+    with pytest.raises(ValueError):
+        replace_task_title("!task X\n", 0, "!task new")
+
+
+def test_replace_title_rejects_non_declaration_line():
+    md = "# Heading\nsome prose\n"
+    with pytest.raises(ValueError):
+        replace_task_title(md, 1, "New title")
+
+
+def test_replace_title_rejects_out_of_range():
+    with pytest.raises(ValueError):
+        replace_task_title("!task X\n", 99, "New")
+
+
+def test_replace_title_preserves_other_lines():
+    md = "# Heading\n!task old #priority P1\n- prose after\n"
+    out = replace_task_title(md, 1, "renamed")
+    assert out == "# Heading\n!task renamed #priority P1\n- prose after\n"
+
+
+def test_replace_title_roundtrip_parser_preserves_attrs():
+    md = "!task #id T-ABC old title #priority P0 #eta 2026-W28 @alice\n"
+    new_md = replace_task_title(md, 0, "Fresh title")
+    result = parse(new_md)
+    t = result["tasks"][0]
+    assert t["title"] == "Fresh title"
+    assert t["attrs"]["id"] == "T-ABC"
+    assert t["attrs"]["priority"] == "P0"
+    assert t["attrs"]["eta"] == "2026-W28"
+    assert t["attrs"]["owner"] == ["alice"]
