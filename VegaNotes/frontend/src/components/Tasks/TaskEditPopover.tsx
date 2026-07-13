@@ -147,152 +147,181 @@ export function TaskEditPopover({ task, onClose }: Props) {
     },
   });
 
+  // Close on Esc (issue #281). Registered at document level so it fires
+  // regardless of focus (input, textarea, or outside the panel).
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [onClose]);
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
+      className="fixed inset-0 z-50 overflow-y-auto bg-black/30"
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Edit task T-${task.id}${task.title ? `: ${task.title}` : ""}`}
     >
-      <div
-        className="bg-white rounded-lg shadow-xl w-[480px] max-w-[95vw] p-5 space-y-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="text-xs text-slate-500 font-mono">
-              T-{task.id} · {task.kind}
-            </div>
-            <h3 className="font-semibold text-base mt-0.5 [overflow-wrap:anywhere]">
-              <TitleWithBreakHints text={task.title} />
-            </h3>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-slate-400 hover:text-slate-700 text-lg leading-none"
-            title="Close (Esc)"
-          >
-            ×
-          </button>
-        </div>
-
-        <form
-          className="space-y-3"
-          onSubmit={(e) => { e.preventDefault(); setErr(null); save.mutate(); }}
+      <div className="min-h-full flex items-start sm:items-center justify-center p-4">
+        <div
+          className="bg-white rounded-lg shadow-xl w-[480px] max-w-[95vw]
+                     max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden my-4"
+          onClick={(e) => e.stopPropagation()}
         >
-          <Field label="Status">
-            <select className="border rounded px-2 py-1 text-sm w-full"
-              value={status} onChange={(e) => setStatus(e.target.value)}>
-              {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </Field>
-
-          <Field label="Priority">
-            <select className="border rounded px-2 py-1 text-sm w-full"
-              value={priority} onChange={(e) => setPriority(e.target.value)}>
-              {PRIORITIES.map((p) => <option key={p} value={p}>{p || "(none)"}</option>)}
-            </select>
-          </Field>
-
-          <Field label="ETA" hint="Intel WW (e.g. 2026-W18) or ISO date (2026-04-30). Empty to clear.">
-            <input className="border rounded px-2 py-1 text-sm w-full font-mono"
-              value={eta} onChange={(e) => setEta(e.target.value)}
-              placeholder="2026-W18" />
-          </Field>
-
-          <Field label="Owners" hint={`Comma-separated. Known: ${knownUsers.join(", ") || "(none)"}`}>
-            <input className="border rounded px-2 py-1 text-sm w-full"
-              value={owners} onChange={(e) => setOwners(e.target.value)}
-              placeholder="alice, bob" list="known-users" />
-            <datalist id="known-users">
-              {knownUsers.map((u) => <option key={u} value={u} />)}
-            </datalist>
-          </Field>
-
-          <Field label="Features" hint="Comma-separated.">
-            <input className="border rounded px-2 py-1 text-sm w-full"
-              value={features} onChange={(e) => setFeatures(e.target.value)}
-              placeholder="auth, billing" />
-          </Field>
-
-          {extraTagChips(task).length > 0 && (
-            <Field label="Tags" hint="Bare `#tag` attributes parsed from the .md file. Add or remove by editing the source markdown.">
-              <div className="flex flex-wrap gap-1">
-                {extraTagChips(task).map((c) => (
-                  <span
-                    key={c.reactKey}
-                    className="chip chip-tag"
-                    title={c.value ? `${c.key} = ${c.value}` : `Tag: #${c.key}`}
-                  >
-                    #{c.key}
-                    {c.value ? <span className="opacity-60">={c.value}</span> : null}
-                  </span>
-                ))}
+          {/* Sticky header — always reachable even when body scrolls. */}
+          <div className="p-5 pb-3 border-b border-slate-100 shrink-0
+                          flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="text-xs text-slate-500 font-mono">
+                T-{task.id} · {task.kind}
               </div>
-            </Field>
-          )}
+              <h3 className="font-semibold text-base mt-0.5 [overflow-wrap:anywhere]">
+                <TitleWithBreakHints text={task.title} />
+              </h3>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-slate-400 hover:text-slate-700 text-lg leading-none"
+              title="Close (Esc)"
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </div>
 
-          {task.kind === "task" && (
-            <Field label="Add an AR (action request)" hint="Inserted as an `!AR` child line under this task in the .md file. Inherits the same project context. Press Enter to add — the popover stays open so you can add several.">
-              <div className="flex gap-2">
-                <input
-                  className="border rounded px-2 py-1 text-sm flex-1"
-                  value={newArTitle}
-                  onChange={(e) => setNewArTitle(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && newArTitle.trim() && !addAr.isPending) {
-                      e.preventDefault();
-                      setErr(null);
-                      addAr.mutate(newArTitle.trim());
-                    }
-                  }}
-                  placeholder="e.g. follow up with @bob on perf numbers"
+          {/* Scrollable body — form fields live here. */}
+          <div className="p-5 pt-3 overflow-y-auto flex-1">
+            <form
+              id="task-edit-form"
+              className="space-y-3"
+              onSubmit={(e) => { e.preventDefault(); setErr(null); save.mutate(); }}
+            >
+              <Field label="Status">
+                <select className="border rounded px-2 py-1 text-sm w-full"
+                  value={status} onChange={(e) => setStatus(e.target.value)}>
+                  {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </Field>
+
+              <Field label="Priority">
+                <select className="border rounded px-2 py-1 text-sm w-full"
+                  value={priority} onChange={(e) => setPriority(e.target.value)}>
+                  {PRIORITIES.map((p) => <option key={p} value={p}>{p || "(none)"}</option>)}
+                </select>
+              </Field>
+
+              <Field label="ETA" hint="Intel WW (e.g. 2026-W18) or ISO date (2026-04-30). Empty to clear.">
+                <input className="border rounded px-2 py-1 text-sm w-full font-mono"
+                  value={eta} onChange={(e) => setEta(e.target.value)}
+                  placeholder="2026-W18" />
+              </Field>
+
+              <Field label="Owners" hint={`Comma-separated. Known: ${knownUsers.join(", ") || "(none)"}`}>
+                <input className="border rounded px-2 py-1 text-sm w-full"
+                  value={owners} onChange={(e) => setOwners(e.target.value)}
+                  placeholder="alice, bob" list="known-users" />
+                <datalist id="known-users">
+                  {knownUsers.map((u) => <option key={u} value={u} />)}
+                </datalist>
+              </Field>
+
+              <Field label="Features" hint="Comma-separated.">
+                <input className="border rounded px-2 py-1 text-sm w-full"
+                  value={features} onChange={(e) => setFeatures(e.target.value)}
+                  placeholder="auth, billing" />
+              </Field>
+
+              {extraTagChips(task).length > 0 && (
+                <Field label="Tags" hint="Bare `#tag` attributes parsed from the .md file. Add or remove by editing the source markdown.">
+                  <div className="flex flex-wrap gap-1">
+                    {extraTagChips(task).map((c) => (
+                      <span
+                        key={c.reactKey}
+                        className="chip chip-tag"
+                        title={c.value ? `${c.key} = ${c.value}` : `Tag: #${c.key}`}
+                      >
+                        #{c.key}
+                        {c.value ? <span className="opacity-60">={c.value}</span> : null}
+                      </span>
+                    ))}
+                  </div>
+                </Field>
+              )}
+
+              {task.kind === "task" && (
+                <Field label="Add an AR (action request)" hint="Inserted as an `!AR` child line under this task in the .md file. Inherits the same project context. Press Enter to add — the popover stays open so you can add several.">
+                  <div className="flex gap-2">
+                    <input
+                      className="border rounded px-2 py-1 text-sm flex-1"
+                      value={newArTitle}
+                      onChange={(e) => setNewArTitle(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && newArTitle.trim() && !addAr.isPending) {
+                          e.preventDefault();
+                          setErr(null);
+                          addAr.mutate(newArTitle.trim());
+                        }
+                      }}
+                      placeholder="e.g. follow up with @bob on perf numbers"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!newArTitle.trim() || addAr.isPending) return;
+                        setErr(null);
+                        addAr.mutate(newArTitle.trim());
+                      }}
+                      disabled={!newArTitle.trim() || addAr.isPending}
+                      className="rounded bg-amber-600 text-white px-3 py-1 text-xs disabled:opacity-50"
+                    >
+                      {addAr.isPending ? "adding…" : "+ AR"}
+                    </button>
+                  </div>
+                </Field>
+              )}
+
+              <Field label="Notes — history" hint={noteHistory.length === 0 ? "No prior notes." : `${noteHistory.length} entr${noteHistory.length === 1 ? "y" : "ies"}, oldest first. Read-only — entries are append-only and preserved verbatim from the .md file.`}>
+                {noteHistory.length === 0 ? (
+                  <div className="text-xs italic text-slate-400 border border-dashed rounded p-2">
+                    (none)
+                  </div>
+                ) : (
+                  <ul className="border rounded divide-y bg-slate-50 max-h-32 overflow-y-auto">
+                    {noteHistory.map((line, i) => (
+                      <li key={i} className="px-2 py-1 text-xs font-mono text-slate-700 whitespace-pre-wrap break-words">
+                        {line}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Field>
+
+              <Field label="Add a note" hint={task.kind === "task"
+                ? "Appended as a new `#note` continuation line. Auto-prefixed with timestamp + your @handle. For action items, use the 'Add an AR' field above instead — typing `!AR …` here will be rejected."
+                : "Appended as a new `#note` continuation line. Auto-prefixed with timestamp + your @handle."}>
+                <textarea
+                  className="border rounded px-2 py-1 text-sm w-full font-mono"
+                  rows={3}
+                  value={newNote}
+                  onChange={(e) => setNewNote(e.target.value)}
+                  placeholder="e.g. filed bug 12345; waiting on @alice for review"
                 />
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!newArTitle.trim() || addAr.isPending) return;
-                    setErr(null);
-                    addAr.mutate(newArTitle.trim());
-                  }}
-                  disabled={!newArTitle.trim() || addAr.isPending}
-                  className="rounded bg-amber-600 text-white px-3 py-1 text-xs disabled:opacity-50"
-                >
-                  {addAr.isPending ? "adding…" : "+ AR"}
-                </button>
-              </div>
-            </Field>
-          )}
+              </Field>
 
-          <Field label="Notes — history" hint={noteHistory.length === 0 ? "No prior notes." : `${noteHistory.length} entr${noteHistory.length === 1 ? "y" : "ies"}, oldest first. Read-only — entries are append-only and preserved verbatim from the .md file.`}>
-            {noteHistory.length === 0 ? (
-              <div className="text-xs italic text-slate-400 border border-dashed rounded p-2">
-                (none)
-              </div>
-            ) : (
-              <ul className="border rounded divide-y bg-slate-50 max-h-32 overflow-y-auto">
-                {noteHistory.map((line, i) => (
-                  <li key={i} className="px-2 py-1 text-xs font-mono text-slate-700 whitespace-pre-wrap break-words">
-                    {line}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Field>
+              {err && <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded p-2">{err}</div>}
+            </form>
+          </div>
 
-          <Field label="Add a note" hint={task.kind === "task"
-            ? "Appended as a new `#note` continuation line. Auto-prefixed with timestamp + your @handle. For action items, use the 'Add an AR' field above instead — typing `!AR …` here will be rejected."
-            : "Appended as a new `#note` continuation line. Auto-prefixed with timestamp + your @handle."}>
-            <textarea
-              className="border rounded px-2 py-1 text-sm w-full font-mono"
-              rows={3}
-              value={newNote}
-              onChange={(e) => setNewNote(e.target.value)}
-              placeholder="e.g. filed bug 12345; waiting on @alice for review"
-            />
-          </Field>
-
-          {err && <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded p-2">{err}</div>}
-
-          <div className="flex justify-between items-center gap-2 pt-2 border-t">
+          {/* Sticky footer — Save/Cancel always visible regardless of body scroll. */}
+          <div className="p-4 border-t border-slate-100 shrink-0
+                          flex justify-between items-center gap-2 bg-white">
             {confirmDelete ? (
               <div className="flex items-center gap-2 text-xs">
                 <span className="text-rose-700">Delete this task and all its children?</span>
@@ -314,13 +343,13 @@ export function TaskEditPopover({ task, onClose }: Props) {
             <div className="flex gap-2">
               <button type="button" onClick={onClose}
                 className="rounded border px-3 py-1 text-sm">cancel</button>
-              <button type="submit" disabled={save.isPending}
+              <button type="submit" form="task-edit-form" disabled={save.isPending}
                 className="rounded bg-sky-600 text-white px-3 py-1 text-sm disabled:opacity-50">
                 {save.isPending ? "saving…" : "save"}
               </button>
             </div>
           </div>
-        </form>
+        </div>
       </div>
     </div>
   );
