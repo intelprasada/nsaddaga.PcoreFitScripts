@@ -727,6 +727,105 @@ def update_task_status(md: str, line_no: int, new_status: str) -> str:
     return "".join(lines)
 
 
+def replace_task_title(md: str, line_no: int, new_title: str) -> str:
+    """Replace the title text on a task/AR declaration line, preserving
+    everything else (indent, keyword, `#id T-XXX`, trailing attrs, newline).
+
+    Supports both title formats produced by the parser:
+
+    - Old:  ``!task <title> [#attr val ...]``
+    - New:  ``!task #id T-XXXXX <title> [#attr val ...]``
+
+    Also handles indented `!AR` lines. The keyword itself (`!task` / `!AR`)
+    is preserved verbatim — this helper never converts one to the other.
+
+    Args:
+        md: Full markdown text.
+        line_no: 0-based index of the declaration line to rewrite.
+        new_title: Trimmed title text. Must not be empty (raises ValueError).
+
+    Raises:
+        ValueError: on out-of-range line, blank ``new_title``, or when the
+            target line is not a task/AR declaration.
+    """
+    new_title = (new_title or "").strip()
+    if not new_title:
+        raise ValueError("new_title must not be blank")
+    # Titles must not themselves start a new attr — those glyphs are unambiguous
+    # markup terminators that would silently truncate the persisted title.
+    if new_title.startswith("#") or new_title.startswith("@") or new_title.startswith("!"):
+        raise ValueError("new_title must not start with '#', '@', or '!'")
+
+    lines = md.splitlines(keepends=True)
+    if line_no < 0 or line_no >= len(lines):
+        raise ValueError(f"line {line_no} out of range")
+
+    raw = lines[line_no]
+    nl = ""
+    body = raw
+    while body.endswith("\n") or body.endswith("\r"):
+        nl = body[-1] + nl
+        body = body[:-1]
+
+    m = re.match(r"^(?P<indent>[ \t]*)(?P<bang>!(?:task|AR))\b(?P<rest>.*)$", body)
+    if not m:
+        raise ValueError(f"line {line_no} is not a task/AR declaration")
+
+    indent = m.group("indent")
+    bang = m.group("bang")
+    rest = m.group("rest")
+    # `rest` starts either with a leading space or is empty. Strip one leading
+    # space so we work in a normalized coordinate system, then re-add it later.
+    if rest.startswith(" "):
+        rest_body = rest[1:]
+    else:
+        rest_body = rest
+
+    # Detect a leading `#id T-XXXX` prefix (new-format decl). The `#id` token
+    # is always the first token on the line when present.
+    id_prefix = ""
+    id_m = re.match(r"^(#id\s+\S+)(?:\s+|$)", rest_body)
+    if id_m:
+        id_prefix = id_m.group(1)
+        rest_body = rest_body[id_m.end():]
+
+    # `rest_body` now starts at the title (or is empty). The title extends
+    # until the first attr-shaped token: `#name` where name matches
+    # `[a-zA-Z][\w-]*`, or `@user` at a word boundary. Use the same rule the
+    # lexer uses so the round-trip is stable.
+    trailer = ""
+    j = 0
+    n = len(rest_body)
+    while j < n:
+        ch = rest_body[j]
+        if ch == "#":
+            if re.match(r"#[a-zA-Z][\w-]*", rest_body[j:]):
+                trailer = rest_body[j:]
+                break
+        if ch == "@":
+            prev = rest_body[j - 1] if j > 0 else " "
+            nxt = rest_body[j + 1] if j + 1 < n else ""
+            if prev in " \t([" and (nxt.isalpha() or nxt == "_" or nxt == '"'):
+                trailer = rest_body[j:]
+                break
+        j += 1
+
+    # Reassemble: <indent><bang>[ #id T-XXX] <new_title>[ <trailer>]
+    parts = [indent, bang]
+    if id_prefix:
+        parts.append(" ")
+        parts.append(id_prefix)
+    parts.append(" ")
+    parts.append(new_title)
+    trailer_stripped = trailer.strip()
+    if trailer_stripped:
+        parts.append(" ")
+        parts.append(trailer_stripped)
+
+    lines[line_no] = "".join(parts) + nl
+    return "".join(lines)
+
+
 def replace_attr(md: str, line_no: int, key: str, new_value: str) -> str:
     """Generic single-valued-attr replacement on a line. Same shape as
     :func:`update_task_status` but for any registered attr key."""
