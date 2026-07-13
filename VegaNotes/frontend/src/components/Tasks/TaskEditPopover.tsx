@@ -475,7 +475,7 @@ function PopoverForm({
           {task.kind === "task" && (
             <Field
               label={`Action requests${arChildren.length ? ` (${arChildren.length})` : ""}`}
-              hint="Click ✎ to edit an AR in this popover. Click ● / status chip to cycle its status. Click 🗑 to delete."
+              hint="Click the pencil to edit an AR in this popover. Click the status chip to cycle it. Click the trash to delete."
             >
               {arChildren.length > 0 && (
                 <ul className="border rounded divide-y bg-slate-50 mb-2 max-h-56 overflow-y-auto">
@@ -703,7 +703,7 @@ function ArRow({
             title="Delete this AR"
             aria-label={`Delete AR ${ar.title}`}
           >
-            🗑
+            <TrashIcon />
           </button>
         </>
       )}
@@ -718,5 +718,39 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
       {children}
       {hint && <div className="text-[11px] text-slate-400 mt-0.5">{hint}</div>}
     </label>
+  );
+}
+
+/**
+ * Inline SVG trash icon.
+ *
+ * We can't use the 🗑 emoji here — every browser renders emoji through
+ * a color-glyph font (Apple Color Emoji / Noto Color Emoji / Segoe UI
+ * Emoji) that ignores the CSS `color` property, so the icon shows up
+ * in its native muted grey regardless of the Tailwind class on its
+ * parent. A stroked SVG that inherits `currentColor` picks up the
+ * `text-rose-600 hover:text-rose-800` on the button cleanly.
+ */
+function TrashIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+    </svg>
   );
 }
