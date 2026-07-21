@@ -5,6 +5,7 @@
  * IC (non-admin) users see only their own turnins (MyTIs) with no tab bar.
  */
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import { TeamOverviewTab } from "./TeamOverviewTab";
@@ -81,6 +82,15 @@ export function DashboardView() {
   const [range, setRange] = useState("H1");
   const [year, setYear] = useState<number>(new Date().getFullYear());
   const [selectedEngineer, setSelectedEngineer] = useState<string>("");
+  const [forceKey, setForceKey] = useState(0);
+  const queryClient = useQueryClient();
+
+  const handleForceRefresh = () => {
+    const next = forceKey + 1;
+    setForceKey(next);
+    // Also clear stale data so loading spinners show immediately
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  };
 
   if (meLoading) {
     return (
@@ -126,6 +136,14 @@ export function DashboardView() {
         <option value="GFC">GFC</option>
         <option value="JNC">JNC</option>
       </select>
+      <button
+        className="dash-btn"
+        title="Bypass cache and re-fetch live data from git + turnininfo"
+        onClick={handleForceRefresh}
+        style={{ marginLeft: 6 }}
+      >
+        ↻ Force Refresh
+      </button>
     </div>
   );
 
@@ -204,6 +222,7 @@ export function DashboardView() {
               project={project}
               range={range}
               year={year}
+              forceKey={forceKey}
               onSelectEngineer={(name) => {
                 setSelectedEngineer(name);
                 setActiveTab("eng");
@@ -219,6 +238,7 @@ export function DashboardView() {
               project={project}
               range={range}
               year={year}
+              forceKey={forceKey}
               selectedEngineer={selectedEngineer}
               onSelectEngineer={setSelectedEngineer}
             />
@@ -228,12 +248,13 @@ export function DashboardView() {
               project={project}
               range={range}
               year={year}
+              forceKey={forceKey}
               selectedEngineer={selectedEngineer}
               onSelectEngineer={setSelectedEngineer}
             />
           )}
           {(activeTab === "myti" || !isAdmin) && (
-            <MyTIsTab project={project} range={range} year={year} />
+            <MyTIsTab project={project} range={range} year={year} forceKey={forceKey} />
           )}
         </div>
       </div>

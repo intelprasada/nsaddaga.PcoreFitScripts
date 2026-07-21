@@ -14,6 +14,7 @@ interface Props {
   project: string;
   range: string;
   year: number;
+  forceKey: number;
   onSelectEngineer: (name: string) => void;
   onSelectEngineerTI: (name: string) => void;
 }
@@ -160,21 +161,22 @@ function buildPieChart(
   });
 }
 
-export function TeamOverviewTab({ project, range, year, onSelectEngineer, onSelectEngineerTI }: Props) {
+export function TeamOverviewTab({ project, range, year, forceKey, onSelectEngineer, onSelectEngineerTI }: Props) {
   const [subView, setSubView] = useState<"commits" | "turnins">("commits");
+  const force = forceKey > 0;
 
   const { data: gitData, isLoading: gitLoading, isError: gitError, error: gitErrorObj } = useQuery({
-    queryKey: ["dashboard-data", project, range, year],
-    queryFn: () => api.dashboardData(project, range, year),
-    staleTime: 5 * 60 * 1000,
+    queryKey: ["dashboard-data", project, range, year, forceKey],
+    queryFn: () => api.dashboardData(project, range, year, undefined, undefined, force),
+    staleTime: force ? 0 : 5 * 60 * 1000,
     retry: false,
   });
 
   const { data: tiData, isLoading: tiLoading } = useQuery({
-    queryKey: ["dashboard-team-turnins", project, range, year],
-    queryFn: () => api.dashboardTurnins(project, undefined, range, year),
+    queryKey: ["dashboard-team-turnins", project, range, year, forceKey],
+    queryFn: () => api.dashboardTurnins(project, undefined, range, year, undefined, undefined, force),
     enabled: subView === "turnins",
-    staleTime: 5 * 60 * 1000,
+    staleTime: force ? 0 : 5 * 60 * 1000,
   });
 
   const commitsRef = useRef<Chart | null>(null);
