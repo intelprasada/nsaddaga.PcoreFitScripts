@@ -28,9 +28,14 @@ HERE = Path("/nfs/site/disks/nsaddaga_wa/Managing/perfH12026")
 # ---------------------------------------------------------------------------
 
 def _latest_model(glob_pat: str) -> str | None:
+    """Return the newest model bundle path matching a glob, using the trailing
+    workweek tag (e.g. '26ww28b') as the sort key so lexicographic order picks
+    the newest turnin. Mirrors what `setGFC` / `setJNCfit` resolve to. Skips
+    bundles whose name ends in '-defective' and any without a .git dir."""
+    import glob as _glob
     tag_re = re.compile(r"(\d+ww\d+[a-z]?)(?:\.\d+)?$")
     best: tuple[str, str] | None = None
-    for p in glob.glob(glob_pat):
+    for p in _glob.glob(glob_pat):
         name = Path(p).name
         if name.endswith("-defective") or "defective" in name:
             continue
@@ -43,6 +48,9 @@ def _latest_model(glob_pat: str) -> str | None:
     return best[1] if best else None
 
 
+# GFC uses the stable "-latest" symlink where available (mirror of setGFC's
+# newest turnin); falls back to auto-discovery of the newest non-defective
+# core-gfc-b0 model bundle. JNC uses the analogous "-latest" symlink.
 _GFC_LATEST = "/p/hdk/rtl/proj_data/xhdk74/bak_latest_turnins/gfc/core/core-gfc-b0-master-latest"
 _GFC_DEFAULT = (_GFC_LATEST if (Path(_GFC_LATEST) / ".git").exists()
                 else _latest_model("/nfs/site/proj/gfc/gfc.models.*/core/core-gfc-b0-master-*"))
@@ -53,6 +61,10 @@ REPOS = {
     "JNC": os.environ.get("JNC_REPO", _JNC_DEFAULT),
 }
 
+# Gatekeeper incoming areas hold the raw user_turnin bare repos (bundles the
+# engineer pushed) even for in-flight / rejected / cancelled turnins.  We fall
+# back to these when a sha is not reachable from the baseline model repo so
+# the dashboard can still show the diff.
 INCOMING_GLOBS = {
     "GFC": "/nfs/site/proj/gfc/*.basedir.*/incoming/*/user_turnin{tid}",
     "JNC": "/nfs/site/proj/jnc/*.basedir.*/incoming/*/user_turnin{tid}",
@@ -60,6 +72,7 @@ INCOMING_GLOBS = {
 
 
 def _find_bundle_repo(project: str, turnin_id) -> str:
+    """Locate the bare bundle repo for a given turnin id, or "" if not found."""
     if not turnin_id or project not in INCOMING_GLOBS:
         return ""
     try:
@@ -68,16 +81,27 @@ def _find_bundle_repo(project: str, turnin_id) -> str:
         return ""
     hits = glob.glob(INCOMING_GLOBS[project].format(tid=tid))
     for h in hits:
+        # bare repo — look for the tell-tale files
         if os.path.isdir(os.path.join(h, "objects")) and os.path.isfile(os.path.join(h, "HEAD")):
             return h
     return ""
 
 
+# Path to the HSD bugs list inside the GFC and JNC repos. Each line is a
+# single numeric HSD id. Only turnins whose files_changed list this exact
+# path get scanned for added HSDs.
 HSD_BUGS_PATH = "core/common/cfg/bugs"
 _HSD_LINE = re.compile(r"^\+(\d{8,14})\s*$")
 
 
 def _extract_added_hsds(project: str, shas: list[str], turnin_id) -> list[str]:
+    """Return the HSD ids added to core/common/cfg/bugs by this turnin.
+
+    Only lines added (starting with `+`) that are pure numeric HSD ids
+    are collected — this ignores deletions and unrelated context lines.
+    Tries the baseline model repo first, then the bundle repo (for
+    in-flight turnins) if none of the shas resolve there.
+    """
     if project not in REPOS:
         return []
     shas = [s for s in (shas or []) if s and re.match(r"^[0-9a-fA-F]{7,40}$", s)]
@@ -85,6 +109,7 @@ def _extract_added_hsds(project: str, shas: list[str], turnin_id) -> list[str]:
         return []
 
     def _run(base_args: list[str], sha: str) -> str:
+        # `-m --first-parent` handles merge commits (bundle_commit is a merge).
         r = subprocess.run(
             base_args + ["--no-pager", "show", "--no-color", "-m", "--first-parent",
                          "--pretty=format:", sha, "--", HSD_BUGS_PATH],
@@ -110,19 +135,23 @@ def _extract_added_hsds(project: str, shas: list[str], turnin_id) -> list[str]:
                     seen.add(hsd); found.append(hsd)
         return found
 
+    # 1) baseline repo
     baseline = ["git", "-C", REPOS[project]]
     for s in shas:
         if _exists(baseline, s):
             hsds = _parse(_run(baseline, s))
             if hsds:
                 return hsds
+            # sha resolved but no HSDs added — no need to try other repos
             return []
+    # 2) bundle repo (in-flight turnins)
     bundle_repo = _find_bundle_repo(project, turnin_id)
     if bundle_repo:
         bundle = ["git", f"--git-dir={bundle_repo}"]
         for s in shas:
             if _exists(bundle, s):
                 return _parse(_run(bundle, s))
+        # last resort: hdk_turnin<N> tag inside the bundle repo
         tag = f"hdk_turnin{turnin_id}"
         r = subprocess.run(bundle + ["rev-parse", "--verify", tag + "^{commit}"],
                            capture_output=True, text=True, timeout=10, check=False)
@@ -137,15 +166,22 @@ def _extract_added_hsds(project: str, shas: list[str], turnin_id) -> list[str]:
 
 SINCE = os.environ.get("SINCE", "2026-01-01")
 UNTIL = os.environ.get("UNTIL", "2026-06-30")
-DEFAULT_RANGE = os.environ.get("RANGE", "H1")
+DEFAULT_RANGE = os.environ.get("RANGE", "H1")  # H1|H2|YTD|MTD|FY|CUSTOM
 
 CACHE_DIR = HERE / ".cache"
 CACHE_DIR.mkdir(exist_ok=True)
+# Cache freshness. Past windows (whose `until` is strictly before today) are
+# treated as immutable and served from disk forever. Only *live* windows —
+# YTD, MTD, or the current H1/H2 while it's still in progress — respect
+# these TTLs. Since users have an explicit ⟳ Force refetch button that
+# bypasses all caches, we default to a long day-scale TTL so routine
+# refreshes stay instant and only occasionally re-hit git/turnininfo.
+TURNIN_TTL       = int(os.environ.get("TURNIN_TTL",       "86400"))  # 24h
+GIT_REPORT_TTL   = int(os.environ.get("GIT_REPORT_TTL",   "86400"))  # 24h
+TEAM_TURNINS_TTL = int(os.environ.get("TEAM_TURNINS_TTL", "86400"))  # 24h
 
-TURNIN_TTL       = int(os.environ.get("TURNIN_TTL",       "86400"))
-GIT_REPORT_TTL   = int(os.environ.get("GIT_REPORT_TTL",   "86400"))
-TEAM_TURNINS_TTL = int(os.environ.get("TEAM_TURNINS_TTL", "86400"))
-
+# Direct reports pulled from phonebook (MgrWWID=11342477) on 2026-07-14,
+# plus Niharika and Edwin explicitly included by request.
 DEFAULT_TEAM = [
     "Gautham Ajith",
     "Kushwanth Bandanadham",
@@ -163,9 +199,10 @@ DEFAULT_TEAM = [
 TEAM = [n.strip() for n in os.environ.get("TEAM", ",".join(DEFAULT_TEAM)).split(",") if n.strip()]
 
 IDSID_HINTS: dict[str, tuple[str, str]] = {
-    "Kushwanth Bandanadham":  ("gbandana", "12308499"),
-    "Yongxi Li":              ("yongxili", "12175166"),
-    "Edwin Mendez Valverde":  ("efmendez", "10656825"),
+    # "Display Name": ("idsid", "wwid")
+    "Kushwanth Bandanadham":  ("gbandana", "12308499"),  # BookName: Bandanadham, Gnanamaria Kushwanth
+    "Yongxi Li":              ("yongxili", "12175166"),  # short surname 'Li' matches wrong person
+    "Edwin Mendez Valverde":  ("efmendez", "10656825"),  # disambiguate from Jose Manuel Mendez Valverde
 }
 
 IDSID_CACHE_PATH = Path(os.environ.get("IDSID_CACHE", str(HERE / ".idsid_cache.json")))
@@ -201,6 +238,7 @@ def _cache_write(kind: str, key: str, payload) -> None:
 
 
 def _window_is_past(window: dict) -> bool:
+    """True if the whole window ends strictly before today."""
     try:
         return window.get("until", "") < datetime.now().date().isoformat()
     except Exception:
@@ -232,6 +270,10 @@ def _save_idsid_cache(cache: dict) -> None:
 
 
 def _phonebook_lookup(display_name: str) -> tuple[str, str] | None:
+    """Look up (idsid, wwid) for a "First [Middle] Last" display name via the
+    Intel phonebook CLI. Phonebook stores names as "Last, First [Middle]"; we
+    query by the last-name token and then match a row whose BookName also
+    contains the first name (case-insensitively). Returns None if unresolved."""
     parts = display_name.strip().split()
     if len(parts) < 2:
         return None
@@ -257,6 +299,8 @@ def _phonebook_lookup(display_name: str) -> tuple[str, str] | None:
 
 
 def resolve_identities(names: list[str]) -> dict[str, dict]:
+    """Return {display_name: {idsid, wwid}} for every name, using an on-disk
+    cache. Missing entries are filled from IDSID_HINTS then phonebook."""
     cache = _load_idsid_cache()
     changed = False
     for n in names:
@@ -291,6 +335,7 @@ _TURNIN_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
 
 
 def _tcsh_hdk_run(project: str, cmd: str, timeout: int = 180) -> str:
+    """Run a shell command inside a sourced HDK env for the given project."""
     if project not in PROJECT_HDK:
         return ""
     args = " ".join(PROJECT_HDK[project])
@@ -304,6 +349,8 @@ def _tcsh_hdk_run(project: str, cmd: str, timeout: int = 180) -> str:
 
 
 def _extract_json(text: str) -> list | dict | None:
+    """turnininfo's JSON output is preceded by ~20+ lines of setup chatter.
+    Grab the substring starting at the first '[' or '{' and parse."""
     for open_ch, close_ch in (("[", "]"), ("{", "}")):
         i = text.find(open_ch)
         if i < 0:
@@ -322,6 +369,7 @@ _TURNIN_COMMIT_HDR = re.compile(r"^commit ([0-9a-f]{7,40})", re.MULTILINE)
 
 
 def _parse_turnin_commits(notes: str) -> list[dict]:
+    """Parse the appended `git log` block in turnin_notes into commit records."""
     if not notes:
         return []
     out: list[dict] = []
@@ -355,6 +403,10 @@ def _parse_turnin_commits(notes: str) -> list[dict]:
 
 
 def mine_turnins(project: str, idsid: str, window: dict, force: bool = False) -> list[dict]:
+    """Return the engineer's turnins for the given project inside `window`.
+    Cached in-memory per (project, idsid) with TURNIN_TTL and mirrored to
+    disk so results survive process restarts. `force=True` bypasses both
+    caches and refetches from turnininfo."""
     if not idsid or project not in PROJECT_HDK:
         return []
     key = (project, idsid)
@@ -371,6 +423,7 @@ def mine_turnins(project: str, idsid: str, window: dict, force: bool = False) ->
                 raw = disk.get("payload") or []
                 _TURNIN_CACHE[key] = (disk["ts"], raw)
     if raw is None:
+        # Query a wide-enough window; -days N is the only date filter turnininfo has.
         try:
             since_dt = datetime.strptime(window["since"], "%Y-%m-%d").date()
         except ValueError:
@@ -395,19 +448,22 @@ def mine_turnins(project: str, idsid: str, window: dict, force: bool = False) ->
         commits = _parse_turnin_commits(t.get("turnin_notes") or "")
         files_changed = t.get("files_changed") or []
         hsds_added: list[str] = []
+        # Only count HSDs when the turnin actually modifies core/common/cfg/bugs.
+        # We source the ids from the developer-declared BUGS: field (parsed by
+        # turnininfo) — the file diff is unreliable for merge commits.
         if any((f or "").lower().endswith(HSD_BUGS_PATH) for f in files_changed):
-            cand_shas: list[str] = []
-            for s in (t.get("bundle_commit"), t.get("user_commit")):
-                if s and s not in cand_shas:
-                    cand_shas.append(s)
-            for c in commits:
-                s = c.get("sha")
-                if s and s not in cand_shas:
-                    cand_shas.append(s)
-            try:
-                hsds_added = _extract_added_hsds(project, cand_shas, t.get("id"))
-            except Exception:
-                hsds_added = []
+            raw_bugs = t.get("bugs")
+            if isinstance(raw_bugs, str):
+                tokens = raw_bugs.split()
+            elif isinstance(raw_bugs, list):
+                tokens = [str(x) for x in raw_bugs]
+            else:
+                tokens = []
+            seen: set[str] = set()
+            for tok in tokens:
+                tok = tok.strip().strip(",")
+                if re.fullmatch(r"\d{8,14}", tok) and tok not in seen:
+                    seen.add(tok); hsds_added.append(tok)
         filtered.append({
             "id":                t.get("id"),
             "bundle_id":         t.get("bundle_id"),
@@ -464,6 +520,12 @@ MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", 
 
 def build_team_turnin_summary(project: str, window: dict, identities: dict,
                               force: bool = False) -> dict:
+    """Aggregate turnin stats across the whole team for the given window.
+    Uses cached per-user turnininfo calls; primes the cache in parallel on
+    the first hit. Persists the aggregated result to disk so full-team
+    Team Overview loads are instant across process restarts."""
+    # Fast disk hit for the aggregated result — safe for past windows or
+    # while TTL is fresh for live windows.
     disk_key = f"{project}_{window['since']}_{window['until']}"
     if not force:
         cached = _cache_read("team_turnins", disk_key)
@@ -474,6 +536,7 @@ def build_team_turnin_summary(project: str, window: dict, identities: dict,
 
     projects = [project] if project in PROJECT_HDK else list(PROJECT_HDK.keys())
     active_months = window["months"]
+    # Prime cache in parallel
     jobs: list[tuple[str, str, str]] = []
     for eng in TEAM:
         idsid = (identities.get(eng) or {}).get("idsid", "")
@@ -580,6 +643,7 @@ def build_team_turnin_summary(project: str, window: dict, identities: dict,
 # Git mining
 # ---------------------------------------------------------------------------
 
+# Categories -> keyword patterns (case-insensitive, matched against subject line)
 CATEGORY_PATTERNS = [
     ("Bug Fixes",             re.compile(r"\b(bug|fix|bugtrack|hotfix)\b", re.I)),
     ("Feature Implementations", re.compile(r"\b(feature|add|implement|new|enable|support)\b", re.I)),
@@ -592,6 +656,10 @@ CATEGORIES = [c for c, _ in CATEGORY_PATTERNS] + ["Other"]
 
 def resolve_window(range_key: str, year: int | None = None,
                    since: str | None = None, until: str | None = None) -> dict:
+    """Resolve a UI range selection into a concrete git window.
+
+    range_key ∈ {YTD, MTD, H1, H2, FY, CUSTOM}. When CUSTOM, since/until are
+    used verbatim (fallback to server SINCE/UNTIL if missing)."""
     today = datetime.now().date()
     y = year or today.year
     rk = (range_key or "H1").upper()
@@ -643,27 +711,43 @@ def _run_git(repo: str, args: list[str]) -> str:
             capture_output=True, text=True, timeout=90, check=False,
         )
         return out.stdout
-    except Exception:
+    except Exception as e:  # pragma: no cover
+        print(f"[git err] {repo} {' '.join(args)}: {e}")
         return ""
 
 
 def _author_regex(name: str) -> str:
+    """Build a POSIX regex matching a git author for this person, tolerating
+    both 'Last, First [Middle]' (Intel default) and 'First Last' variants.
+    Uses the first token as first-name and the last token as surname, allowing
+    optional middle names in between."""
     parts = [p for p in re.split(r"[\s,]+", name) if p]
     if not parts:
         return re.escape(name)
     if len(parts) == 1:
         return re.escape(parts[0])
     first, last = re.escape(parts[0]), re.escape(parts[-1])
+    # "Last, ... First" | "First ... Last"
     return f"({last},[^,]*{first}|{first}[^,]*{last})"
 
 
 def mine_engineer(repo: str, author: str, window: dict) -> dict:
+    """Return metrics for one engineer in one repo for the given window."""
     fmt = "--pretty=format:%x1fCOMMIT%x1f%H%x1f%ad%x1f%s"
     raw = _run_git(
         repo,
-        ["log", f"--since={window['since']}", f"--until={window['until']}",
-         "--no-merges", "--extended-regexp", "-i",
-         f"--author={_author_regex(author)}", "--date=short", "--numstat", fmt],
+        [
+            "log",
+            f"--since={window['since']}",
+            f"--until={window['until']}",
+            "--no-merges",
+            "--extended-regexp",
+            "-i",
+            f"--author={_author_regex(author)}",
+            "--date=short",
+            "--numstat",
+            fmt,
+        ],
     )
 
     commits: list[dict] = []
@@ -743,6 +827,8 @@ def mine_engineer(repo: str, author: str, window: dict) -> dict:
             })
 
     pattern = _work_pattern(avg, med, pct)
+    # Compact per-commit list for the UI (drop internal "file_stats" set semantics
+    # and keep only what the frontend needs).
     commits_out = [
         {
             "sha":     c["sha"][:12],
@@ -787,6 +873,9 @@ def _work_pattern(avg: float, med: float, pct: float) -> str:
 
 
 def build_report(project: str, window: dict, force: bool = False) -> dict:
+    """project in {GFC, JNC, ALL}; window from resolve_window(). The full
+    report is memoized on disk keyed by (project, since, until). Past
+    windows are treated as immutable; live windows respect GIT_REPORT_TTL."""
     disk_key = f"{project}_{window['since']}_{window['until']}"
     if not force:
         cached = _cache_read("report", disk_key)
@@ -853,11 +942,13 @@ def build_report(project: str, window: dict, force: bool = False) -> dict:
             merged["at_or_below"] = sum(1 for x in all_per_commit if x <= merged["median_lines"])
             merged["pct_at_or_below"] = round(100.0 * merged["at_or_below"] / len(all_per_commit), 1)
             merged["pattern"] = _work_pattern(merged["avg_lines"], merged["median_lines"], merged["pct_at_or_below"])
+        # Sort each file's commit list by date desc so the newest touches are on top
         for stats in merged["files"].values():
             stats["commits_list"].sort(key=lambda c: c["date"], reverse=True)
         merged["commits"].sort(key=lambda c: c["date"], reverse=True)
         per_engineer.append(merged)
 
+    # Team totals
     team_totals = {
         "total": sum(e["total"] for e in per_engineer),
         "net_lines": sum(e["net_lines"] for e in per_engineer),
@@ -865,6 +956,7 @@ def build_report(project: str, window: dict, force: bool = False) -> dict:
     }
     team_cats = {c: sum(e["categories"][c] for e in per_engineer) for c in CATEGORIES}
     team_monthly = {m: sum(e["monthly"][m]["commits"] for e in per_engineer) for m in active_months}
+    # Per-project monthly + per-engineer per-project totals for stacked charts
     team_monthly_by_project = {
         proj: {
             m: sum(
