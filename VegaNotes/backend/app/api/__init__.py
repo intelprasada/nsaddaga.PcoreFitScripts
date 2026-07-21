@@ -3305,3 +3305,23 @@ def dashboard_roster(
         return get_roster()
     name = resolve_engineer_name(user)
     return [name] if name else [user]
+
+
+@router.get("/dashboard/diff")
+def dashboard_diff(
+    project: str = Query(...),
+    shas: str = Query(""),
+    path: str = Query(...),
+    turnin_id: Optional[str] = Query(None),
+    user: str = Depends(require_user),
+) -> Any:
+    """Return plain-text git diff for a file at the given commit(s).
+
+    Tries baseline model repo first; falls back to the gatekeeper bundle repo
+    for in-flight turnins.
+    """
+    from ..dashboard import get_file_diff
+    from fastapi.responses import PlainTextResponse
+    sha_list = [s.strip() for s in shas.split(",") if s.strip()]
+    text = get_file_diff(project, sha_list, path, turnin_id)
+    return PlainTextResponse(content=text)
