@@ -13,11 +13,13 @@ interface Props {
   project: string;
   range: string;
   year: number;
+  forceKey: number;
   selectedEngineer: string;
   onSelectEngineer: (name: string) => void;
 }
 
-export function TurninsTab({ project, range, year, selectedEngineer, onSelectEngineer }: Props) {
+export function TurninsTab({ project, range, year, forceKey, selectedEngineer, onSelectEngineer }: Props) {
+  const force = forceKey > 0;
   const { data: roster = [] } = useQuery({
     queryKey: ["dashboard-roster"],
     queryFn: () => api.dashboardRoster(),
@@ -28,10 +30,10 @@ export function TurninsTab({ project, range, year, selectedEngineer, onSelectEng
   const eff = selectedEngineer || roster[0] || "";
 
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["dashboard-turnins-eng", eff, project, range, year],
-    queryFn: () => api.dashboardTurnins(project, eff, range, year),
+    queryKey: ["dashboard-turnins-eng", eff, project, range, year, forceKey],
+    queryFn: () => api.dashboardTurnins(project, eff, range, year, undefined, undefined, force),
     enabled: !!eff,
-    staleTime: 5 * 60 * 1000,
+    staleTime: force ? 0 : 5 * 60 * 1000,
   });
 
   return (
