@@ -163,10 +163,11 @@ function buildPieChart(
 export function TeamOverviewTab({ project, range, year, onSelectEngineer, onSelectEngineerTI }: Props) {
   const [subView, setSubView] = useState<"commits" | "turnins">("commits");
 
-  const { data: gitData, isLoading: gitLoading, isError: gitError } = useQuery({
+  const { data: gitData, isLoading: gitLoading, isError: gitError, error: gitErrorObj } = useQuery({
     queryKey: ["dashboard-data", project, range, year],
     queryFn: () => api.dashboardData(project, range, year),
     staleTime: 5 * 60 * 1000,
+    retry: false,
   });
 
   const { data: tiData, isLoading: tiLoading } = useQuery({
@@ -380,7 +381,13 @@ export function TeamOverviewTab({ project, range, year, onSelectEngineer, onSele
     return <p style={{ color: "var(--dash-mute)" }}>Loading git metrics… (may take 30–60 s on cold cache)</p>;
   }
   if (gitError || !gitData) {
-    return <p style={{ color: "#f87171" }}>Failed to load dashboard data. Admin access required.</p>;
+    const msg = gitErrorObj instanceof Error ? gitErrorObj.message : String(gitErrorObj ?? "Unknown error");
+    return (
+      <div style={{ color: "#f87171" }}>
+        <p style={{ margin: 0 }}>Failed to load dashboard data.</p>
+        <pre style={{ fontSize: "0.75rem", marginTop: "0.4rem", whiteSpace: "pre-wrap" }}>{msg}</pre>
+      </div>
+    );
   }
 
   const d = gitData as DashboardData;
