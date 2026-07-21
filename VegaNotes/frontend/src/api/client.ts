@@ -419,6 +419,43 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ markdown }),
     }),
+
+  // ----- Dashboard (issue #290) -------------------------------------------
+  dashboardData: (
+    project = "ALL",
+    range = "H1",
+    year?: number,
+    since?: string,
+    until?: string,
+    force = false,
+  ) => {
+    const qs = new URLSearchParams({ project, range });
+    if (year != null) qs.set("year", String(year));
+    if (since) qs.set("since", since);
+    if (until) qs.set("until", until);
+    if (force) qs.set("force", "true");
+    return req<DashboardData>(`/dashboard/data?${qs}`);
+  },
+
+  dashboardTurnins: (
+    project = "ALL",
+    engineer?: string,
+    range = "H1",
+    year?: number,
+    since?: string,
+    until?: string,
+    force = false,
+  ) => {
+    const qs = new URLSearchParams({ project, range });
+    if (engineer) qs.set("engineer", engineer);
+    if (year != null) qs.set("year", String(year));
+    if (since) qs.set("since", since);
+    if (until) qs.set("until", until);
+    if (force) qs.set("force", "true");
+    return req<DashboardTurnins>(`/dashboard/turnins?${qs}`);
+  },
+
+  dashboardRoster: () => req<string[]>("/dashboard/roster"),
 };
 
 export interface FocusWeek {
@@ -498,3 +535,160 @@ export interface MeActivityEvent {
   ts: string;
   meta: Record<string, unknown>;
 }
+
+// ----- Dashboard (issue #290) shapes ----------------------------------------
+
+export interface DashboardWindow {
+  since: string;
+  until: string;
+  range: string;
+  year: number;
+  label: string;
+}
+
+export interface DashboardFileStat {
+  path: string;
+  add: number;
+  del: number;
+}
+
+export interface DashboardCommit {
+  sha: string;
+  full_sha: string;
+  date: string;
+  subject: string;
+  add: number;
+  del: number;
+  net: number;
+  files: number;
+  file_stats: DashboardFileStat[];
+  project?: string;
+}
+
+export interface DashboardFileStats {
+  commits: number;
+  add: number;
+  del: number;
+  net: number;
+  commits_list: {
+    sha: string;
+    subject: string;
+    date: string;
+    add: number;
+    del: number;
+    net: number;
+    project?: string;
+  }[];
+  project?: string;
+  path?: string;
+}
+
+export interface EngineerData {
+  engineer: string;
+  idsid: string;
+  wwid: string;
+  total: number;
+  net_lines: number;
+  avg_lines: number;
+  median_lines: number;
+  at_or_below: number;
+  pct_at_or_below: number;
+  pattern: string;
+  monthly: Record<string, { commits: number; net: number }>;
+  categories: Record<string, number>;
+  files: Record<string, DashboardFileStats>;
+  commits: DashboardCommit[];
+  per_project: Record<string, EngineerData>;
+}
+
+export interface DashboardData {
+  generated_at: string;
+  window: DashboardWindow;
+  project: string;
+  repos: Record<string, string>;
+  engineers: EngineerData[];
+  identities: Record<string, { idsid: string; wwid: string }>;
+  team_totals: { total: number; net_lines: number; engineers: number };
+  team_totals_by_project: Record<string, { total: number; net_lines: number }>;
+  team_categories: Record<string, number>;
+  team_monthly: Record<string, number>;
+  team_monthly_by_project: Record<string, Record<string, number>>;
+  categories: string[];
+  months: string[];
+}
+
+export interface TurninCommit {
+  sha: string;
+  merge: boolean;
+  subject: string;
+  author: string;
+  date: string;
+}
+
+export interface TurninRecord {
+  id: number | string;
+  bundle_id?: string | null;
+  status: string;
+  stage?: string | null;
+  cluster?: string | null;
+  stepping?: string | null;
+  branch?: string | null;
+  model?: string | null;
+  turnin_time: string;
+  completed_time?: string | null;
+  comments: string;
+  files_changed: string[];
+  code_review_url?: string | null;
+  code_review_status?: string | null;
+  user_commit?: string | null;
+  bundle_commit?: string | null;
+  bugs: string[];
+  ecos: string[];
+  commits: TurninCommit[];
+  n_commits: number;
+  hsds_added: string[];
+  project: string;
+}
+
+/** Single-engineer turnin report (from build_turnin_report). */
+export interface TurninReport {
+  engineer: string;
+  idsid: string;
+  project: string;
+  window: DashboardWindow;
+  totals: Record<string, number>;
+  turnins: TurninRecord[];
+}
+
+export interface EngineerTurninsEntry {
+  engineer: string;
+  idsid: string;
+  total: number;
+  released: number;
+  files: number;
+  released_files: number;
+  per_project: Record<string, { total: number; released: number; files: number; released_files: number }>;
+  monthly: Record<string, number>;
+  monthly_released: Record<string, number>;
+  status: Record<string, number>;
+}
+
+/** Full-team turnin summary (from build_team_turnin_summary). */
+export interface TeamTurninsReport {
+  project: string;
+  window: DashboardWindow;
+  months: string[];
+  team_totals: { turnins: number; files: number; released: number; engineers: number };
+  team_totals_by_project: Record<string, number>;
+  team_totals_released_by_project: Record<string, number>;
+  team_monthly: Record<string, number>;
+  team_monthly_released: Record<string, number>;
+  team_monthly_by_project: Record<string, Record<string, number>>;
+  team_monthly_released_by_project: Record<string, Record<string, number>>;
+  status_counts: Record<string, number>;
+  engineers: EngineerTurninsEntry[];
+  generated_at: string;
+}
+
+/** Union — discriminate via `"turnins" in data` (TurninReport) vs `"engineers" in data` (TeamTurninsReport). */
+export type DashboardTurnins = TurninReport | TeamTurninsReport;
