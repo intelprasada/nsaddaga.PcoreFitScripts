@@ -329,7 +329,7 @@ export function TurninsPanel({ data }: Props) {
                         colSpan={10}
                         style={{ background: "#0b1327", padding: 0 }}
                       >
-                        <TurninDetail t={t} diff={diff} fetchDiff={fetchDiff} setDiff={setDiff} />
+                        <TurninDetail t={t} diff={diff} fetchDiff={fetchDiff} />
                       </td>
                     </tr>
                   )}
@@ -346,6 +346,8 @@ export function TurninsPanel({ data }: Props) {
           </table>
         </div>
       </div>
+      {/* Diff panel — rendered below the entire table when a file is selected */}
+      {diff && <DiffPanel diff={diff} onClose={() => setDiff(null)} />}
     </div>
   );
 }
@@ -354,12 +356,10 @@ function TurninDetail({
   t,
   diff,
   fetchDiff,
-  setDiff,
 }: {
   t: TurninRecord;
   diff: DiffState | null;
   fetchDiff: (t: TurninRecord, filePath: string) => Promise<void>;
-  setDiff: (d: DiffState | null) => void;
 }) {
   return (
     <div style={{ padding: "10px 14px" }}>
@@ -473,10 +473,7 @@ function TurninDetail({
                   })}
                 </tbody>
               </table>
-              {/* Inline diff panel */}
-              {diff?.tiId === String(t.id) && (
-                <DiffPanel diff={diff} onClose={() => setDiff(null)} />
-              )}
+              {/* Inline diff panel removed — shown below the full TurninsPanel instead */}
             </>
           )}
         </div>
