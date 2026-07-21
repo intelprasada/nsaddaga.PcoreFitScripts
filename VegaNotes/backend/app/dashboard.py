@@ -1056,3 +1056,77 @@ def resolve_engineer_name(username: str) -> str:
 def get_roster() -> list[str]:
     """Return the full team roster."""
     return TEAM
+
+
+def get_file_diff(project: str, shas: list[str], file_path: str,
+                  turnin_id: str | None = None) -> str:
+    """Return the git diff for *file_path* at the given commit(s).
+
+    Tries bundle_commit first in the baseline model repo; falls back to the
+    gatekeeper bundle repo for in-flight/rejected turnins.  Returns plain text
+    suitable for display (colorization is handled client-side).
+    """
+    if project not in REPOS:
+        return "bad project"
+    shas = [s.strip() for s in (shas or []) if s and re.match(r"^[0-9a-fA-F]{4,40}$", s.strip())]
+    if not shas and not turnin_id:
+        return "no sha provided"
+    if not file_path or "\x00" in file_path:
+        return "bad path"
+
+    def _exists(base_args: list[str], sha: str) -> bool:
+        r = subprocess.run(base_args + ["cat-file", "-e", sha + "^{commit}"],
+                           capture_output=True, text=True, timeout=15, check=False)
+        return r.returncode == 0
+
+    def _show(base_args: list[str], sha: str, extra: list[str]) -> str:
+        r = subprocess.run(
+            base_args + ["--no-pager", "show", "--no-color",
+                         "--pretty=format:%H%n%an%n%ad%n%s%n%n",
+                         "--date=short", *extra, sha, "--", file_path],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+        return r.stdout or ""
+
+    def _try(base_args: list[str], label: str) -> tuple[str, str]:
+        for s in shas:
+            if not _exists(base_args, s):
+                continue
+            body = _show(base_args, s, [])
+            if "diff --git" not in body and "diff --cc" not in body:
+                body2 = _show(base_args, s, ["-m", "--first-parent"])
+                if "diff --git" in body2 or "diff --cc" in body2:
+                    body = body2
+            if body.strip():
+                return f"# source: {label}\n" + body, s
+        return "", ""
+
+    # 1) Baseline model repo
+    baseline = ["git", "-C", REPOS[project]]
+    body, chosen = _try(baseline, "baseline model")
+    if body.strip():
+        return body
+
+    # 2) Bundle repo fallback (in-flight / rejected TIs)
+    if turnin_id:
+        bundle_repo = _find_bundle_repo(project, turnin_id)
+        if bundle_repo:
+            bundle = ["git", f"--git-dir={bundle_repo}"]
+            body, chosen = _try(bundle, f"bundle repo (turnin {turnin_id})")
+            if body.strip():
+                return body
+            # Last resort: hdk_turnin<N> tag
+            tag = f"hdk_turnin{turnin_id}"
+            r = subprocess.run(bundle + ["rev-parse", "--verify", tag + "^{commit}"],
+                               capture_output=True, text=True, timeout=10, check=False)
+            if r.returncode == 0:
+                body = _show(bundle, r.stdout.strip(), [])
+                if body.strip():
+                    return f"# source: bundle tag {tag}\n" + body
+
+    return (
+        "This turnin's commits are not present in the local model repo.\n"
+        f"Baseline: {REPOS[project]}\n"
+        "This usually means the turnin is in-flight, rejected, or the commits\n"
+        "landed after the local model bundle was cut."
+    )
