@@ -74,9 +74,11 @@ function crBadge(status: string | null | undefined, url: string | null | undefin
 function hsdCell(hsds: string[]): JSX.Element {
   const list = (hsds || []).filter(Boolean);
   if (!list.length) return <span style={{ color: "var(--dash-mute)" }}>–</span>;
+  const shown = list.slice(0, 10);
+  const extra = list.length - shown.length;
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 4, maxWidth: 220 }}>
-      {list.map((h) => (
+      {shown.map((h) => (
         <a
           key={h}
           href={`https://hsdes.intel.com/appstore/article/#/${encodeURIComponent(h)}`}
@@ -94,6 +96,9 @@ function hsdCell(hsds: string[]): JSX.Element {
           {h}
         </a>
       ))}
+      {extra > 0 && (
+        <span className="dash-pill" title={list.slice(10).join(", ")}>+{extra} more</span>
+      )}
     </div>
   );
 }
