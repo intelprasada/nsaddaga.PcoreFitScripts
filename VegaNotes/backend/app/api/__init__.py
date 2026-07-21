@@ -14,7 +14,7 @@ from sqlmodel import Session, select
 
 from ..auth import hash_password, validate_password, verify_password, require_admin, require_user
 from ..config import settings
-from ..db import get_session
+from ..db import get_session, get_engine
 from ..indexer import (
     apply_single_task_patch_to_index,
     delete_single_task_from_index,
@@ -3232,3 +3232,76 @@ def put_focus_week(
         "updated_at": mtime.isoformat() + "Z",
         "path": FOCUS_REL_PATH,
     }
+
+
+# ── Dashboard (issue #290) ──────────────────────────────────────────────────
+
+def _lookup_is_admin(username: str) -> bool:
+    """Return True if the user has admin rights (no exception on miss)."""
+    with Session(get_engine()) as s:
+        u = s.exec(select(User).where(User.name == username)).first()
+        return u is not None and bool(u.is_admin)
+
+
+@router.get("/dashboard/data")
+def dashboard_data(
+    project: str = "ALL",
+    range: str = "H1",
+    year: Optional[int] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    force: bool = False,
+    user: str = Depends(require_user),
+    s: Session = Depends(get_session),
+) -> Any:
+    """Return full team git-metric report. Admin only."""
+    u = s.exec(select(User).where(User.name == user)).first()
+    if u is None or not u.is_admin:
+        raise HTTPException(403, "admin role required")
+    from ..dashboard import compute_dashboard_data
+    return compute_dashboard_data(
+        project=project, force=force,
+        range_key=range, year=year, since=since, until=until,
+    )
+
+
+@router.get("/dashboard/turnins")
+def dashboard_turnins(
+    project: str = "ALL",
+    engineer: Optional[str] = None,
+    range: str = "H1",
+    year: Optional[int] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    force: bool = False,
+    user: str = Depends(require_user),
+    s: Session = Depends(get_session),
+) -> Any:
+    """Return turnin data.
+
+    - Admin: can pass any ``?engineer=name``. Omitting ``engineer`` returns
+      the full-team summary.
+    - IC: ``engineer`` param is ignored — always returns caller's own data.
+    """
+    from ..dashboard import fetch_turnins_for, resolve_engineer_name
+    u = s.exec(select(User).where(User.name == user)).first()
+    is_admin = u is not None and bool(u.is_admin)
+    if not is_admin:
+        engineer = resolve_engineer_name(user)
+    # admin with engineer=None → fetch_turnins_for passes None → team summary
+    return fetch_turnins_for(
+        engineer=engineer, project=project, force=force,
+        range_key=range, year=year, since=since, until=until,
+    )
+
+
+@router.get("/dashboard/roster")
+def dashboard_roster(
+    user: str = Depends(require_user),
+) -> Any:
+    """Return team roster. Admin gets full list; IC gets only their own entry."""
+    from ..dashboard import get_roster, resolve_engineer_name
+    if _lookup_is_admin(user):
+        return get_roster()
+    name = resolve_engineer_name(user)
+    return [name] if name else [user]
