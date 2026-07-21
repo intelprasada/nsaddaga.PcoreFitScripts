@@ -99,8 +99,14 @@ def _extract_added_hsds(project: str, shas: list[str], turnin_id) -> list[str]:
 
     Only lines added (starting with `+`) that are pure numeric HSD ids
     are collected — this ignores deletions and unrelated context lines.
-    Tries the baseline model repo first, then the bundle repo (for
-    in-flight turnins) if none of the shas resolve there.
+
+    ``shas`` should be ``[bundle_commit, user_commit]`` in that order.
+    ``bundle_commit`` is the merge commit in the model repo; diffed with
+    ``--first-parent`` it shows exactly what this TI introduced. ``user_commit``
+    is tried as a fallback for in-flight/rejected TIs whose ``bundle_commit``
+    hasn't landed in the baseline yet.  Passing ``user_commit`` first is wrong
+    for released TIs — it's a regular commit branched off a stale base that
+    would show thousands of accumulated bug-file changes from other engineers.
     """
     if project not in REPOS:
         return []
@@ -451,7 +457,10 @@ def mine_turnins(project: str, idsid: str, window: dict, force: bool = False) ->
         # Use git diff on core/common/cfg/bugs — more accurate than the BUGS:
         # field (catches exact lines added, handles multi-SHA turnins correctly).
         if any((f or "").lower().endswith(HSD_BUGS_PATH) for f in files_changed):
-            shas = [s for s in [t.get("user_commit"), t.get("bundle_commit")] if s]
+            # bundle_commit is the merge commit in the model — --first-parent gives
+            # exactly what this TI introduced. user_commit is a fallback for
+            # in-flight/rejected TIs where bundle_commit isn't in the baseline yet.
+            shas = [s for s in [t.get("bundle_commit"), t.get("user_commit")] if s]
             hsds_added = _extract_added_hsds(project, shas, t.get("id"))
         filtered.append({
             "id":                t.get("id"),
