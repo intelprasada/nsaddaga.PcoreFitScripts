@@ -2,8 +2,19 @@
  * TurninsPanel.tsx — Shared turnin display: KPI chips, filter bar, and
  * expandable row table used by both TurninsTab (admin) and MyTIsTab (IC).
  */
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { TurninReport, TurninRecord } from "../../api/client";
+
+interface DiffState {
+  tiId: string;
+  path: string;
+  shas: string;
+  project: string;
+  subject: string;
+  loading: boolean;
+  text: string | null;
+  error: string | null;
+}
 
 interface Props {
   data: TurninReport;
@@ -138,6 +149,7 @@ function tiMatchesFilter(t: TurninRecord, rawQuery: string): boolean {
 export function TurninsPanel({ data }: Props) {
   const [filter, setFilter] = useState("");
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [diff, setDiff] = useState<DiffState | null>(null);
 
   const rows = data.turnins.filter((t) => tiMatchesFilter(t, filter));
 
@@ -149,6 +161,53 @@ export function TurninsPanel({ data }: Props) {
       return next;
     });
   }
+
+  const fetchDiff = useCallback(
+    async (t: TurninRecord, filePath: string) => {
+      const tiId = String(t.id);
+      const shas = [t.bundle_commit, t.user_commit].filter(Boolean).join(",");
+      // Toggle off if already showing the same file
+      if (diff && diff.tiId === tiId && diff.path === filePath) {
+        setDiff(null);
+        return;
+      }
+      setDiff({
+        tiId,
+        path: filePath,
+        shas,
+        project: t.project || data.project,
+        subject: t.comments || "",
+        loading: true,
+        text: null,
+        error: null,
+      });
+      try {
+        const params = new URLSearchParams({
+          project: t.project || data.project,
+          shas,
+          path: filePath,
+        });
+        if (t.id) params.set("turnin_id", tiId);
+        const r = await fetch(`/api/dashboard/diff?${params}`, {
+          cache: "no-store",
+          credentials: "include",
+        });
+        const text = await r.text();
+        setDiff((d) =>
+          d && d.tiId === tiId && d.path === filePath
+            ? { ...d, loading: false, text, error: r.ok ? null : text }
+            : d
+        );
+      } catch (e: any) {
+        setDiff((d) =>
+          d && d.tiId === tiId && d.path === filePath
+            ? { ...d, loading: false, text: null, error: String(e?.message ?? e) }
+            : d
+        );
+      }
+    },
+    [diff, data.project],
+  );
 
   return (
     <div>
@@ -270,7 +329,7 @@ export function TurninsPanel({ data }: Props) {
                         colSpan={10}
                         style={{ background: "#0b1327", padding: 0 }}
                       >
-                        <TurninDetail t={t} />
+                        <TurninDetail t={t} diff={diff} fetchDiff={fetchDiff} setDiff={setDiff} />
                       </td>
                     </tr>
                   )}
@@ -291,7 +350,17 @@ export function TurninsPanel({ data }: Props) {
   );
 }
 
-function TurninDetail({ t }: { t: TurninRecord }) {
+function TurninDetail({
+  t,
+  diff,
+  fetchDiff,
+  setDiff,
+}: {
+  t: TurninRecord;
+  diff: DiffState | null;
+  fetchDiff: (t: TurninRecord, filePath: string) => Promise<void>;
+  setDiff: (d: DiffState | null) => void;
+}) {
   return (
     <div style={{ padding: "10px 14px" }}>
       {t.comments && (
@@ -361,32 +430,167 @@ function TurninDetail({ t }: { t: TurninRecord }) {
         <div>
           <div style={{ color: "var(--dash-mute)", fontSize: 12, marginBottom: 4 }}>
             <b>Files ({(t.files_changed || []).length})</b>
+            <span style={{ fontWeight: 400, marginLeft: 8, color: "var(--dash-mute)" }}>
+              — click a file to see diff
+            </span>
           </div>
           {(t.files_changed || []).length === 0 ? (
             <span style={{ color: "var(--dash-mute)", fontSize: 13 }}>no files</span>
           ) : (
-            <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
-              <tbody>
-                {(t.files_changed || []).map((f, fi) => (
-                  <tr key={fi}>
-                    <td
-                      style={{
-                        fontFamily: "ui-monospace, monospace",
-                        fontSize: 12,
-                        wordBreak: "break-all",
-                        padding: "3px 6px",
-                        color: "#93c5fd",
-                      }}
-                    >
-                      {f}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <>
+              <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+                <tbody>
+                  {(t.files_changed || []).map((f, fi) => {
+                    const isActive =
+                      diff?.tiId === String(t.id) && diff?.path === f;
+                    return (
+                      <tr
+                        key={fi}
+                        onClick={() => fetchDiff(t, f)}
+                        style={{ cursor: "pointer" }}
+                        title="Click to view diff"
+                      >
+                        <td
+                          style={{
+                            fontFamily: "ui-monospace, monospace",
+                            fontSize: 12,
+                            wordBreak: "break-all",
+                            padding: "3px 6px",
+                            color: isActive ? "#fde68a" : "#93c5fd",
+                            background: isActive
+                              ? "rgba(253,230,138,0.08)"
+                              : "transparent",
+                            borderRadius: 3,
+                          }}
+                        >
+                          {f}
+                          {isActive && !diff?.loading && (
+                            <span style={{ marginLeft: 6, color: "var(--dash-mute)" }}>▼</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {/* Inline diff panel */}
+              {diff?.tiId === String(t.id) && (
+                <DiffPanel diff={diff} onClose={() => setDiff(null)} />
+              )}
+            </>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Colorize a raw git diff into React nodes */
+function colorizeDiff(text: string): JSX.Element {
+  const lines = text.split("\n");
+  return (
+    <>
+      {lines.map((line, i) => {
+        let color: string | undefined;
+        let weight: string | undefined;
+        if (line.startsWith("+++") || line.startsWith("---"))
+          color = "#93a3c9";
+        else if (line.startsWith("+"))
+          color = "#34d399";
+        else if (line.startsWith("-"))
+          color = "#f87171";
+        else if (line.startsWith("@@"))
+          color = "#22d3ee";
+        else if (line.startsWith("diff --git")) {
+          color = "#a78bfa";
+          weight = "600";
+        } else if (line.startsWith("# source:"))
+          color = "#6b7280";
+        return (
+          <span key={i} style={{ color, fontWeight: weight, display: "block" }}>
+            {line || " "}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
+function DiffPanel({
+  diff,
+  onClose,
+}: {
+  diff: DiffState;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      style={{
+        marginTop: 8,
+        background: "#0f172a",
+        border: "1px solid #334155",
+        borderRadius: 6,
+        overflow: "hidden",
+      }}
+    >
+      {/* Header */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "6px 12px",
+          background: "#1e293b",
+          borderBottom: "1px solid #334155",
+          fontSize: 12,
+        }}
+      >
+        <span style={{ fontFamily: "ui-monospace, monospace", color: "#fde68a" }}>
+          {diff.path}
+        </span>
+        <span style={{ color: "#94a3b8", marginLeft: 12, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {diff.shas.split(",")[0]?.slice(0, 12)}
+          {diff.subject ? `  ·  ${diff.subject}` : ""}
+        </span>
+        <button
+          onClick={onClose}
+          style={{
+            background: "none",
+            border: "none",
+            color: "#94a3b8",
+            cursor: "pointer",
+            fontSize: 14,
+            padding: "0 4px",
+            flexShrink: 0,
+          }}
+          title="Close diff"
+        >
+          ✕
+        </button>
+      </div>
+      {/* Body */}
+      <pre
+        style={{
+          margin: 0,
+          padding: "10px 14px",
+          overflowX: "auto",
+          fontSize: 12,
+          lineHeight: 1.5,
+          fontFamily: "ui-monospace, Menlo, monospace",
+          maxHeight: 500,
+          overflowY: "auto",
+        }}
+      >
+        {diff.loading ? (
+          <span style={{ color: "#94a3b8" }}>Loading diff…</span>
+        ) : diff.error ? (
+          <span style={{ color: "#f87171" }}>{diff.error}</span>
+        ) : diff.text ? (
+          colorizeDiff(diff.text)
+        ) : (
+          <span style={{ color: "#94a3b8" }}>No diff available.</span>
+        )}
+      </pre>
     </div>
   );
 }
