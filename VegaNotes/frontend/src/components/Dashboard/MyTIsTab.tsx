@@ -10,13 +10,15 @@ interface Props {
   project: string;
   range: string;
   year: number;
+  forceKey: number;
 }
 
-export function MyTIsTab({ project, range, year }: Props) {
+export function MyTIsTab({ project, range, year, forceKey }: Props) {
+  const force = forceKey > 0;
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["dashboard-my-turnins", project, range, year],
-    queryFn: () => api.dashboardTurnins(project, undefined, range, year),
-    staleTime: 5 * 60 * 1000,
+    queryKey: ["dashboard-my-turnins", project, range, year, forceKey],
+    queryFn: () => api.dashboardTurnins(project, undefined, range, year, undefined, undefined, force),
+    staleTime: force ? 0 : 5 * 60 * 1000,
   });
 
   if (isLoading) {

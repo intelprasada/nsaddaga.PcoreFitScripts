@@ -11,6 +11,7 @@ interface Props {
   project: string;
   range: string;
   year: number;
+  forceKey: number;
   selectedEngineer: string;
   onSelectEngineer: (name: string) => void;
 }
@@ -122,11 +123,12 @@ function buildPieChart(canvas: HTMLCanvasElement, labels: string[], values: numb
   });
 }
 
-export function EngineerDetailTab({ project, range, year, selectedEngineer, onSelectEngineer }: Props) {
+export function EngineerDetailTab({ project, range, year, forceKey, selectedEngineer, onSelectEngineer }: Props) {
+  const force = forceKey > 0;
   const { data: gitData, isLoading, isError } = useQuery({
-    queryKey: ["dashboard-data", project, range, year],
-    queryFn: () => api.dashboardData(project, range, year),
-    staleTime: 5 * 60 * 1000,
+    queryKey: ["dashboard-data", project, range, year, forceKey],
+    queryFn: () => api.dashboardData(project, range, year, undefined, undefined, force),
+    staleTime: force ? 0 : 5 * 60 * 1000,
   });
 
   const engData = gitData ? (gitData as DashboardData).engineers.find((e) => e.engineer === selectedEngineer) : undefined;

@@ -448,22 +448,11 @@ def mine_turnins(project: str, idsid: str, window: dict, force: bool = False) ->
         commits = _parse_turnin_commits(t.get("turnin_notes") or "")
         files_changed = t.get("files_changed") or []
         hsds_added: list[str] = []
-        # Only count HSDs when the turnin actually modifies core/common/cfg/bugs.
-        # We source the ids from the developer-declared BUGS: field (parsed by
-        # turnininfo) — the file diff is unreliable for merge commits.
+        # Use git diff on core/common/cfg/bugs — more accurate than the BUGS:
+        # field (catches exact lines added, handles multi-SHA turnins correctly).
         if any((f or "").lower().endswith(HSD_BUGS_PATH) for f in files_changed):
-            raw_bugs = t.get("bugs")
-            if isinstance(raw_bugs, str):
-                tokens = raw_bugs.split()
-            elif isinstance(raw_bugs, list):
-                tokens = [str(x) for x in raw_bugs]
-            else:
-                tokens = []
-            seen: set[str] = set()
-            for tok in tokens:
-                tok = tok.strip().strip(",")
-                if re.fullmatch(r"\d{8,14}", tok) and tok not in seen:
-                    seen.add(tok); hsds_added.append(tok)
+            shas = [s for s in [t.get("user_commit"), t.get("bundle_commit")] if s]
+            hsds_added = _extract_added_hsds(project, shas, t.get("id"))
         filtered.append({
             "id":                t.get("id"),
             "bundle_id":         t.get("bundle_id"),
