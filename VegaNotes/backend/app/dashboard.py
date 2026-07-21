@@ -270,6 +270,10 @@ def _save_idsid_cache(cache: dict) -> None:
 
 
 def _phonebook_lookup(display_name: str) -> tuple[str, str] | None:
+    """Look up (idsid, wwid) for a "First [Middle] Last" display name via the
+    Intel phonebook CLI. Phonebook stores names as "Last, First [Middle]"; we
+    query by the last-name token and then match a row whose BookName also
+    contains the first name (case-insensitively). Returns None if unresolved."""
     parts = display_name.strip().split()
     if len(parts) < 2:
         return None
@@ -295,6 +299,8 @@ def _phonebook_lookup(display_name: str) -> tuple[str, str] | None:
 
 
 def resolve_identities(names: list[str]) -> dict[str, dict]:
+    """Return {display_name: {idsid, wwid}} for every name, using an on-disk
+    cache. Missing entries are filled from IDSID_HINTS then phonebook."""
     cache = _load_idsid_cache()
     changed = False
     for n in names:
@@ -329,6 +335,7 @@ _TURNIN_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
 
 
 def _tcsh_hdk_run(project: str, cmd: str, timeout: int = 180) -> str:
+    """Run a shell command inside a sourced HDK env for the given project."""
     if project not in PROJECT_HDK:
         return ""
     args = " ".join(PROJECT_HDK[project])
@@ -342,6 +349,8 @@ def _tcsh_hdk_run(project: str, cmd: str, timeout: int = 180) -> str:
 
 
 def _extract_json(text: str) -> list | dict | None:
+    """turnininfo's JSON output is preceded by ~20+ lines of setup chatter.
+    Grab the substring starting at the first '[' or '{' and parse."""
     for open_ch, close_ch in (("[", "]"), ("{", "}")):
         i = text.find(open_ch)
         if i < 0:
@@ -360,6 +369,7 @@ _TURNIN_COMMIT_HDR = re.compile(r"^commit ([0-9a-f]{7,40})", re.MULTILINE)
 
 
 def _parse_turnin_commits(notes: str) -> list[dict]:
+    """Parse the appended `git log` block in turnin_notes into commit records."""
     if not notes:
         return []
     out: list[dict] = []
@@ -701,27 +711,43 @@ def _run_git(repo: str, args: list[str]) -> str:
             capture_output=True, text=True, timeout=90, check=False,
         )
         return out.stdout
-    except Exception:
+    except Exception as e:  # pragma: no cover
+        print(f"[git err] {repo} {' '.join(args)}: {e}")
         return ""
 
 
 def _author_regex(name: str) -> str:
+    """Build a POSIX regex matching a git author for this person, tolerating
+    both 'Last, First [Middle]' (Intel default) and 'First Last' variants.
+    Uses the first token as first-name and the last token as surname, allowing
+    optional middle names in between."""
     parts = [p for p in re.split(r"[\s,]+", name) if p]
     if not parts:
         return re.escape(name)
     if len(parts) == 1:
         return re.escape(parts[0])
     first, last = re.escape(parts[0]), re.escape(parts[-1])
+    # "Last, ... First" | "First ... Last"
     return f"({last},[^,]*{first}|{first}[^,]*{last})"
 
 
 def mine_engineer(repo: str, author: str, window: dict) -> dict:
+    """Return metrics for one engineer in one repo for the given window."""
     fmt = "--pretty=format:%x1fCOMMIT%x1f%H%x1f%ad%x1f%s"
     raw = _run_git(
         repo,
-        ["log", f"--since={window['since']}", f"--until={window['until']}",
-         "--no-merges", "--extended-regexp", "-i",
-         f"--author={_author_regex(author)}", "--date=short", "--numstat", fmt],
+        [
+            "log",
+            f"--since={window['since']}",
+            f"--until={window['until']}",
+            "--no-merges",
+            "--extended-regexp",
+            "-i",
+            f"--author={_author_regex(author)}",
+            "--date=short",
+            "--numstat",
+            fmt,
+        ],
     )
 
     commits: list[dict] = []
