@@ -161,9 +161,12 @@ function PopoverForm({
   task, parentTask, onSwapToAr, onBack, onClose,
 }: PopoverFormProps) {
   const qc = useQueryClient();
+  // #312: scope suggestions to users with tasks in this task's project.
+  // Tasks with no project fall back to the global user list.
+  const taskProject = task.projects?.[0];
   const { data: knownUsers = [] } = useQuery({
-    queryKey: ["users"],
-    queryFn: () => api.users(),
+    queryKey: ["users", taskProject ?? null],
+    queryFn: () => api.users(taskProject),
   });
 
   const initialPriority = (task.attrs.priority as string) ?? "";

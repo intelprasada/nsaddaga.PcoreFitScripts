@@ -37,6 +37,9 @@ export function ArchiveView() {
     qc.invalidateQueries({ queryKey: ["notes"] });
     qc.invalidateQueries({ queryKey: ["tasks"] });
     qc.invalidateQueries({ queryKey: ["projects"] });
+    // #312: unarchive restores TaskOwner rows to main.db, so the users
+    // dropdown must refetch to surface owners that were previously hidden.
+    qc.invalidateQueries({ queryKey: ["users"] });
   };
 
   const unarchiveNote = useMutation({
