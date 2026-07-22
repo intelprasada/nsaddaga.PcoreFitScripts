@@ -21,7 +21,7 @@ interface Props {
 }
 
 type MenuKind =
-  | { kind: "project"; project: string; role: "manager" | "member"; key: string }
+  | { kind: "project"; project: string; role: "manager" | "member"; key: string; archived?: boolean }
   | { kind: "note"; path: string; id: number | null; project: string | null };
 
 interface MenuState {
@@ -121,6 +121,26 @@ export function Sidebar({ selectedPath, onSelect, onAfterDelete }: Props) {
       if (selectedPath === vars.path) onSelect("");
     },
     onError: (e: any) => alert(`Delete failed: ${e?.message ?? e}`),
+  });
+
+  // #304: archive / unarchive mutations.  Archive evicts task rows to
+  // ``archive.db``; the Note row survives on main.db with archive_kind='user'
+  // so tree navigation continues to show the file (but its tasks are gone
+  // from the active DB until unarchive).
+  const archiveProjectMut = useMutation({
+    mutationFn: (project: string) => api.archiveProject(project),
+    onSuccess: () => refreshAll(),
+    onError: (e: any) => alert(`Archive failed: ${e?.message ?? e}`),
+  });
+  const unarchiveProjectMut = useMutation({
+    mutationFn: (project: string) => api.unarchiveProject(project),
+    onSuccess: () => refreshAll(),
+    onError: (e: any) => alert(`Unarchive failed: ${e?.message ?? e}`),
+  });
+  const archiveNoteMut = useMutation({
+    mutationFn: ({ id }: { id: number; path: string }) => api.archiveNote(id),
+    onSuccess: () => refreshAll(),
+    onError: (e: any) => alert(`Archive failed: ${e?.message ?? e}`),
   });
 
   const createNote = useMutation({
@@ -415,6 +435,33 @@ export function Sidebar({ selectedPath, onSelect, onAfterDelete }: Props) {
               if (window.confirm(`Delete note "${path}"?`)) delNote.mutate({ id, path });
               setMenu(null);
             },
+            onArchiveProject: (project) => {
+              if (
+                window.confirm(
+                  `Archive project "${project}"? Its tasks will be evicted to the archive DB. You can unarchive later.`,
+                )
+              )
+                archiveProjectMut.mutate(project);
+              setMenu(null);
+            },
+            onUnarchiveProject: (project) => {
+              unarchiveProjectMut.mutate(project);
+              setMenu(null);
+            },
+            onArchiveNote: (id, path) => {
+              if (id == null) {
+                alert("Note isn't indexed yet — try again in a moment.");
+                setMenu(null);
+                return;
+              }
+              if (
+                window.confirm(
+                  `Archive note "${path}"? Its tasks will move to the archive DB.`,
+                )
+              )
+                archiveNoteMut.mutate({ id, path });
+              setMenu(null);
+            },
           })}
         />
       )}
@@ -443,6 +490,9 @@ function buildMenuItems(
     onManageMembers: (project: string) => void;
     onDeleteProject: (project: string) => void;
     onDeleteNote: (id: number | null, path: string) => void;
+    onArchiveProject: (project: string) => void;
+    onUnarchiveProject: (project: string) => void;
+    onArchiveNote: (id: number | null, path: string) => void;
   },
 ): MenuItem[] {
   if (target.kind === "project") {
@@ -456,6 +506,13 @@ function buildMenuItems(
         onClick: () => cb.onManageMembers(target.project),
       });
       items.push({
+        label: target.archived ? "Unarchive project" : "Archive project…",
+        onClick: () =>
+          target.archived
+            ? cb.onUnarchiveProject(target.project)
+            : cb.onArchiveProject(target.project),
+      });
+      items.push({
         label: "Delete project…",
         danger: true,
         onClick: () => cb.onDeleteProject(target.project),
@@ -464,6 +521,10 @@ function buildMenuItems(
     return items;
   }
   return [
+    {
+      label: "Archive note…",
+      onClick: () => cb.onArchiveNote(target.id, target.path),
+    },
     {
       label: "Delete note…",
       danger: true,

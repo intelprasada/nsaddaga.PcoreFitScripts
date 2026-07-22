@@ -970,6 +970,512 @@ def reconcile_archives_endpoint(
         return archive_ops.reconcile_archives(s, archive)
 
 
+# ---------- archive read endpoints (#304, PR 4) ---------------------------
+#
+# These endpoints expose the frozen state that lives in ``archive.db``
+# (task rows, child rows, notes/projects/features by natural key) plus
+# the ``Note.archive_kind == 'user'`` rows that stay in ``main.db`` for
+# navigation. RBAC mirrors the main read surface — users see only
+# archives whose owning project they have visibility for.
+
+
+def _archive_task_row(row: Any, note_path: str, user_by_id: dict[int, str],
+                      project_by_id: dict[int, str],
+                      feature_by_id: dict[int, str],
+                      owners_by_tid: dict[int, list[int]],
+                      projects_by_tid: dict[int, list[int]],
+                      features_by_tid: dict[int, list[int]],
+                      attrs_by_tid: dict[int, dict[str, str]] | None = None,
+                      ) -> dict[str, Any]:
+    """Shape a single archive.db Task row for the JSON response."""
+    attrs = (attrs_by_tid or {}).get(row.id, {}) if attrs_by_tid else {}
+    return {
+        "id": row.id,
+        "task_uuid": row.task_uuid,
+        "note_path": note_path,
+        "title": row.title,
+        "status": row.status,
+        "priority": attrs.get("priority"),
+        "eta": attrs.get("eta"),
+        "kind": row.kind,
+        "slug": row.slug,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+        "owners": [
+            user_by_id.get(uid, f"user#{uid}")
+            for uid in owners_by_tid.get(row.id, [])
+        ],
+        "projects": [
+            project_by_id[pid]
+            for pid in projects_by_tid.get(row.id, [])
+            if pid in project_by_id
+        ],
+        "features": [
+            feature_by_id[fid]
+            for fid in features_by_tid.get(row.id, [])
+            if fid in feature_by_id
+        ],
+    }
+
+
+@router.get("/archive/notes")
+def list_archived_notes(
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> list[dict[str, Any]]:
+    """User-archived notes visible to the caller.
+
+    Rows live in ``main.db`` (``archive_kind == 'user'``); task counts
+    are read from ``archive.db``.
+    """
+    is_admin, projects = _visible_projects(s, user)
+    notes = s.exec(
+        select(Note)
+        .where(Note.archive_kind == "user")  # type: ignore[arg-type]
+        .order_by(Note.updated_at.desc())  # type: ignore[attr-defined]
+    ).all()
+    visible = [n for n in notes if _note_is_visible(n, is_admin, projects)]
+    if not visible:
+        return []
+
+    counts: dict[str, int] = {}
+    with _open_archive_session() as arch:
+        for n in visible:
+            arch_note = arch.exec(select(Note).where(Note.path == n.path)).first()
+            if arch_note is None:
+                counts[n.path] = 0
+                continue
+            row = arch.exec(
+                text("SELECT COUNT(*) FROM task WHERE note_id = :i")
+                .bindparams(i=arch_note.id)
+            ).first()
+            counts[n.path] = int(row[0]) if row else 0
+
+    return [
+        {
+            "id": n.id,
+            "path": n.path,
+            "title": n.title,
+            "project": _project_for_path(n.path),
+            "updated_at": n.updated_at,
+            "task_count": counts.get(n.path, 0),
+        }
+        for n in visible
+    ]
+
+
+@router.get("/archive/notes/{note_id}")
+def get_archived_note(
+    note_id: int,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    n = s.get(Note, note_id)
+    if n is None or n.archive_kind != "user":
+        raise HTTPException(404, "archived note not found")
+    project = _project_for_path(n.path)
+    if _user_role_for_project(s, user, project) == "none":
+        raise HTTPException(403, "no access")
+
+    with _open_archive_session() as arch:
+        arch_note = arch.exec(select(Note).where(Note.path == n.path)).first()
+        task_rows: list[Any] = []
+        task_ids: list[int] = []
+        if arch_note is not None:
+            task_rows = arch.exec(
+                select(Task)
+                .where(Task.note_id == arch_note.id)  # type: ignore[arg-type]
+                .order_by(Task.line)  # type: ignore[attr-defined]
+            ).all()
+            task_ids = [t.id for t in task_rows]
+
+        owners_by_tid: dict[int, list[int]] = {}
+        projects_by_tid: dict[int, list[int]] = {}
+        features_by_tid: dict[int, list[int]] = {}
+        user_by_id: dict[int, str] = {}
+        project_by_id: dict[int, str] = {}
+        feature_by_id: dict[int, str] = {}
+
+        if task_ids:
+            for r in arch.exec(
+                text("SELECT task_id, user_id FROM taskowner WHERE task_id IN :ids")
+                .bindparams(bindparam("ids", expanding=True))
+                .bindparams(ids=task_ids),
+            ).all():
+                owners_by_tid.setdefault(r[0], []).append(r[1])
+            for r in arch.exec(
+                text("SELECT task_id, project_id FROM taskproject WHERE task_id IN :ids")
+                .bindparams(bindparam("ids", expanding=True))
+                .bindparams(ids=task_ids),
+            ).all():
+                projects_by_tid.setdefault(r[0], []).append(r[1])
+            for r in arch.exec(
+                text("SELECT task_id, feature_id FROM taskfeature WHERE task_id IN :ids")
+                .bindparams(bindparam("ids", expanding=True))
+                .bindparams(ids=task_ids),
+            ).all():
+                features_by_tid.setdefault(r[0], []).append(r[1])
+            for p in arch.exec(select(Project)).all():
+                project_by_id[p.id] = p.name
+            for f in arch.exec(select(Feature)).all():
+                feature_by_id[f.id] = f.name
+
+    attrs_by_tid: dict[int, dict[str, str]] = {}
+    if task_ids:
+        with _open_archive_session() as arch2:
+            for r in arch2.exec(
+                text("SELECT task_id, key, value FROM taskattr "
+                     "WHERE task_id IN :ids AND key IN ('priority', 'eta')")
+                .bindparams(bindparam("ids", expanding=True))
+                .bindparams(ids=task_ids),
+            ).all():
+                attrs_by_tid.setdefault(int(r[0]), {})[str(r[1])] = str(r[2])
+
+    # Resolve user names from MAIN db (the archive.db user table is
+    # intentionally excluded — see #304 PR 1 schema notes).
+    all_uids = {uid for uids in owners_by_tid.values() for uid in uids}
+    for u in s.exec(select(User).where(User.id.in_(all_uids))).all():  # type: ignore[attr-defined]
+        user_by_id[u.id] = u.name
+
+    return {
+        "id": n.id,
+        "path": n.path,
+        "title": n.title,
+        "body_md": n.body_md,
+        "project": project,
+        "updated_at": n.updated_at,
+        "tasks": [
+            _archive_task_row(
+                r, n.path,
+                user_by_id, project_by_id, feature_by_id,
+                owners_by_tid, projects_by_tid, features_by_tid,
+                attrs_by_tid,
+            )
+            for r in task_rows
+        ],
+    }
+
+
+@router.get("/archive/tasks")
+def list_archived_tasks(
+    project: Optional[str] = None,
+    owner: Optional[str] = None,
+    status: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = Query(default=200, ge=1, le=2000),
+    offset: int = Query(default=0, ge=0),
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    """Flat list of archived tasks, filtered + RBAC-scoped.
+
+    Reads from ``archive.db`` only; joins back to ``main.db`` for user
+    names via ``User.id`` (the archive-side user table is intentionally
+    excluded from the schema subset).
+    """
+    is_admin, visible_projects = _visible_projects(s, user)
+
+    with _open_archive_session() as arch:
+        sql = ["SELECT t.id FROM task t JOIN note n ON n.id = t.note_id"]
+        params: dict[str, Any] = {}
+        where = ["1=1"]
+
+        if project:
+            sql.append("JOIN taskproject tp ON tp.task_id = t.id "
+                       "JOIN project p ON p.id = tp.project_id")
+            where.append("p.name = :p_name")
+            params["p_name"] = project
+
+        if owner:
+            main_user = s.exec(select(User).where(User.name == owner)).first()
+            if main_user is None:
+                return {"tasks": [], "total": 0}
+            sql.append("JOIN taskowner to_j ON to_j.task_id = t.id")
+            where.append("to_j.user_id = :o_uid")
+            params["o_uid"] = main_user.id
+
+        if status:
+            where.append("t.status = :status")
+            params["status"] = status
+
+        if q:
+            where.append("(t.title LIKE :qlike OR t.task_uuid = :qexact)")
+            params["qlike"] = f"%{q}%"
+            params["qexact"] = q
+
+        sql.append("WHERE " + " AND ".join(where))
+        sql.append("ORDER BY t.updated_at DESC")
+        sql.append("LIMIT :limit OFFSET :offset")
+        params["limit"] = limit
+        params["offset"] = offset
+
+        rows = arch.exec(text(" ".join(sql)).bindparams(**params)).all()
+        task_ids = [int(r[0]) for r in rows]
+        if not task_ids:
+            return {"tasks": [], "total": 0}
+
+        tasks = arch.exec(
+            select(Task).where(Task.id.in_(task_ids))  # type: ignore[attr-defined]
+        ).all()
+        by_id = {t.id: t for t in tasks}
+        note_by_id: dict[int, Note] = {
+            n.id: n for n in arch.exec(
+                select(Note).where(Note.id.in_({t.note_id for t in tasks}))  # type: ignore[attr-defined]
+            ).all()
+        }
+
+        owners_by_tid: dict[int, list[int]] = {}
+        projects_by_tid: dict[int, list[int]] = {}
+        features_by_tid: dict[int, list[int]] = {}
+        for r in arch.exec(
+            text("SELECT task_id, user_id FROM taskowner WHERE task_id IN :ids")
+            .bindparams(bindparam("ids", expanding=True))
+                .bindparams(ids=task_ids),
+        ).all():
+            owners_by_tid.setdefault(r[0], []).append(r[1])
+        for r in arch.exec(
+            text("SELECT task_id, project_id FROM taskproject WHERE task_id IN :ids")
+            .bindparams(bindparam("ids", expanding=True))
+                .bindparams(ids=task_ids),
+        ).all():
+            projects_by_tid.setdefault(r[0], []).append(r[1])
+        for r in arch.exec(
+            text("SELECT task_id, feature_id FROM taskfeature WHERE task_id IN :ids")
+            .bindparams(bindparam("ids", expanding=True))
+                .bindparams(ids=task_ids),
+        ).all():
+            features_by_tid.setdefault(r[0], []).append(r[1])
+
+        project_by_id = {p.id: p.name for p in arch.exec(select(Project)).all()}
+        feature_by_id = {f.id: f.name for f in arch.exec(select(Feature)).all()}
+
+        attrs_by_tid: dict[int, dict[str, str]] = {}
+        for r in arch.exec(
+            text("SELECT task_id, key, value FROM taskattr "
+                 "WHERE task_id IN :ids AND key IN ('priority', 'eta')")
+            .bindparams(bindparam("ids", expanding=True))
+            .bindparams(ids=task_ids),
+        ).all():
+            attrs_by_tid.setdefault(int(r[0]), {})[str(r[1])] = str(r[2])
+
+    all_uids = {uid for uids in owners_by_tid.values() for uid in uids}
+    user_by_id: dict[int, str] = {}
+    if all_uids:
+        for u in s.exec(
+            select(User).where(User.id.in_(all_uids))  # type: ignore[attr-defined]
+        ).all():
+            user_by_id[u.id] = u.name
+
+    out: list[dict[str, Any]] = []
+    for tid in task_ids:
+        t = by_id.get(tid)
+        if t is None:
+            continue
+        note = note_by_id.get(t.note_id)
+        if note is None:
+            continue
+        note_project = _project_for_path(note.path)
+        if not is_admin and note_project not in visible_projects:
+            continue
+        out.append(
+            _archive_task_row(
+                t, note.path,
+                user_by_id, project_by_id, feature_by_id,
+                owners_by_tid, projects_by_tid, features_by_tid,
+                attrs_by_tid,
+            )
+        )
+    return {"tasks": out, "total": len(out)}
+
+
+@router.get("/archive/tasks/{task_uuid}")
+def get_archived_task(
+    task_uuid: str,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    with _open_archive_session() as arch:
+        t = arch.exec(select(Task).where(Task.task_uuid == task_uuid)).first()
+        if t is None:
+            raise HTTPException(404, "archived task not found")
+        note = arch.get(Note, t.note_id)
+        if note is None:
+            raise HTTPException(500, "orphan archive task")
+
+        owners = [r[0] for r in arch.exec(
+            text("SELECT user_id FROM taskowner WHERE task_id = :i")
+            .bindparams(i=t.id)
+        ).all()]
+        project_ids = [r[0] for r in arch.exec(
+            text("SELECT project_id FROM taskproject WHERE task_id = :i")
+            .bindparams(i=t.id)
+        ).all()]
+        feature_ids = [r[0] for r in arch.exec(
+            text("SELECT feature_id FROM taskfeature WHERE task_id = :i")
+            .bindparams(i=t.id)
+        ).all()]
+        project_by_id = {p.id: p.name for p in arch.exec(select(Project)).all()}
+        feature_by_id = {f.id: f.name for f in arch.exec(select(Feature)).all()}
+
+        attrs: dict[str, str] = {}
+        for r in arch.exec(
+            text("SELECT key, value FROM taskattr WHERE task_id = :i "
+                 "AND key IN ('priority', 'eta')")
+            .bindparams(i=t.id)
+        ).all():
+            attrs[str(r[0])] = str(r[1])
+
+    note_project = _project_for_path(note.path)
+    if _user_role_for_project(s, user, note_project) == "none":
+        raise HTTPException(403, "no access")
+
+    user_by_id: dict[int, str] = {}
+    if owners:
+        for u in s.exec(
+            select(User).where(User.id.in_(owners))  # type: ignore[attr-defined]
+        ).all():
+            user_by_id[u.id] = u.name
+
+    return _archive_task_row(
+        t, note.path,
+        user_by_id, project_by_id, feature_by_id,
+        {t.id: owners}, {t.id: project_ids}, {t.id: feature_ids},
+        {t.id: attrs},
+    )
+
+
+@router.get("/archive/projects")
+def list_archived_projects(
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> list[dict[str, Any]]:
+    """Projects flagged ``Project.archived == True`` in main.db that the
+    caller has visibility for.  Includes archive.db note+task counts."""
+    is_admin, visible_projects = _visible_projects(s, user)
+    rows = s.exec(
+        select(Project).where(Project.archived == True)  # noqa: E712
+        .order_by(Project.name)  # type: ignore[attr-defined]
+    ).all()
+
+    with _open_archive_session() as arch:
+        out: list[dict[str, Any]] = []
+        for p in rows:
+            if not is_admin and p.name not in visible_projects:
+                continue
+            arch_proj = arch.exec(
+                select(Project).where(Project.name == p.name)
+            ).first()
+            task_count = 0
+            note_count = 0
+            if arch_proj is not None:
+                trow = arch.exec(
+                    text(
+                        "SELECT COUNT(DISTINCT t.id) FROM task t "
+                        "JOIN taskproject tp ON tp.task_id = t.id "
+                        "WHERE tp.project_id = :pid"
+                    ).bindparams(pid=arch_proj.id)
+                ).first()
+                task_count = int(trow[0]) if trow else 0
+            prefix = f"{p.name}/"
+            nrow = arch.exec(
+                text(
+                    "SELECT COUNT(*) FROM note "
+                    "WHERE path = :name OR path LIKE :prefix"
+                ).bindparams(name=p.name, prefix=f"{prefix}%")
+            ).first()
+            note_count = int(nrow[0]) if nrow else 0
+            out.append({
+                "name": p.name,
+                "archived": True,
+                "note_count": note_count,
+                "task_count": task_count,
+            })
+    return out
+
+
+@router.get("/archive/summary")
+def archive_summary(
+    project: Optional[str] = None,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    """Aggregate counts across the archive: totals + by status + by
+    project + top owners.  Scoped to projects the caller can access.
+    """
+    is_admin, visible_projects = _visible_projects(s, user)
+
+    with _open_archive_session() as arch:
+        base_sql = (
+            "SELECT t.id, t.status, p.name AS project_name "
+            "FROM task t JOIN note n ON n.id = t.note_id "
+            "LEFT JOIN taskproject tp ON tp.task_id = t.id "
+            "LEFT JOIN project p ON p.id = tp.project_id"
+        )
+        where = []
+        params: dict[str, Any] = {}
+        if project:
+            where.append("p.name = :p_name")
+            params["p_name"] = project
+        if where:
+            base_sql += " WHERE " + " AND ".join(where)
+        rows = arch.exec(text(base_sql).bindparams(**params)).all()
+
+        # Owner lookup — collect all task_ids first, then batch.
+        task_ids = [int(r[0]) for r in rows]
+        owner_rows: list[tuple[int, int]] = []
+        if task_ids:
+            owner_rows = [
+                (int(r[0]), int(r[1])) for r in arch.exec(
+                    text("SELECT task_id, user_id FROM taskowner "
+                         "WHERE task_id IN :ids")
+                    .bindparams(bindparam("ids", expanding=True))
+                .bindparams(ids=task_ids),
+                ).all()
+            ]
+
+    total = 0
+    by_status: dict[str, int] = {}
+    by_project: dict[str, int] = {}
+    task_projects: dict[int, str] = {}
+    for tid, status, project_name in rows:
+        tid = int(tid)
+        proj_name = project_name or ""
+        if not is_admin and proj_name and proj_name not in visible_projects:
+            continue
+        if not is_admin and not proj_name:
+            continue
+        total += 1
+        by_status[status] = by_status.get(status, 0) + 1
+        by_project[proj_name] = by_project.get(proj_name, 0) + 1
+        task_projects[tid] = proj_name
+
+    owner_counts: dict[int, int] = {}
+    for tid, uid in owner_rows:
+        if tid not in task_projects:
+            continue
+        owner_counts[uid] = owner_counts.get(uid, 0) + 1
+
+    top_uids = sorted(owner_counts.keys(), key=lambda u: -owner_counts[u])[:20]
+    name_by_uid: dict[int, str] = {}
+    if top_uids:
+        for u in s.exec(
+            select(User).where(User.id.in_(top_uids))  # type: ignore[attr-defined]
+        ).all():
+            name_by_uid[u.id] = u.name
+
+    top_owners = [
+        {"name": name_by_uid.get(uid, f"user#{uid}"), "count": owner_counts[uid]}
+        for uid in top_uids
+    ]
+
+    return {
+        "total_tasks": total,
+        "by_status": by_status,
+        "by_project": by_project,
+        "top_owners": top_owners,
+    }
+
+
 # ---------- create task (issue #63) ----------------------------------------
 
 class TaskCreate(BaseModel):

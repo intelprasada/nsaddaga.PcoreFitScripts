@@ -177,6 +177,30 @@ export interface ProjectMember {
   role: "manager" | "member";
 }
 
+export interface ArchivedTask {
+  id: number;
+  task_uuid: string | null;
+  note_path: string;
+  title: string;
+  status: string;
+  priority: string | null;
+  eta: string | null;
+  kind: string;
+  slug: string;
+  created_at: string;
+  updated_at: string;
+  owners: string[];
+  projects: string[];
+  features: string[];
+}
+
+export interface ArchiveSummary {
+  total_tasks: number;
+  by_status: Record<string, number>;
+  by_project: Record<string, number>;
+  top_owners: { name: string; count: number }[];
+}
+
 export const api = {
   notes: () => req<{ id: number; path: string; title: string }[]>("/notes"),
   note:  (id: number) => req<{ id: number; path: string; title: string; body_md: string; etag: string; prose_etag?: string; tasks_etag?: string }>(`/notes/${id}`),
@@ -299,6 +323,60 @@ export const api = {
   projectNotes: (project: string) =>
     req<TreeNote[]>(`/projects/${encodeURIComponent(project)}/notes`),
   tree: () => req<TreeNode[]>("/tree"),
+
+  // ── #304 archive/unarchive ────────────────────────────────────────────
+  archiveNote: (id: number) =>
+    req<{ archived: number; project?: string; archive_kind?: string }>(
+      `/notes/${id}/archive`, { method: "POST" },
+    ),
+  unarchiveNote: (id: number) =>
+    req<{ unarchived: number; notes: string[]; reindexed_tasks: number }>(
+      `/notes/${id}/unarchive`, { method: "POST" },
+    ),
+  archiveProject: (project: string) =>
+    req<{ project: string; archived: number; skipped_rollover: number }>(
+      `/projects/${encodeURIComponent(project)}/archive`, { method: "POST" },
+    ),
+  unarchiveProject: (project: string) =>
+    req<{ project: string; unarchived: number; reindexed_tasks: number }>(
+      `/projects/${encodeURIComponent(project)}/unarchive`, { method: "POST" },
+    ),
+  archiveReconcile: () =>
+    req<{ scanned: number; orphans_dropped: number }>(
+      "/archive/reconcile", { method: "POST" },
+    ),
+  archivedNotes: () =>
+    req<{ id: number; path: string; title: string; project: string | null;
+          updated_at: string; task_count: number }[]>("/archive/notes"),
+  archivedNoteDetail: (id: number) =>
+    req<{ id: number; path: string; title: string; body_md: string;
+          project: string | null; updated_at: string;
+          tasks: ArchivedTask[] }>(`/archive/notes/${id}`),
+  archivedTasks: (params?: {
+    project?: string; owner?: string; status?: string; q?: string;
+    limit?: number; offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params?.project) qs.set("project", params.project);
+    if (params?.owner) qs.set("owner", params.owner);
+    if (params?.status) qs.set("status", params.status);
+    if (params?.q) qs.set("q", params.q);
+    if (params?.limit != null) qs.set("limit", String(params.limit));
+    if (params?.offset != null) qs.set("offset", String(params.offset));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return req<{ tasks: ArchivedTask[]; total: number }>(
+      `/archive/tasks${suffix}`,
+    );
+  },
+  archivedTaskDetail: (task_uuid: string) =>
+    req<ArchivedTask>(`/archive/tasks/${task_uuid}`),
+  archivedProjects: () =>
+    req<{ name: string; archived: true; note_count: number;
+          task_count: number }[]>("/archive/projects"),
+  archiveSummary: (project?: string) => {
+    const suffix = project ? `?project=${encodeURIComponent(project)}` : "";
+    return req<ArchiveSummary>(`/archive/summary${suffix}`);
+  },
 
   projectMembers: (project: string) =>
     req<ProjectMember[]>(`/projects/${encodeURIComponent(project)}/members`),
