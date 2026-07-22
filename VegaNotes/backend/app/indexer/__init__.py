@@ -227,6 +227,7 @@ def apply_single_task_patch_to_index(
     features: list[str] | None = None,
     title: str | None = None,
     add_note: str | None = None,
+    link_attrs: dict[str, list[str]] | None = None,
 ) -> None:
     """Cheap variant of :func:`reindex_file` for a single-task popover patch.
 
@@ -379,6 +380,20 @@ def apply_single_task_patch_to_index(
             session.add(TaskAttr(
                 task_id=task_id, key="note", value=txt, value_norm=None,
             ))
+
+    # #314: external-URL capsule tokens (url / hsd / jira / pr). Each key
+    # is a full replacement — delete all existing TaskAttr rows for that
+    # key, then re-insert one row per cleaned value.  Empty list clears.
+    if link_attrs:
+        for _k, _values in link_attrs.items():
+            session.exec(
+                text("DELETE FROM taskattr WHERE task_id = :tid AND key = :k")
+                .bindparams(tid=task_id, k=_k)
+            )
+            for _v in _values:
+                session.add(TaskAttr(
+                    task_id=task_id, key=_k, value=_v, value_norm=_v.lower(),
+                ))
 
 
 def update_note_body_only(

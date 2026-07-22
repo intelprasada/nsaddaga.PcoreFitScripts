@@ -1139,6 +1139,14 @@ def patch_ref_rows(md: str, ref_id: str, patch: dict) -> tuple[str, bool]:
             cleaned = [f.strip() for f in patch["features"] if f and f.strip()]
             md = replace_multi_attr(md, line_no, "feature", cleaned)
             changed = True
+        # #314: propagate url/hsd/jira/pr link-token replacements to every
+        # #task / #AR ref row that mirrors this task.  Same semantics as
+        # ``features`` above: pass a list for full replacement, ``[]`` clears.
+        for _link_key in ("url", "hsd", "jira", "pr"):
+            if _link_key in patch:
+                _cleaned = [v.strip() for v in patch[_link_key] if v and v.strip()]
+                md = replace_multi_attr(md, line_no, _link_key, _cleaned)
+                changed = True
         if "add_note" in patch and patch["add_note"]:
             md = append_note(md, line_no, patch["add_note"])
             changed = True

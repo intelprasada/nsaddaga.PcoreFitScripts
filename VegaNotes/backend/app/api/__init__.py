@@ -2886,6 +2886,13 @@ class TaskPatch(BaseModel):
     eta: Optional[str] = None       # e.g. "2026-W18", "2026-04-30", or "" to clear
     owners: Optional[list[str]] = None    # full replacement; [] clears
     features: Optional[list[str]] = None  # full replacement; [] clears
+    # #314: external-URL capsule tokens. Each is a full replacement; ``[]``
+    # clears all values for that key. Values must be whitespace-free (the
+    # lexer reads a single word); URL-encode spaces if needed.
+    url: Optional[list[str]] = None    # generic ``#url <val>``; supports ``LABEL:url`` prefix
+    hsd: Optional[list[str]] = None    # ``#hsd <id>`` -> hsdes.intel.com
+    jira: Optional[list[str]] = None   # ``#jira <KEY>`` -> jira.devtools.intel.com
+    pr: Optional[list[str]] = None     # ``#pr <owner/repo#N>`` -> github.com
     # New title text (trimmed). None = no change. Empty string is rejected
     # because a blank declaration line cannot be re-parsed. The keyword
     # (!task / !AR) and every trailing #attr / @owner token are preserved.
@@ -3091,6 +3098,22 @@ def patch_task(
             cleaned = [f.strip() for f in body.features if f and f.strip()]
             md = replace_multi_attr(md, t.line, "feature", cleaned)
             changed = True
+        # #314: external-URL capsule tokens. Values must be whitespace-free
+        # (validated up-front so we fail before rewriting the file).
+        for _link_key in ("url", "hsd", "jira", "pr"):
+            _link_val = getattr(body, _link_key)
+            if _link_val is None:
+                continue
+            _cleaned = [v.strip() for v in _link_val if v and v.strip()]
+            for _v in _cleaned:
+                if any(ch.isspace() for ch in _v):
+                    raise HTTPException(
+                        400,
+                        f"#{_link_key} value must not contain whitespace; "
+                        "URL-encode spaces or drop the token",
+                    )
+            md = replace_multi_attr(md, t.line, _link_key, _cleaned)
+            changed = True
         if body.add_note is not None and body.add_note.strip():
             # Guardrail: refuse note text that looks like a task / AR declaration.
             # Persisting it as a `#note` continuation would silently lose the
@@ -3146,6 +3169,12 @@ def patch_task(
             features=body.features,
             title=body.title.strip() if body.title is not None else None,
             add_note=body.add_note,
+            # #314: pass link-token replacements through to the index update.
+            link_attrs={
+                k: [v.strip() for v in getattr(body, k) if v and v.strip()]
+                for k in ("url", "hsd", "jira", "pr")
+                if getattr(body, k) is not None
+            },
         )
 
     # ── Propagate to all ref-row files ────────────────────────────────────
@@ -3167,6 +3196,14 @@ def patch_task(
             ref_patch["owners"] = [o.strip().lstrip("@") for o in body.owners if o and o.strip()]
         if body.features is not None:
             ref_patch["features"] = [f.strip() for f in body.features if f and f.strip()]
+        # #314: propagate link-token replacements to every ref row so the
+        # cross-file @link mirror stays consistent with the canonical decl.
+        for _link_key in ("url", "hsd", "jira", "pr"):
+            _link_val = getattr(body, _link_key)
+            if _link_val is not None:
+                ref_patch[_link_key] = [
+                    v.strip() for v in _link_val if v and v.strip()
+                ]
         # Notes are journal entries — propagate them too so cross-file
         # ref rows (e.g. a weekly note's `#task T-XXX` reference) carry
         # the same audit trail as the canonical declaration. See user

@@ -48,6 +48,11 @@ export const REGISTRY: Record<string, TokenSpec> = {
   estimate: { name: "estimate", multi: false, normalize: (v) => parseDuration(v) },
   feature:  { name: "feature",  multi: true },
   link:     { name: "link",     multi: true },
+  // #314: external-URL capsule tokens (mirrors backend/app/parser/tokens.py).
+  url:      { name: "url",      multi: true },
+  hsd:      { name: "hsd",      multi: true },
+  jira:     { name: "jira",     multi: true },
+  pr:       { name: "pr",       multi: true },
 };
 
 export const isKnown = (name: string): boolean => name in REGISTRY;

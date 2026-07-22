@@ -264,6 +264,12 @@ export const api = {
     eta?: string;
     owners?: string[];
     features?: string[];
+    // #314: external-URL capsule tokens. Each is a full replacement;
+    // pass ``[]`` to clear all values for a key.
+    url?: string[];
+    hsd?: string[];
+    jira?: string[];
+    pr?: string[];
     add_note?: string;
     notes?: string;
     title?: string;

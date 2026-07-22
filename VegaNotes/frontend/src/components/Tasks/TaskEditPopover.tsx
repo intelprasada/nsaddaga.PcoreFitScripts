@@ -173,6 +173,17 @@ function PopoverForm({
   const initialEta = task.eta ?? "";
   const initialOwners = task.owners.join(", ");
   const initialFeatures = task.features.join(", ");
+  // #314: link tokens live in task.attrs (multi-valued strings). Join with
+  // commas for the CSV-style editor pattern used elsewhere in this popover.
+  const attrCsv = (key: string): string => {
+    const v = task.attrs[key];
+    if (!v) return "";
+    return (Array.isArray(v) ? v : [v]).join(", ");
+  };
+  const initialHsd = attrCsv("hsd");
+  const initialJira = attrCsv("jira");
+  const initialPr = attrCsv("pr");
+  const initialUrl = attrCsv("url");
   const noteHistory = task.note_history ?? (task.notes ? task.notes.split("\n").filter(Boolean) : []);
 
   const [status, setStatus] = useState(task.status);
@@ -180,6 +191,11 @@ function PopoverForm({
   const [eta, setEta] = useState(initialEta);
   const [owners, setOwners] = useState(initialOwners);
   const [features, setFeatures] = useState(initialFeatures);
+  // #314
+  const [hsd, setHsd] = useState(initialHsd);
+  const [jira, setJira] = useState(initialJira);
+  const [pr, setPr] = useState(initialPr);
+  const [urlField, setUrlField] = useState(initialUrl);
   const [newNote, setNewNote] = useState("");
   const [newArTitle, setNewArTitle] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -240,6 +256,20 @@ function PopoverForm({
       if (newOwners.join(",") !== task.owners.join(",")) patch.owners = newOwners;
       const newFeatures = splitCsv(features);
       if (newFeatures.join(",") !== task.features.join(",")) patch.features = newFeatures;
+      // #314: link tokens.  Only send when the CSV actually differs from
+      // the initial value, so unchanged links don't force a rewrite of
+      // the markdown line every time the user hits Save.
+      const linkFields: [string, string, string][] = [
+        ["hsd",  hsd,      initialHsd],
+        ["jira", jira,     initialJira],
+        ["pr",   pr,       initialPr],
+        ["url",  urlField, initialUrl],
+      ];
+      for (const [key, cur, orig] of linkFields) {
+        if (cur !== orig) {
+          patch[key] = splitCsv(cur);
+        }
+      }
       if (newNote.trim()) patch.add_note = newNote;
       if (Object.keys(patch).length === 0) return Promise.resolve(task);
       return api.updateTask(task.task_uuid ?? task.id, patch);
@@ -456,6 +486,30 @@ function PopoverForm({
             <input className="border rounded px-2 py-1 text-sm w-full"
               value={features} onChange={(e) => setFeatures(e.target.value)}
               placeholder="auth, billing" />
+          </Field>
+
+          {/* #314: external-URL capsule tokens. Each field is CSV; whitespace
+              inside a value is rejected server-side. Values become clickable
+              chips rendered by <LinkChips />. */}
+          <Field label="HSD" hint="Comma-separated HSD IDs. e.g. 1234567, 2345678">
+            <input className="border rounded px-2 py-1 text-sm w-full font-mono"
+              value={hsd} onChange={(e) => setHsd(e.target.value)}
+              placeholder="1234567" />
+          </Field>
+          <Field label="JIRA" hint="Comma-separated Jira keys. e.g. ABC-42, XYZ-9">
+            <input className="border rounded px-2 py-1 text-sm w-full font-mono"
+              value={jira} onChange={(e) => setJira(e.target.value)}
+              placeholder="ABC-42" />
+          </Field>
+          <Field label="PR" hint="Comma-separated GitHub PRs as owner/repo#N.">
+            <input className="border rounded px-2 py-1 text-sm w-full font-mono"
+              value={pr} onChange={(e) => setPr(e.target.value)}
+              placeholder="owner/repo#42" />
+          </Field>
+          <Field label="URLs" hint="Comma-separated URLs. Optional 'Label:https://…' prefix.">
+            <input className="border rounded px-2 py-1 text-sm w-full font-mono"
+              value={urlField} onChange={(e) => setUrlField(e.target.value)}
+              placeholder="https://example.com" />
           </Field>
 
           {extraTagChips(task).length > 0 && (
