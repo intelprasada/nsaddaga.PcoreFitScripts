@@ -3381,6 +3381,7 @@ def delete_task(
 def list_users(
     s: Session = Depends(get_session),
     with_display: bool = False,
+    project: str | None = Query(default=None, description="Restrict to users who own tasks in this project."),
 ) -> list[Any]:
     """List User.name values. When ``with_display=1`` returns a richer
     shape ``[{"name": "nsaddaga", "display": "Prasad Addagarla"}, ...]``
@@ -3391,14 +3392,41 @@ def list_users(
     least one task — keeps the FilterBar dropdown free of orphan rows
     left behind by pre-canonicalization (#174) reindexes.
 
+    #312: pass ``project=<name>`` to further restrict to users who own
+    at least one *active* task inside that project. Combined with the
+    fact that archived tasks live in ``archive.db`` (not this engine),
+    archiving a project or note causes its exclusive owners to drop
+    from every project-scoped users query — which is what the FilterBar,
+    per-task autocomplete, and owner chip suggestion lists want.
+
     Without the flag, returns a plain string list including all User
     rows (used by admin / member-management UIs that need every user)."""
     if not with_display:
-        return [u.name for u in s.exec(select(User).order_by(User.name)).all()]
-    rows = s.exec(
-        select(User.name).join(TaskOwner, TaskOwner.user_id == User.id)
-        .group_by(User.name).order_by(User.name)
-    ).all()
+        if project is None:
+            return [u.name for u in s.exec(select(User).order_by(User.name)).all()]
+        rows = s.exec(
+            select(User.name)
+            .join(TaskOwner, TaskOwner.user_id == User.id)
+            .join(TaskProject, TaskProject.task_id == TaskOwner.task_id)
+            .join(Project, Project.id == TaskProject.project_id)
+            .where(Project.name == project)
+            .group_by(User.name).order_by(User.name)
+        ).all()
+        return [r if isinstance(r, str) else r[0] for r in rows]
+    if project is None:
+        rows = s.exec(
+            select(User.name).join(TaskOwner, TaskOwner.user_id == User.id)
+            .group_by(User.name).order_by(User.name)
+        ).all()
+    else:
+        rows = s.exec(
+            select(User.name)
+            .join(TaskOwner, TaskOwner.user_id == User.id)
+            .join(TaskProject, TaskProject.task_id == TaskOwner.task_id)
+            .join(Project, Project.id == TaskProject.project_id)
+            .where(Project.name == project)
+            .group_by(User.name).order_by(User.name)
+        ).all()
     names = [r if isinstance(r, str) else r[0] for r in rows]
     disp = _owner_display_map(names)
     return [{"name": n, "display": disp.get(n, n)} for n in names]

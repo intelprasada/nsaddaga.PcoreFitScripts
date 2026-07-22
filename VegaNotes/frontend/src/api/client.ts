@@ -390,9 +390,15 @@ export const api = {
       method: "DELETE",
     }),
 
-  users: () => req<string[]>("/users"),
-  usersWithDisplay: () =>
-    req<{ name: string; display: string }[]>("/users?with_display=1"),
+  users: (project?: string) =>
+    req<string[]>(
+      "/users" + (project ? `?project=${encodeURIComponent(project)}` : ""),
+    ),
+  usersWithDisplay: (project?: string) =>
+    req<{ name: string; display: string }[]>(
+      "/users?with_display=1" +
+        (project ? `&project=${encodeURIComponent(project)}` : ""),
+    ),
   me: () => req<{ name: string; is_admin: boolean; tz?: string }>("/me"),
   changeMyPassword: (current_password: string, new_password: string) =>
     req<{ status: string }>("/me/password", {

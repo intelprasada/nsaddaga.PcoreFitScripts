@@ -92,6 +92,10 @@ export function Sidebar({ selectedPath, onSelect, onAfterDelete }: Props) {
     qc.invalidateQueries({ queryKey: ["notes"] });
     qc.invalidateQueries({ queryKey: ["tasks"] });
     qc.invalidateQueries({ queryKey: ["agenda"] });
+    // #312: users dropdown must refresh so owners whose last active task
+    // was just archived disappear from FilterBar / QuickChips /
+    // TaskEditPopover suggestion lists.
+    qc.invalidateQueries({ queryKey: ["users"] });
   };
 
   const create = useMutation({

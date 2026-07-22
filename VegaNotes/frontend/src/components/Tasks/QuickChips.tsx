@@ -250,13 +250,22 @@ export function OwnersChips({ task, canWrite }: { task: Task; canWrite: boolean 
   const [adding, setAdding]   = useState(false);
   const [newOwner, setNewOwner] = useState("");
   const { mutate, isPending }  = useTaskPatch(task.id);
-  const { data: knownUsers = [] } = useQuery({ queryKey: ["users"], queryFn: () => api.users() });
+  // #312: scope the autocomplete list to users who own tasks in this
+  // task's primary project. Tasks with no explicit project fall back to
+  // the global list. The datalist is still a *suggestion*, so users can
+  // always type any @name even if they aren't already in the project.
+  const taskProject = task.projects?.[0];
+  const { data: knownUsers = [] } = useQuery({
+    queryKey: ["users", taskProject ?? null],
+    queryFn: () => api.users(taskProject),
+  });
   // #226 follow-up: pull display names so chips render "Prasad Addagarla"
   // instead of bare idsids. Falls back to the raw value when no
-  // phonebook entry matches.
+  // phonebook entry matches.  Display names are project-scoped too so
+  // that archived users disappear from render lookups.
   const { data: knownUsersRich = [] } = useQuery({
-    queryKey: ["users", "withDisplay"],
-    queryFn: () => api.usersWithDisplay(),
+    queryKey: ["users", "withDisplay", taskProject ?? null],
+    queryFn: () => api.usersWithDisplay(taskProject),
   });
   const displayFor = (name: string): string => {
     const hit = knownUsersRich.find((u) => u.name === name);

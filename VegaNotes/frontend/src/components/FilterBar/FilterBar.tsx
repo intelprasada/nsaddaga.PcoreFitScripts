@@ -6,7 +6,15 @@ import { SavedViews } from "./SavedViews";
 
 export function FilterBar() {
   const { filters, patchFilters, clearFilters } = useUI();
-  const { data: users } = useQuery({ queryKey: ["users", "withDisplay"], queryFn: api.usersWithDisplay });
+  // #312: scope the owner dropdown to users with active tasks in the
+  // currently-selected project (if any). When ``filters.project`` is
+  // undefined we fall back to the global list. Including the project in
+  // the query key ensures switching projects triggers a refetch.
+  const projectScope = filters.project;
+  const { data: users } = useQuery({
+    queryKey: ["users", "withDisplay", projectScope ?? null],
+    queryFn: () => api.usersWithDisplay(projectScope),
+  });
   const { data: projects } = useQuery({ queryKey: ["projects"], queryFn: api.projects });
   const { data: features } = useQuery({ queryKey: ["features"], queryFn: api.features });
 
