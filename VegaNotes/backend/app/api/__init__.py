@@ -825,6 +825,151 @@ def delete_note(
     return {"status": "deleted"}
 
 
+# ---------- archive / unarchive (#304) --------------------------------------
+# User-driven archive: evict a note's or a project's derived rows from the
+# main DB into archive.db.  Rollover archives (`/_archive/` + archive_kind
+# in {'', 'rollover'}) are explicitly rejected by the archive_ops helper —
+# this feature does not touch them.
+
+def _open_archive_session() -> Session:
+    from ..db import get_archive_engine
+    return Session(get_archive_engine())
+
+
+@router.post("/notes/{note_id}/archive")
+def archive_note_endpoint(
+    note_id: int,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    from .. import archive_ops
+    n = s.get(Note, note_id)
+    if not n:
+        raise HTTPException(404, "note not found")
+    project = _project_for_path(n.path)
+    if project is None:
+        _require_root_admin(s, user, "archive")
+    else:
+        _require_project_access(s, user, project, need_manager=True)
+    if n.archive_kind in archive_ops.ROLLOVER_ARCHIVE_KINDS and \
+            archive_ops._is_rollover_path(n.path):
+        raise HTTPException(
+            409, "cannot user-archive a weekly rollover archive; "
+                 "these are managed by the rollover flow (#304 carve-out).",
+        )
+    with _open_archive_session() as archive:
+        result = archive_ops.archive_notes(s, archive, [note_id])
+    result["archive_kind"] = "user"
+    return result
+
+
+@router.post("/notes/{note_id}/unarchive")
+def unarchive_note_endpoint(
+    note_id: int,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    from .. import archive_ops
+    n = s.get(Note, note_id)
+    if not n:
+        raise HTTPException(404, "note not found")
+    project = _project_for_path(n.path)
+    if project is None:
+        _require_root_admin(s, user, "unarchive")
+    else:
+        _require_project_access(s, user, project, need_manager=True)
+    if n.archive_kind != "user":
+        raise HTTPException(
+            409,
+            f"note is not a user-archive (archive_kind={n.archive_kind!r}); "
+            f"rollover archives cannot be unarchived through this endpoint.",
+        )
+    full = settings.notes_dir / n.path
+    if not full.exists():
+        raise HTTPException(
+            409,
+            f"source file missing on disk: {n.path}. "
+            f"Restore it before unarchiving.",
+        )
+    with _open_archive_session() as archive:
+        result = archive_ops.unarchive_notes(s, archive, [note_id])
+    return result
+
+
+@router.post("/projects/{project}/archive")
+def archive_project_endpoint(
+    project: str,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    from .. import archive_ops
+    _require_project_access(s, user, project, need_manager=True)
+    proj = s.exec(select(Project).where(Project.name == project)).first()
+    # Gather every note under this project folder — includes root-level
+    # files exactly one level deep (top-level ``project/*.md`` files) as
+    # well as anything deeper. Rollover archives are filtered out by
+    # ``archive_ops.archive_notes`` itself.
+    prefix = f"{project}/"
+    candidates = s.exec(
+        select(Note).where(
+            (Note.path == project) | (Note.path.like(f"{prefix}%"))  # type: ignore[attr-defined]
+        )
+    ).all()
+    note_ids = [
+        n.id for n in candidates
+        if not (n.archive_kind in archive_ops.ROLLOVER_ARCHIVE_KINDS
+                and archive_ops._is_rollover_path(n.path))
+    ]
+    with _open_archive_session() as archive:
+        result = archive_ops.archive_notes(s, archive, note_ids)
+    # Mirror the note flag on the Project row so listing endpoints can
+    # skip archived projects without re-checking each note.
+    if proj is not None:
+        proj.archived = True
+        s.add(proj)
+        s.commit()
+    result["project"] = project
+    return result
+
+
+@router.post("/projects/{project}/unarchive")
+def unarchive_project_endpoint(
+    project: str,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    from .. import archive_ops
+    _require_project_access(s, user, project, need_manager=True)
+    proj = s.exec(select(Project).where(Project.name == project)).first()
+    prefix = f"{project}/"
+    candidates = s.exec(
+        select(Note).where(
+            ((Note.path == project) | (Note.path.like(f"{prefix}%")))  # type: ignore[attr-defined]
+            & (Note.archive_kind == "user")  # type: ignore[arg-type]
+        )
+    ).all()
+    note_ids = [n.id for n in candidates]
+    with _open_archive_session() as archive:
+        result = archive_ops.unarchive_notes(s, archive, note_ids)
+    if proj is not None:
+        proj.archived = False
+        s.add(proj)
+        s.commit()
+    result["project"] = project
+    return result
+
+
+@router.post("/archive/reconcile")
+def reconcile_archives_endpoint(
+    s: Session = Depends(get_session),
+    user: str = Depends(require_admin),
+) -> dict[str, Any]:
+    """Admin-only: repair after a crashed two-DB archive txn (#304)."""
+    from .. import archive_ops
+    with _open_archive_session() as archive:
+        return archive_ops.reconcile_archives(s, archive)
+
+
 # ---------- create task (issue #63) ----------------------------------------
 
 class TaskCreate(BaseModel):
