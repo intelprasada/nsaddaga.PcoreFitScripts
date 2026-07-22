@@ -136,6 +136,30 @@ def _is_skipped_path(rel: str) -> bool:
     return rel.startswith("_meta/") or "/_meta/" in f"/{rel}/"
 
 
+def _is_archived_target(session: Session, rel: str) -> bool:
+    """#304: True if *rel* belongs to a user-archived project or note.
+
+    Bulk-walker callers (``reindex_all`` / watcher) use this to skip
+    files whose task rows currently live in ``archive.db`` — reindexing
+    them from disk would race the eviction that ``archive_notes`` just
+    performed.  Direct API callers (``PUT /api/notes``, unarchive,
+    rollover) legitimately need to (re)derive rows for archived paths
+    and MUST bypass this helper.
+    """
+    parts = Path(rel).parts
+    folder_project = parts[0] if len(parts) >= 2 else None
+    if folder_project:
+        proj = session.exec(
+            select(Project).where(Project.name == folder_project)
+        ).first()
+        if proj is not None and proj.archived:
+            return True
+    note = session.exec(select(Note).where(Note.path == rel)).first()
+    if note is not None and note.archive_kind == "user":
+        return True
+    return False
+
+
 def reindex_file(path: Path, session: Session) -> Note | None:
     rel = str(path.relative_to(settings.notes_dir))
     # Guard against callers (``/api/tree``, ``/api/projects/{p}/notes``,
@@ -807,6 +831,22 @@ def reindex_all(session: Session) -> int:
     n = 0
     present: set[str] = set()
     archived_paths: set[str] = set()
+
+    # #304: archived-project + user-archived-note carve-out.  Bulk walker
+    # must NOT re-derive task rows for these paths — those task rows now
+    # live in ``archive.db`` and re-derivation would race the archive
+    # eviction / duplicate rows.  Cache once per sweep to keep this cheap.
+    archived_project_names: set[str] = {
+        p.name for p in session.exec(
+            select(Project).where(Project.archived == True)  # noqa: E712
+        ).all()
+    }
+    user_archived_note_paths: set[str] = {
+        r[0] for r in session.exec(
+            text("SELECT path FROM note WHERE archive_kind = 'user'")
+        ).all()
+    }
+
     for path in sorted(settings.notes_dir.rglob("*.md")):
         # Skip the per-write backup tree — paths under any ``.trash`` segment
         # are not real notes.  ``rglob('*.md')`` already excludes ``.bak``
@@ -836,6 +876,19 @@ def reindex_all(session: Session) -> int:
         # below) so the body-prose copy stays browsable via
         # ``?include_archived=1``; we just don't re-derive its tasks.
         if "/_archive/" in f"/{rel}/":
+            archived_paths.add(rel)
+            continue
+        # #304: user-archived project (whole folder) — Note rows for
+        # files under it must remain but their tasks stay evicted.
+        parts = Path(rel).parts
+        folder_project = parts[0] if len(parts) >= 2 else None
+        if folder_project and folder_project in archived_project_names:
+            archived_paths.add(rel)
+            continue
+        # #304: individual user-archived note — same protection at the
+        # per-file grain (e.g. archived a note before its parent project
+        # was archived, or archived a top-level note).
+        if rel in user_archived_note_paths:
             archived_paths.add(rel)
             continue
         reindex_file(path, session)
@@ -1054,6 +1107,12 @@ async def watch_loop() -> None:
                     or rel.startswith("_meta/")
                     or "/_meta/" in f"/{rel}/"
                 ):
+                    continue
+                # #304: skip mutations under user-archived projects and
+                # to individual user-archived notes.  These files exist
+                # on disk (browsable) but their task rows live in
+                # ``archive.db``; re-indexing would race the eviction.
+                if _is_archived_target(s, rel):
                     continue
                 if change == Change.deleted or not path.exists():
                     remove_path(rel, s)
