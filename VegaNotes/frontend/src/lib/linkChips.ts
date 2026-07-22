@@ -52,12 +52,36 @@ export function urlDisplayLabel(raw: string): string {
 }
 
 /**
- * Build a chip for a generic ``#url`` value. Supports an optional
- * ``LABEL:url`` prefix: ``#url Design:https://…`` renders as ``Design``.
+ * Build a chip for a ``#url`` value.  Preferred syntax (#316):
+ *
+ * - ``[Design Doc](https://example.com/design)`` — markdown link.  The
+ *   bracketed text becomes the chip label; the parenthesised text is
+ *   the href.  This is the recommended form because the raw markdown
+ *   also renders as a real link in any generic MD viewer.
+ *
+ * Backward-compat fallbacks:
+ *
+ * - ``Design:https://example.com/design`` — ``LABEL:url`` shorthand.
+ * - Bare ``https://example.com/foo`` — chip labeled with the hostname.
  */
 export function buildUrlChip(raw: string): LinkChipData | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
+
+  // 1. Markdown link: [label](url)
+  const md = trimmed.match(/^\[([^\]]+)\]\((.+)\)$/s);
+  if (md) {
+    const label = md[1].trim();
+    const href = md[2].trim();
+    if (!label || !/^https?:\/\//.test(href)) return null;
+    return {
+      kind: "url", label, href,
+      colorClass: COLOR.url,
+      title: href,
+    };
+  }
+
+  // 2. LABEL:url shorthand — kept for compat with pre-#316 notes.
   let label = trimmed;
   let href = trimmed;
   const colonIdx = trimmed.indexOf(":");
@@ -72,6 +96,8 @@ export function buildUrlChip(raw: string): LinkChipData | null {
       href = rest;
     }
   }
+
+  // 3. Bare URL — hostname label (least aesthetic; nudge users to MD form).
   if (label === href) label = urlDisplayLabel(href);
   if (!/^https?:\/\//.test(href)) return null;
   return {

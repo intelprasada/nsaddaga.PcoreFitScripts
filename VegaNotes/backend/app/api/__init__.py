@@ -3098,20 +3098,27 @@ def patch_task(
             cleaned = [f.strip() for f in body.features if f and f.strip()]
             md = replace_multi_attr(md, t.line, "feature", cleaned)
             changed = True
-        # #314: external-URL capsule tokens. Values must be whitespace-free
-        # (validated up-front so we fail before rewriting the file).
+        # #314 / #316: external-URL capsule tokens.
+        # Non-#url values must remain whitespace-free (HSD ID, JIRA key,
+        # PR spec).  #url additionally accepts a markdown-link form
+        # ``[Label with spaces](https://…)`` whose interior spaces live
+        # inside the brackets — that shape is now the preferred syntax.
+        _md_link_re = _re.compile(r"^\[[^\]]+\]\([^\s()]+(?:\([^\s()]*\)[^\s()]*)*\)$")
         for _link_key in ("url", "hsd", "jira", "pr"):
             _link_val = getattr(body, _link_key)
             if _link_val is None:
                 continue
             _cleaned = [v.strip() for v in _link_val if v and v.strip()]
             for _v in _cleaned:
-                if any(ch.isspace() for ch in _v):
-                    raise HTTPException(
-                        400,
-                        f"#{_link_key} value must not contain whitespace; "
-                        "URL-encode spaces or drop the token",
-                    )
+                if not any(ch.isspace() for ch in _v):
+                    continue
+                if _link_key == "url" and _md_link_re.match(_v):
+                    continue
+                raise HTTPException(
+                    400,
+                    f"#{_link_key} value must not contain whitespace; "
+                    "URL-encode spaces or use `[Label](https://…)` MD form",
+                )
             md = replace_multi_attr(md, t.line, _link_key, _cleaned)
             changed = True
         if body.add_note is not None and body.add_note.strip():

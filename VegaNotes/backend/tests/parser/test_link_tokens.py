@@ -76,6 +76,46 @@ def test_link_token_value_stops_at_whitespace():
     assert t["attrs"]["jira"] == ["ABC-1"]
 
 
+def test_url_token_accepts_markdown_link_form():
+    """#316: `#url [Label](url)` MD syntax is read as a single value
+    including its internal whitespace.
+    """
+    body = "# T\n!task Ship #url [Design Doc](https://example.com/design)\n"
+    t = _task(body)
+    assert t["attrs"]["url"] == ["[Design Doc](https://example.com/design)"]
+
+
+def test_url_md_link_coexists_with_following_token():
+    body = (
+        "# T\n"
+        "!task Ship #url [Design Doc](https://example.com/design) "
+        "#hsd 1234567\n"
+    )
+    t = _task(body)
+    assert t["attrs"]["url"] == ["[Design Doc](https://example.com/design)"]
+    assert t["attrs"]["hsd"] == ["1234567"]
+
+
+def test_url_md_link_multiple_values():
+    body = (
+        "# T\n"
+        "!task Ship #url [A](https://a.example.com) #url [B](https://b.example.com)\n"
+    )
+    t = _task(body)
+    assert t["attrs"]["url"] == [
+        "[A](https://a.example.com)",
+        "[B](https://b.example.com)",
+    ]
+
+
+def test_url_md_link_tolerates_url_containing_parens():
+    body = "# T\n!task Ship #url [Wiki](https://en.wikipedia.org/wiki/Foo_(bar))\n"
+    t = _task(body)
+    assert t["attrs"]["url"] == [
+        "[Wiki](https://en.wikipedia.org/wiki/Foo_(bar))"
+    ]
+
+
 def test_existing_link_token_task_ref_still_creates_a_ref_not_a_url():
     """The pre-existing ``#link`` token (task-to-task ref) must not have
     been broken by adding the four new tokens.
