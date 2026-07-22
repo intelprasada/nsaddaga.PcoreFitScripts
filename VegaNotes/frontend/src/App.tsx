@@ -12,6 +12,7 @@ import { UnlockToast } from "./components/Me/UnlockToast";
 import { CelebrationOverlay } from "./components/Celebration/CelebrationOverlay";
 import { HelpView } from "./components/Help/HelpView";
 import { DashboardView } from "./components/Dashboard/DashboardView";
+import { ArchiveView } from "./components/Archive/ArchiveView";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { NoteEditor } from "./components/Editor/NoteEditor";
 import { Sidebar } from "./components/Sidebar/Sidebar";
@@ -41,6 +42,7 @@ function ViewSwitcher({ selectedPath, setSelectedPath, draft, setDraft }: {
     case "me":        return <MeView />;
     case "help":      return <HelpView />;
     case "dashboard": return <DashboardView />;
+    case "archive":   return <ArchiveView />;
     case "editor":    return <EditorPane selectedPath={selectedPath} setSelectedPath={setSelectedPath} draft={draft} setDraft={setDraft} />;
   }
 }
@@ -665,8 +667,8 @@ function NavBar() {
   const { view, set } = useUI();
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => api.me() });
   const [changingPw, setChangingPw] = useState(false);
-  const tabs: ("editor" | "kanban" | "agenda" | "timeline" | "calendar" | "graph" | "admin" | "my-tasks" | "me" | "help" | "dashboard")[] = [
-    "my-tasks", "editor", "kanban", "agenda", "timeline", "calendar", "graph", "me", "help", "dashboard",
+  const tabs: ("editor" | "kanban" | "agenda" | "timeline" | "calendar" | "graph" | "admin" | "my-tasks" | "me" | "help" | "dashboard" | "archive")[] = [
+    "my-tasks", "editor", "kanban", "agenda", "timeline", "calendar", "graph", "archive", "me", "help", "dashboard",
   ];
   if (me?.is_admin) tabs.push("admin");
 
@@ -702,7 +704,7 @@ function NavBar() {
       {tabs.map((v) => (
         <button key={v}
           className={`text-sm rounded px-2 py-1 ${view === v ? "bg-sky-100 text-sky-900" : "text-slate-600 hover:bg-slate-100"}`}
-          onClick={() => set({ view: v })}>{v === "dashboard" ? "📊 dashboard" : v}</button>
+          onClick={() => set({ view: v })}>{v === "dashboard" ? "📊 dashboard" : v === "archive" ? "🗄️ archive" : v}</button>
       ))}
       {me && (
         <span className="ml-auto text-xs text-slate-500">
