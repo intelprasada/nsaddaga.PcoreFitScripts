@@ -2583,13 +2583,28 @@ def phonebook_lookup(
 def list_projects(
     s: Session = Depends(get_session),
     user: str = Depends(require_user),
+    include_archived: bool = False,
 ) -> list[dict[str, Any]]:
-    """List projects = top-level subfolders of notes/. Includes the caller's role."""
+    """List projects = top-level subfolders of notes/. Includes the caller's role.
+
+    #310: user-archived projects (``Project.archived == True``) are hidden by
+    default so the sidebar tree and every project-dropdown consumer stop
+    surfacing them once the user opts them out of the active workspace.
+    Pass ``?include_archived=1`` to include archived projects (used only by
+    the Archive view and admin flows today).
+    """
     out: list[dict[str, Any]] = []
     nd = settings.notes_dir
     nd.mkdir(parents=True, exist_ok=True)
+    archived_names: set[str] = set()
+    if not include_archived:
+        archived_names = {
+            p.name for p in s.exec(select(Project).where(Project.archived == True)).all()  # noqa: E712
+        }
     for child in sorted(nd.iterdir()):
         if not child.is_dir() or child.name.startswith(".") or child.name == "_meta":
+            continue
+        if child.name in archived_names:
             continue
         role = _user_role_for_project(s, user, child.name)
         if role == "none":
@@ -2702,13 +2717,25 @@ def tree(
     Archived notes (rolled-forward weeklies under sibling ``_archive/``
     folders) are hidden by default to keep the active workspace focused
     on the current week.  Pass ``?include_archived=1`` to include them.
+
+    #310: user-archived projects (``Project.archived == True``) are also
+    hidden by default and skipped entirely — their folder still exists on
+    disk, but their derived task rows live in ``archive.db`` and must not
+    be lazily resurrected by the inline ``reindex_file`` self-heal below.
     """
     out: list[dict[str, Any]] = []
     nd = settings.notes_dir
     nd.mkdir(parents=True, exist_ok=True)
+    archived_names: set[str] = set()
+    if not include_archived:
+        archived_names = {
+            p.name for p in s.exec(select(Project).where(Project.archived == True)).all()  # noqa: E712
+        }
     # Top-level projects (folders)
     for child in sorted(nd.iterdir()):
         if not child.is_dir() or child.name.startswith(".") or child.name == "_meta":
+            continue
+        if child.name in archived_names:
             continue
         role = _user_role_for_project(s, user, child.name)
         if role == "none":
