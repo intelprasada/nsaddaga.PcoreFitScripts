@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     data_dir: Path = Field(default=Path("/data"))
     notes_subdir: str = "notes"
     db_filename: str = "index.sqlite"
+    # #304: sibling read-only(-ish) history DB. Populated by user-driven
+    # archive (POST /api/notes/{id}/archive) and drained by unarchive.
+    # Same schema as the main DB minus user-scoped tables. Kept in the
+    # same ``data_dir`` alongside ``db_filename``.
+    archive_db_filename: str = "archive.sqlite"
     timezone: str = "UTC"
     agenda_window_days: int = 7
 
@@ -67,6 +72,10 @@ class Settings(BaseSettings):
     @property
     def db_path(self) -> Path:
         return self.data_dir / self.db_filename
+
+    @property
+    def archive_db_path(self) -> Path:
+        return self.data_dir / self.archive_db_filename
 
 
 settings = Settings()

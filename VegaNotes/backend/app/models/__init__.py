@@ -21,6 +21,17 @@ class Note(SQLModel, table=True):
     # project managers (#251 follow-up).  Default views hide archived
     # notes unless the caller passes ``include_archived=1``.
     archived: bool = Field(default=False, index=True)
+    # Provenance for the archived flag (#304).
+    #   ""         — not archived, or a historical rollover archive that
+    #                predates this column (grandfathered; detected by
+    #                ``/_archive/`` path prefix).
+    #   "rollover" — set by future weekly rollover writes.
+    #   "user"     — set by explicit user-driven archive via
+    #                ``POST /api/notes/{id}/archive`` or
+    #                ``POST /api/projects/{name}/archive``. Only these
+    #                participate in main-DB row eviction and are copied
+    #                into the sibling ``archive.db`` for history queries.
+    archive_kind: str = Field(default="", index=True)
 
 
 class Task(SQLModel, table=True):
@@ -69,6 +80,11 @@ class TaskOwner(SQLModel, table=True):
 class Project(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
+    # #304: user-driven project archive. When True, the project's notes
+    # are hidden from default views and their derived Task/attr rows are
+    # evicted from the main DB (moved into archive.db). Reset by the
+    # unarchive endpoint, which re-derives rows via reindex_file().
+    archived: bool = Field(default=False, index=True)
 
 
 class TaskProject(SQLModel, table=True):
