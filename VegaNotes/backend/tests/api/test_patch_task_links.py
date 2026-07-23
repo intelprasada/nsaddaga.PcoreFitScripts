@@ -205,3 +205,61 @@ def test_patch_link_tokens_propagate_to_ref_rows(client):
         "ref-row propagation must apply the same #hsd token to referring "
         "files so the cross-file mirror stays consistent"
     )
+
+
+# ── #316: MD-link URL values ──────────────────────────────────────────────
+
+def test_patch_url_accepts_md_link_form_with_internal_spaces(client):
+    """#316: whitespace INSIDE a `[Label](url)` MD-link value is legal;
+    the whole bracketed span persists verbatim and re-reads correctly.
+    """
+    path = "p316-md/w1.md"
+    _put_note(client, path, "# t\n!task #id T-LNK0016 Ship @admin\n")
+
+    md_val = "[Design Doc](https://example.com/design)"
+    status, _ = _patch_task(client, "T-LNK0016", {"url": [md_val]})
+    assert status == 200, "MD-link URL values must be accepted despite internal spaces"
+
+    disk = _read_disk(path)
+    assert f"#url {md_val}" in disk
+
+    j = _get_task(client, "T-LNK0016")
+    assert _as_list(j["attrs"].get("url")) == [md_val]
+
+
+def test_patch_url_md_link_replace_cleans_prior_md_link_fully(client):
+    """Replacing an MD-form URL must strip the entire prior `[...]()`
+    span, not just the `[Label` prefix — otherwise the old label leaks
+    into the file as leftover prose.
+    """
+    path = "p316-replace/w1.md"
+    old = "[Design Doc](https://example.com/old)"
+    _put_note(
+        client, path,
+        f"# t\n!task #id T-LNK0017 Ship @admin #url {old}\n",
+    )
+    assert _as_list(_get_task(client, "T-LNK0017")["attrs"].get("url")) == [old]
+
+    new = "[Fresh Doc](https://example.com/new)"
+    status, _ = _patch_task(client, "T-LNK0017", {"url": [new]})
+    assert status == 200
+
+    disk = _read_disk(path)
+    assert "Design Doc" not in disk, (
+        "the previous MD-link label must be fully removed, not left as "
+        "orphaned prose after the replace"
+    )
+    assert f"#url {new}" in disk
+
+
+def test_patch_url_still_rejects_bare_whitespace_value(client):
+    """Whitespace in a bare (non-MD) URL is still rejected; MD form is
+    the only whitespace-tolerant shape."""
+    path = "p316-bare-ws/w1.md"
+    _put_note(client, path, "# t\n!task #id T-LNK0018 Ship @admin\n")
+
+    status, body = _patch_task(
+        client, "T-LNK0018", {"url": ["https://example.com/foo bar"]},
+    )
+    assert status == 400
+    assert "whitespace" in str(body).lower()

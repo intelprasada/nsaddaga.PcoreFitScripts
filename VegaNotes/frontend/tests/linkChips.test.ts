@@ -78,13 +78,29 @@ describe("buildPrChip", () => {
 });
 
 describe("buildUrlChip", () => {
+  it("parses markdown link `[Label](url)` — MD label wins over hostname", () => {
+    const c = buildUrlChip("[Design Doc](https://example.com/design)")!;
+    expect(c.label).toBe("Design Doc");
+    expect(c.href).toBe("https://example.com/design");
+    expect(c.kind).toBe("url");
+  });
+  it("trims whitespace inside `[]` and `()` of the MD form", () => {
+    const c = buildUrlChip("[  My Doc  ](  https://example.com/path  )")!;
+    expect(c.label).toBe("My Doc");
+    expect(c.href).toBe("https://example.com/path");
+  });
+  it("rejects a markdown link whose href is not http(s)", () => {
+    expect(buildUrlChip("[X](ftp://example.com)")).toBeNull();
+    expect(buildUrlChip("[X]()")).toBeNull();
+    expect(buildUrlChip("[](https://example.com)")).toBeNull();
+  });
   it("returns hostname label + href for a plain URL", () => {
     const c = buildUrlChip("https://example.com/foo")!;
     expect(c.label).toBe("example.com");
     expect(c.href).toBe("https://example.com/foo");
     expect(c.kind).toBe("url");
   });
-  it("supports LABEL:url shorthand", () => {
+  it("supports LABEL:url shorthand (legacy back-compat)", () => {
     const c = buildUrlChip("Design:https://example.com/design")!;
     expect(c.label).toBe("Design");
     expect(c.href).toBe("https://example.com/design");

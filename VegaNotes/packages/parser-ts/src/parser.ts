@@ -25,6 +25,25 @@ type Item = Token | TextChunk;
 
 const TOKEN_RE = /(!task|!AR)|#([a-zA-Z][\w-]*)|(?:^|(?<=[\s([]))@([a-zA-Z][\w.-]*)/g;
 
+function readMdLinkValue(s: string, i: number): [string, number] | null {
+  const n = s.length;
+  let j = i;
+  while (j < n && (s[j] === " " || s[j] === "\t")) j++;
+  const start = j;
+  if (j >= n || s[j] !== "[") return null;
+  const closeBr = s.indexOf("]", j + 1);
+  if (closeBr < 0 || closeBr + 1 >= n || s[closeBr + 1] !== "(") return null;
+  let depth = 1;
+  let k = closeBr + 2;
+  while (k < n && depth > 0) {
+    if (s[k] === "(") depth++;
+    else if (s[k] === ")") depth--;
+    k++;
+  }
+  if (depth !== 0) return null;
+  return [s.slice(start, k), k];
+}
+
 function readValue(s: string, i: number, untilHash = false): [string, number] {
   const n = s.length;
   while (i < n && (s[i] === " " || s[i] === "\t")) i++;
@@ -86,7 +105,16 @@ function lex(line: string): Item[] {
       // (including arbitrary unknown attrs) reads a single whitespace-
       // delimited value. Empty value → keep as prose (`#urgent`).
       const untilHash = known && (name === "status" || name === "note");
-      const [value, end] = readValue(line, TOKEN_RE.lastIndex, untilHash);
+      // #316: #url accepts `[Label](https://…)` MD-link values with
+      // internal whitespace so chips get a user-supplied label.
+      let value: string;
+      let end: number;
+      const md = known && name === "url" ? readMdLinkValue(line, TOKEN_RE.lastIndex) : null;
+      if (md) {
+        [value, end] = md;
+      } else {
+        [value, end] = readValue(line, TOKEN_RE.lastIndex, untilHash);
+      }
       if (!value.trim()) {
         out.push({ kind: "text", text: line.slice(start, end) });
         TOKEN_RE.lastIndex = end;

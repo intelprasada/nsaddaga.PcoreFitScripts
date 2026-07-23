@@ -216,6 +216,33 @@ function PopoverForm({
   const splitCsv = (s: string) =>
     s.split(",").map((x) => x.trim()).filter(Boolean);
 
+  // #316: URL field may contain markdown links `[Label](https://…)` which
+  // themselves can contain commas (in brackets or URL query strings).
+  // Split on top-level commas only — commas nested inside `[]` or `()`
+  // are treated as literal content.
+  const splitUrlCsv = (s: string): string[] => {
+    const out: string[] = [];
+    let buf = "";
+    let bracket = 0;
+    let paren = 0;
+    for (const ch of s) {
+      if (ch === "[") bracket++;
+      else if (ch === "]") bracket = Math.max(0, bracket - 1);
+      else if (ch === "(") paren++;
+      else if (ch === ")") paren = Math.max(0, paren - 1);
+      if (ch === "," && bracket === 0 && paren === 0) {
+        const t = buf.trim();
+        if (t) out.push(t);
+        buf = "";
+        continue;
+      }
+      buf += ch;
+    }
+    const tail = buf.trim();
+    if (tail) out.push(tail);
+    return out;
+  };
+
   const invalidateTaskCaches = () => {
     qc.invalidateQueries({ queryKey: ["tasks"] });
     qc.invalidateQueries({ queryKey: ["my-tasks"] });
@@ -267,7 +294,7 @@ function PopoverForm({
       ];
       for (const [key, cur, orig] of linkFields) {
         if (cur !== orig) {
-          patch[key] = splitCsv(cur);
+          patch[key] = key === "url" ? splitUrlCsv(cur) : splitCsv(cur);
         }
       }
       if (newNote.trim()) patch.add_note = newNote;
@@ -506,10 +533,10 @@ function PopoverForm({
               value={pr} onChange={(e) => setPr(e.target.value)}
               placeholder="owner/repo#42" />
           </Field>
-          <Field label="URLs" hint="Comma-separated URLs. Optional 'Label:https://…' prefix.">
+          <Field label="URLs" hint="Comma-separated. Preferred syntax: [Label](https://…) — the label becomes the chip text.">
             <input className="border rounded px-2 py-1 text-sm w-full font-mono"
               value={urlField} onChange={(e) => setUrlField(e.target.value)}
-              placeholder="https://example.com" />
+              placeholder="[Design Doc](https://example.com/design)" />
           </Field>
 
           {extraTagChips(task).length > 0 && (

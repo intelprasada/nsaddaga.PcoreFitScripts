@@ -74,6 +74,41 @@ _GAL_TAIL_STOPWORDS = frozenset({
 _TOKEN_NAMES_NEEDING_VALUE = {"task"}  # !task always takes a value (the title)
 
 
+def _read_md_link_value(s: str, i: int) -> tuple[str, int] | None:
+    """If the value at *i* is a markdown link ``[label](url)``, consume it
+    including any internal whitespace and return ``(raw, end)``.  Returns
+    ``None`` if the position is not the start of a well-formed MD link.
+
+    Used by the ``#url`` reader (#316) so users can write
+    ``#url [Design Doc](https://example.com/design)`` and have the whole
+    bracketed span become a single token value.  The scan is tolerant:
+    it walks a nesting counter over ``(``/``)`` so URLs containing
+    parentheses (rare but legal) still round-trip.
+    """
+    n = len(s)
+    j = i
+    while j < n and s[j] in " \t":
+        j += 1
+    start = j
+    if j >= n or s[j] != "[":
+        return None
+    # find matching ']'
+    close_br = s.find("]", j + 1)
+    if close_br < 0 or close_br + 1 >= n or s[close_br + 1] != "(":
+        return None
+    depth = 1
+    k = close_br + 2
+    while k < n and depth > 0:
+        if s[k] == "(":
+            depth += 1
+        elif s[k] == ")":
+            depth -= 1
+        k += 1
+    if depth != 0:
+        return None
+    return s[start:k], k
+
+
 def _read_value(s: str, i: int, *, until_hash: bool = False,
                 stop_at_delimiter: bool = False) -> tuple[str, int]:
     """Read a value starting at index i. Returns (value, end_index).
@@ -185,11 +220,21 @@ def lex(line: str) -> List[Union[TextChunk, Token]]:
             # `#foo #bar` lexes as two bare hashtags, not `foo="#bar"`.
             spec_known = is_known(name)
             use_until_hash = spec_known and name in ("status", "note")
-            value, end = _read_value(
-                line, m.end(),
-                until_hash=use_until_hash,
-                stop_at_delimiter=not use_until_hash,
-            )
+            # #316: #url accepts a markdown link `[Label](https://…)` value
+            # spanning internal whitespace, so users get an aesthetic
+            # user-supplied label instead of a raw hostname. Falls through
+            # to the normal reader if the value isn't a well-formed MD link.
+            md_read = None
+            if spec_known and name == "url":
+                md_read = _read_md_link_value(line, m.end())
+            if md_read is not None:
+                value, end = md_read
+            else:
+                value, end = _read_value(
+                    line, m.end(),
+                    until_hash=use_until_hash,
+                    stop_at_delimiter=not use_until_hash,
+                )
             if not value.strip():
                 # Empty value: is it a bare hashtag (presence tag on a
                 # task-attached line, #275) or a known-attr typo?
