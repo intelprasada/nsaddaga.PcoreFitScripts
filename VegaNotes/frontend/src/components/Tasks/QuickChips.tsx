@@ -16,6 +16,7 @@ import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type Task } from "../../api/client";
 import { formatIntelWw } from "@veganotes/parser";
+import { LinkChips } from "./LinkChips";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -368,6 +369,8 @@ export function QuickChips({ task, canWrite = true }: QuickChipsProps) {
       <PriorityChip task={task} canWrite={canWrite} />
       <EtaChip      task={task} canWrite={canWrite} />
       <OwnersChips  task={task} canWrite={canWrite} />
+      {/* #314: external-URL capsule chips (HSD / JIRA / PR / URL). */}
+      <LinkChips    task={task} />
     </>
   );
 }

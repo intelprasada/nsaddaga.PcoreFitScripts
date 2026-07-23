@@ -105,6 +105,16 @@ REGISTRY: Dict[str, TokenSpec] = {
     "feature":  TokenSpec("feature",  multi=True),
     "link":     TokenSpec("link",     multi=True),
     "note":     TokenSpec("note",     multi=True),
+    # #314: external-URL capsules. All stored as raw values; the
+    # frontend maps them to canonical URLs via ``linkChips.ts``:
+    #   #hsd  <numeric_id>       -> hsdes.intel.com
+    #   #jira <PROJ-KEY>         -> jira.devtools.intel.com
+    #   #pr   <owner/repo#N>     -> github.com/owner/repo/pull/N
+    #   #url  <full_url>         -> generic; optional ``LABEL:url`` prefix
+    "url":      TokenSpec("url",      multi=True),
+    "hsd":      TokenSpec("hsd",      multi=True),
+    "jira":     TokenSpec("jira",     multi=True),
+    "pr":       TokenSpec("pr",       multi=True),
 }
 
 
