@@ -825,6 +825,657 @@ def delete_note(
     return {"status": "deleted"}
 
 
+# ---------- archive / unarchive (#304) --------------------------------------
+# User-driven archive: evict a note's or a project's derived rows from the
+# main DB into archive.db.  Rollover archives (`/_archive/` + archive_kind
+# in {'', 'rollover'}) are explicitly rejected by the archive_ops helper —
+# this feature does not touch them.
+
+def _open_archive_session() -> Session:
+    from ..db import get_archive_engine
+    return Session(get_archive_engine())
+
+
+@router.post("/notes/{note_id}/archive")
+def archive_note_endpoint(
+    note_id: int,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    from .. import archive_ops
+    n = s.get(Note, note_id)
+    if not n:
+        raise HTTPException(404, "note not found")
+    project = _project_for_path(n.path)
+    if project is None:
+        _require_root_admin(s, user, "archive")
+    else:
+        _require_project_access(s, user, project, need_manager=True)
+    if n.archive_kind in archive_ops.ROLLOVER_ARCHIVE_KINDS and \
+            archive_ops._is_rollover_path(n.path):
+        raise HTTPException(
+            409, "cannot user-archive a weekly rollover archive; "
+                 "these are managed by the rollover flow (#304 carve-out).",
+        )
+    with _open_archive_session() as archive:
+        result = archive_ops.archive_notes(s, archive, [note_id])
+    result["archive_kind"] = "user"
+    return result
+
+
+@router.post("/notes/{note_id}/unarchive")
+def unarchive_note_endpoint(
+    note_id: int,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    from .. import archive_ops
+    n = s.get(Note, note_id)
+    if not n:
+        raise HTTPException(404, "note not found")
+    project = _project_for_path(n.path)
+    if project is None:
+        _require_root_admin(s, user, "unarchive")
+    else:
+        _require_project_access(s, user, project, need_manager=True)
+    if n.archive_kind != "user":
+        raise HTTPException(
+            409,
+            f"note is not a user-archive (archive_kind={n.archive_kind!r}); "
+            f"rollover archives cannot be unarchived through this endpoint.",
+        )
+    full = settings.notes_dir / n.path
+    if not full.exists():
+        raise HTTPException(
+            409,
+            f"source file missing on disk: {n.path}. "
+            f"Restore it before unarchiving.",
+        )
+    with _open_archive_session() as archive:
+        result = archive_ops.unarchive_notes(s, archive, [note_id])
+    return result
+
+
+@router.post("/projects/{project}/archive")
+def archive_project_endpoint(
+    project: str,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    from .. import archive_ops
+    _require_project_access(s, user, project, need_manager=True)
+    proj = s.exec(select(Project).where(Project.name == project)).first()
+    # Gather every note under this project folder — includes root-level
+    # files exactly one level deep (top-level ``project/*.md`` files) as
+    # well as anything deeper. Rollover archives are filtered out by
+    # ``archive_ops.archive_notes`` itself.
+    prefix = f"{project}/"
+    candidates = s.exec(
+        select(Note).where(
+            (Note.path == project) | (Note.path.like(f"{prefix}%"))  # type: ignore[attr-defined]
+        )
+    ).all()
+    note_ids = [
+        n.id for n in candidates
+        if not (n.archive_kind in archive_ops.ROLLOVER_ARCHIVE_KINDS
+                and archive_ops._is_rollover_path(n.path))
+    ]
+    with _open_archive_session() as archive:
+        result = archive_ops.archive_notes(s, archive, note_ids)
+    # Mirror the note flag on the Project row so listing endpoints can
+    # skip archived projects without re-checking each note.
+    if proj is not None:
+        proj.archived = True
+        s.add(proj)
+        s.commit()
+    result["project"] = project
+    return result
+
+
+@router.post("/projects/{project}/unarchive")
+def unarchive_project_endpoint(
+    project: str,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    from .. import archive_ops
+    _require_project_access(s, user, project, need_manager=True)
+    proj = s.exec(select(Project).where(Project.name == project)).first()
+    prefix = f"{project}/"
+    candidates = s.exec(
+        select(Note).where(
+            ((Note.path == project) | (Note.path.like(f"{prefix}%")))  # type: ignore[attr-defined]
+            & (Note.archive_kind == "user")  # type: ignore[arg-type]
+        )
+    ).all()
+    note_ids = [n.id for n in candidates]
+    with _open_archive_session() as archive:
+        result = archive_ops.unarchive_notes(s, archive, note_ids)
+    if proj is not None:
+        proj.archived = False
+        s.add(proj)
+        s.commit()
+    result["project"] = project
+    return result
+
+
+@router.post("/archive/reconcile")
+def reconcile_archives_endpoint(
+    s: Session = Depends(get_session),
+    user: str = Depends(require_admin),
+) -> dict[str, Any]:
+    """Admin-only: repair after a crashed two-DB archive txn (#304)."""
+    from .. import archive_ops
+    with _open_archive_session() as archive:
+        return archive_ops.reconcile_archives(s, archive)
+
+
+# ---------- archive read endpoints (#304, PR 4) ---------------------------
+#
+# These endpoints expose the frozen state that lives in ``archive.db``
+# (task rows, child rows, notes/projects/features by natural key) plus
+# the ``Note.archive_kind == 'user'`` rows that stay in ``main.db`` for
+# navigation. RBAC mirrors the main read surface — users see only
+# archives whose owning project they have visibility for.
+
+
+def _archive_task_row(row: Any, note_path: str, user_by_id: dict[int, str],
+                      project_by_id: dict[int, str],
+                      feature_by_id: dict[int, str],
+                      owners_by_tid: dict[int, list[int]],
+                      projects_by_tid: dict[int, list[int]],
+                      features_by_tid: dict[int, list[int]],
+                      attrs_by_tid: dict[int, dict[str, str]] | None = None,
+                      ) -> dict[str, Any]:
+    """Shape a single archive.db Task row for the JSON response."""
+    attrs = (attrs_by_tid or {}).get(row.id, {}) if attrs_by_tid else {}
+    return {
+        "id": row.id,
+        "task_uuid": row.task_uuid,
+        "note_path": note_path,
+        "title": row.title,
+        "status": row.status,
+        "priority": attrs.get("priority"),
+        "eta": attrs.get("eta"),
+        "kind": row.kind,
+        "slug": row.slug,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+        "owners": [
+            user_by_id.get(uid, f"user#{uid}")
+            for uid in owners_by_tid.get(row.id, [])
+        ],
+        "projects": [
+            project_by_id[pid]
+            for pid in projects_by_tid.get(row.id, [])
+            if pid in project_by_id
+        ],
+        "features": [
+            feature_by_id[fid]
+            for fid in features_by_tid.get(row.id, [])
+            if fid in feature_by_id
+        ],
+    }
+
+
+@router.get("/archive/notes")
+def list_archived_notes(
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> list[dict[str, Any]]:
+    """User-archived notes visible to the caller.
+
+    Rows live in ``main.db`` (``archive_kind == 'user'``); task counts
+    are read from ``archive.db``.
+    """
+    is_admin, projects = _visible_projects(s, user)
+    notes = s.exec(
+        select(Note)
+        .where(Note.archive_kind == "user")  # type: ignore[arg-type]
+        .order_by(Note.updated_at.desc())  # type: ignore[attr-defined]
+    ).all()
+    visible = [n for n in notes if _note_is_visible(n, is_admin, projects)]
+    if not visible:
+        return []
+
+    counts: dict[str, int] = {}
+    with _open_archive_session() as arch:
+        for n in visible:
+            arch_note = arch.exec(select(Note).where(Note.path == n.path)).first()
+            if arch_note is None:
+                counts[n.path] = 0
+                continue
+            row = arch.exec(
+                text("SELECT COUNT(*) FROM task WHERE note_id = :i")
+                .bindparams(i=arch_note.id)
+            ).first()
+            counts[n.path] = int(row[0]) if row else 0
+
+    return [
+        {
+            "id": n.id,
+            "path": n.path,
+            "title": n.title,
+            "project": _project_for_path(n.path),
+            "updated_at": n.updated_at,
+            "task_count": counts.get(n.path, 0),
+        }
+        for n in visible
+    ]
+
+
+@router.get("/archive/notes/{note_id}")
+def get_archived_note(
+    note_id: int,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    n = s.get(Note, note_id)
+    if n is None or n.archive_kind != "user":
+        raise HTTPException(404, "archived note not found")
+    project = _project_for_path(n.path)
+    if _user_role_for_project(s, user, project) == "none":
+        raise HTTPException(403, "no access")
+
+    with _open_archive_session() as arch:
+        arch_note = arch.exec(select(Note).where(Note.path == n.path)).first()
+        task_rows: list[Any] = []
+        task_ids: list[int] = []
+        if arch_note is not None:
+            task_rows = arch.exec(
+                select(Task)
+                .where(Task.note_id == arch_note.id)  # type: ignore[arg-type]
+                .order_by(Task.line)  # type: ignore[attr-defined]
+            ).all()
+            task_ids = [t.id for t in task_rows]
+
+        owners_by_tid: dict[int, list[int]] = {}
+        projects_by_tid: dict[int, list[int]] = {}
+        features_by_tid: dict[int, list[int]] = {}
+        user_by_id: dict[int, str] = {}
+        project_by_id: dict[int, str] = {}
+        feature_by_id: dict[int, str] = {}
+
+        if task_ids:
+            for r in arch.exec(
+                text("SELECT task_id, user_id FROM taskowner WHERE task_id IN :ids")
+                .bindparams(bindparam("ids", expanding=True))
+                .bindparams(ids=task_ids),
+            ).all():
+                owners_by_tid.setdefault(r[0], []).append(r[1])
+            for r in arch.exec(
+                text("SELECT task_id, project_id FROM taskproject WHERE task_id IN :ids")
+                .bindparams(bindparam("ids", expanding=True))
+                .bindparams(ids=task_ids),
+            ).all():
+                projects_by_tid.setdefault(r[0], []).append(r[1])
+            for r in arch.exec(
+                text("SELECT task_id, feature_id FROM taskfeature WHERE task_id IN :ids")
+                .bindparams(bindparam("ids", expanding=True))
+                .bindparams(ids=task_ids),
+            ).all():
+                features_by_tid.setdefault(r[0], []).append(r[1])
+            for p in arch.exec(select(Project)).all():
+                project_by_id[p.id] = p.name
+            for f in arch.exec(select(Feature)).all():
+                feature_by_id[f.id] = f.name
+
+    attrs_by_tid: dict[int, dict[str, str]] = {}
+    if task_ids:
+        with _open_archive_session() as arch2:
+            for r in arch2.exec(
+                text("SELECT task_id, key, value FROM taskattr "
+                     "WHERE task_id IN :ids AND key IN ('priority', 'eta')")
+                .bindparams(bindparam("ids", expanding=True))
+                .bindparams(ids=task_ids),
+            ).all():
+                attrs_by_tid.setdefault(int(r[0]), {})[str(r[1])] = str(r[2])
+
+    # Resolve user names from MAIN db (the archive.db user table is
+    # intentionally excluded — see #304 PR 1 schema notes).
+    all_uids = {uid for uids in owners_by_tid.values() for uid in uids}
+    for u in s.exec(select(User).where(User.id.in_(all_uids))).all():  # type: ignore[attr-defined]
+        user_by_id[u.id] = u.name
+
+    return {
+        "id": n.id,
+        "path": n.path,
+        "title": n.title,
+        "body_md": n.body_md,
+        "project": project,
+        "updated_at": n.updated_at,
+        "tasks": [
+            _archive_task_row(
+                r, n.path,
+                user_by_id, project_by_id, feature_by_id,
+                owners_by_tid, projects_by_tid, features_by_tid,
+                attrs_by_tid,
+            )
+            for r in task_rows
+        ],
+    }
+
+
+@router.get("/archive/tasks")
+def list_archived_tasks(
+    project: Optional[str] = None,
+    owner: Optional[str] = None,
+    status: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = Query(default=200, ge=1, le=2000),
+    offset: int = Query(default=0, ge=0),
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    """Flat list of archived tasks, filtered + RBAC-scoped.
+
+    Reads from ``archive.db`` only; joins back to ``main.db`` for user
+    names via ``User.id`` (the archive-side user table is intentionally
+    excluded from the schema subset).
+    """
+    is_admin, visible_projects = _visible_projects(s, user)
+
+    with _open_archive_session() as arch:
+        sql = ["SELECT t.id FROM task t JOIN note n ON n.id = t.note_id"]
+        params: dict[str, Any] = {}
+        where = ["1=1"]
+
+        if project:
+            sql.append("JOIN taskproject tp ON tp.task_id = t.id "
+                       "JOIN project p ON p.id = tp.project_id")
+            where.append("p.name = :p_name")
+            params["p_name"] = project
+
+        if owner:
+            main_user = s.exec(select(User).where(User.name == owner)).first()
+            if main_user is None:
+                return {"tasks": [], "total": 0}
+            sql.append("JOIN taskowner to_j ON to_j.task_id = t.id")
+            where.append("to_j.user_id = :o_uid")
+            params["o_uid"] = main_user.id
+
+        if status:
+            where.append("t.status = :status")
+            params["status"] = status
+
+        if q:
+            where.append("(t.title LIKE :qlike OR t.task_uuid = :qexact)")
+            params["qlike"] = f"%{q}%"
+            params["qexact"] = q
+
+        sql.append("WHERE " + " AND ".join(where))
+        sql.append("ORDER BY t.updated_at DESC")
+        sql.append("LIMIT :limit OFFSET :offset")
+        params["limit"] = limit
+        params["offset"] = offset
+
+        rows = arch.exec(text(" ".join(sql)).bindparams(**params)).all()
+        task_ids = [int(r[0]) for r in rows]
+        if not task_ids:
+            return {"tasks": [], "total": 0}
+
+        tasks = arch.exec(
+            select(Task).where(Task.id.in_(task_ids))  # type: ignore[attr-defined]
+        ).all()
+        by_id = {t.id: t for t in tasks}
+        note_by_id: dict[int, Note] = {
+            n.id: n for n in arch.exec(
+                select(Note).where(Note.id.in_({t.note_id for t in tasks}))  # type: ignore[attr-defined]
+            ).all()
+        }
+
+        owners_by_tid: dict[int, list[int]] = {}
+        projects_by_tid: dict[int, list[int]] = {}
+        features_by_tid: dict[int, list[int]] = {}
+        for r in arch.exec(
+            text("SELECT task_id, user_id FROM taskowner WHERE task_id IN :ids")
+            .bindparams(bindparam("ids", expanding=True))
+                .bindparams(ids=task_ids),
+        ).all():
+            owners_by_tid.setdefault(r[0], []).append(r[1])
+        for r in arch.exec(
+            text("SELECT task_id, project_id FROM taskproject WHERE task_id IN :ids")
+            .bindparams(bindparam("ids", expanding=True))
+                .bindparams(ids=task_ids),
+        ).all():
+            projects_by_tid.setdefault(r[0], []).append(r[1])
+        for r in arch.exec(
+            text("SELECT task_id, feature_id FROM taskfeature WHERE task_id IN :ids")
+            .bindparams(bindparam("ids", expanding=True))
+                .bindparams(ids=task_ids),
+        ).all():
+            features_by_tid.setdefault(r[0], []).append(r[1])
+
+        project_by_id = {p.id: p.name for p in arch.exec(select(Project)).all()}
+        feature_by_id = {f.id: f.name for f in arch.exec(select(Feature)).all()}
+
+        attrs_by_tid: dict[int, dict[str, str]] = {}
+        for r in arch.exec(
+            text("SELECT task_id, key, value FROM taskattr "
+                 "WHERE task_id IN :ids AND key IN ('priority', 'eta')")
+            .bindparams(bindparam("ids", expanding=True))
+            .bindparams(ids=task_ids),
+        ).all():
+            attrs_by_tid.setdefault(int(r[0]), {})[str(r[1])] = str(r[2])
+
+    all_uids = {uid for uids in owners_by_tid.values() for uid in uids}
+    user_by_id: dict[int, str] = {}
+    if all_uids:
+        for u in s.exec(
+            select(User).where(User.id.in_(all_uids))  # type: ignore[attr-defined]
+        ).all():
+            user_by_id[u.id] = u.name
+
+    out: list[dict[str, Any]] = []
+    for tid in task_ids:
+        t = by_id.get(tid)
+        if t is None:
+            continue
+        note = note_by_id.get(t.note_id)
+        if note is None:
+            continue
+        note_project = _project_for_path(note.path)
+        if not is_admin and note_project not in visible_projects:
+            continue
+        out.append(
+            _archive_task_row(
+                t, note.path,
+                user_by_id, project_by_id, feature_by_id,
+                owners_by_tid, projects_by_tid, features_by_tid,
+                attrs_by_tid,
+            )
+        )
+    return {"tasks": out, "total": len(out)}
+
+
+@router.get("/archive/tasks/{task_uuid}")
+def get_archived_task(
+    task_uuid: str,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    with _open_archive_session() as arch:
+        t = arch.exec(select(Task).where(Task.task_uuid == task_uuid)).first()
+        if t is None:
+            raise HTTPException(404, "archived task not found")
+        note = arch.get(Note, t.note_id)
+        if note is None:
+            raise HTTPException(500, "orphan archive task")
+
+        owners = [r[0] for r in arch.exec(
+            text("SELECT user_id FROM taskowner WHERE task_id = :i")
+            .bindparams(i=t.id)
+        ).all()]
+        project_ids = [r[0] for r in arch.exec(
+            text("SELECT project_id FROM taskproject WHERE task_id = :i")
+            .bindparams(i=t.id)
+        ).all()]
+        feature_ids = [r[0] for r in arch.exec(
+            text("SELECT feature_id FROM taskfeature WHERE task_id = :i")
+            .bindparams(i=t.id)
+        ).all()]
+        project_by_id = {p.id: p.name for p in arch.exec(select(Project)).all()}
+        feature_by_id = {f.id: f.name for f in arch.exec(select(Feature)).all()}
+
+        attrs: dict[str, str] = {}
+        for r in arch.exec(
+            text("SELECT key, value FROM taskattr WHERE task_id = :i "
+                 "AND key IN ('priority', 'eta')")
+            .bindparams(i=t.id)
+        ).all():
+            attrs[str(r[0])] = str(r[1])
+
+    note_project = _project_for_path(note.path)
+    if _user_role_for_project(s, user, note_project) == "none":
+        raise HTTPException(403, "no access")
+
+    user_by_id: dict[int, str] = {}
+    if owners:
+        for u in s.exec(
+            select(User).where(User.id.in_(owners))  # type: ignore[attr-defined]
+        ).all():
+            user_by_id[u.id] = u.name
+
+    return _archive_task_row(
+        t, note.path,
+        user_by_id, project_by_id, feature_by_id,
+        {t.id: owners}, {t.id: project_ids}, {t.id: feature_ids},
+        {t.id: attrs},
+    )
+
+
+@router.get("/archive/projects")
+def list_archived_projects(
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> list[dict[str, Any]]:
+    """Projects flagged ``Project.archived == True`` in main.db that the
+    caller has visibility for.  Includes archive.db note+task counts."""
+    is_admin, visible_projects = _visible_projects(s, user)
+    rows = s.exec(
+        select(Project).where(Project.archived == True)  # noqa: E712
+        .order_by(Project.name)  # type: ignore[attr-defined]
+    ).all()
+
+    with _open_archive_session() as arch:
+        out: list[dict[str, Any]] = []
+        for p in rows:
+            if not is_admin and p.name not in visible_projects:
+                continue
+            arch_proj = arch.exec(
+                select(Project).where(Project.name == p.name)
+            ).first()
+            task_count = 0
+            note_count = 0
+            if arch_proj is not None:
+                trow = arch.exec(
+                    text(
+                        "SELECT COUNT(DISTINCT t.id) FROM task t "
+                        "JOIN taskproject tp ON tp.task_id = t.id "
+                        "WHERE tp.project_id = :pid"
+                    ).bindparams(pid=arch_proj.id)
+                ).first()
+                task_count = int(trow[0]) if trow else 0
+            prefix = f"{p.name}/"
+            nrow = arch.exec(
+                text(
+                    "SELECT COUNT(*) FROM note "
+                    "WHERE path = :name OR path LIKE :prefix"
+                ).bindparams(name=p.name, prefix=f"{prefix}%")
+            ).first()
+            note_count = int(nrow[0]) if nrow else 0
+            out.append({
+                "name": p.name,
+                "archived": True,
+                "note_count": note_count,
+                "task_count": task_count,
+            })
+    return out
+
+
+@router.get("/archive/summary")
+def archive_summary(
+    project: Optional[str] = None,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> dict[str, Any]:
+    """Aggregate counts across the archive: totals + by status + by
+    project + top owners.  Scoped to projects the caller can access.
+    """
+    is_admin, visible_projects = _visible_projects(s, user)
+
+    with _open_archive_session() as arch:
+        base_sql = (
+            "SELECT t.id, t.status, p.name AS project_name "
+            "FROM task t JOIN note n ON n.id = t.note_id "
+            "LEFT JOIN taskproject tp ON tp.task_id = t.id "
+            "LEFT JOIN project p ON p.id = tp.project_id"
+        )
+        where = []
+        params: dict[str, Any] = {}
+        if project:
+            where.append("p.name = :p_name")
+            params["p_name"] = project
+        if where:
+            base_sql += " WHERE " + " AND ".join(where)
+        rows = arch.exec(text(base_sql).bindparams(**params)).all()
+
+        # Owner lookup — collect all task_ids first, then batch.
+        task_ids = [int(r[0]) for r in rows]
+        owner_rows: list[tuple[int, int]] = []
+        if task_ids:
+            owner_rows = [
+                (int(r[0]), int(r[1])) for r in arch.exec(
+                    text("SELECT task_id, user_id FROM taskowner "
+                         "WHERE task_id IN :ids")
+                    .bindparams(bindparam("ids", expanding=True))
+                .bindparams(ids=task_ids),
+                ).all()
+            ]
+
+    total = 0
+    by_status: dict[str, int] = {}
+    by_project: dict[str, int] = {}
+    task_projects: dict[int, str] = {}
+    for tid, status, project_name in rows:
+        tid = int(tid)
+        proj_name = project_name or ""
+        if not is_admin and proj_name and proj_name not in visible_projects:
+            continue
+        if not is_admin and not proj_name:
+            continue
+        total += 1
+        by_status[status] = by_status.get(status, 0) + 1
+        by_project[proj_name] = by_project.get(proj_name, 0) + 1
+        task_projects[tid] = proj_name
+
+    owner_counts: dict[int, int] = {}
+    for tid, uid in owner_rows:
+        if tid not in task_projects:
+            continue
+        owner_counts[uid] = owner_counts.get(uid, 0) + 1
+
+    top_uids = sorted(owner_counts.keys(), key=lambda u: -owner_counts[u])[:20]
+    name_by_uid: dict[int, str] = {}
+    if top_uids:
+        for u in s.exec(
+            select(User).where(User.id.in_(top_uids))  # type: ignore[attr-defined]
+        ).all():
+            name_by_uid[u.id] = u.name
+
+    top_owners = [
+        {"name": name_by_uid.get(uid, f"user#{uid}"), "count": owner_counts[uid]}
+        for uid in top_uids
+    ]
+
+    return {
+        "total_tasks": total,
+        "by_status": by_status,
+        "by_project": by_project,
+        "top_owners": top_owners,
+    }
+
+
 # ---------- create task (issue #63) ----------------------------------------
 
 class TaskCreate(BaseModel):
@@ -1932,13 +2583,28 @@ def phonebook_lookup(
 def list_projects(
     s: Session = Depends(get_session),
     user: str = Depends(require_user),
+    include_archived: bool = False,
 ) -> list[dict[str, Any]]:
-    """List projects = top-level subfolders of notes/. Includes the caller's role."""
+    """List projects = top-level subfolders of notes/. Includes the caller's role.
+
+    #310: user-archived projects (``Project.archived == True``) are hidden by
+    default so the sidebar tree and every project-dropdown consumer stop
+    surfacing them once the user opts them out of the active workspace.
+    Pass ``?include_archived=1`` to include archived projects (used only by
+    the Archive view and admin flows today).
+    """
     out: list[dict[str, Any]] = []
     nd = settings.notes_dir
     nd.mkdir(parents=True, exist_ok=True)
+    archived_names: set[str] = set()
+    if not include_archived:
+        archived_names = {
+            p.name for p in s.exec(select(Project).where(Project.archived == True)).all()  # noqa: E712
+        }
     for child in sorted(nd.iterdir()):
         if not child.is_dir() or child.name.startswith(".") or child.name == "_meta":
+            continue
+        if child.name in archived_names:
             continue
         role = _user_role_for_project(s, user, child.name)
         if role == "none":
@@ -2051,13 +2717,25 @@ def tree(
     Archived notes (rolled-forward weeklies under sibling ``_archive/``
     folders) are hidden by default to keep the active workspace focused
     on the current week.  Pass ``?include_archived=1`` to include them.
+
+    #310: user-archived projects (``Project.archived == True``) are also
+    hidden by default and skipped entirely — their folder still exists on
+    disk, but their derived task rows live in ``archive.db`` and must not
+    be lazily resurrected by the inline ``reindex_file`` self-heal below.
     """
     out: list[dict[str, Any]] = []
     nd = settings.notes_dir
     nd.mkdir(parents=True, exist_ok=True)
+    archived_names: set[str] = set()
+    if not include_archived:
+        archived_names = {
+            p.name for p in s.exec(select(Project).where(Project.archived == True)).all()  # noqa: E712
+        }
     # Top-level projects (folders)
     for child in sorted(nd.iterdir()):
         if not child.is_dir() or child.name.startswith(".") or child.name == "_meta":
+            continue
+        if child.name in archived_names:
             continue
         role = _user_role_for_project(s, user, child.name)
         if role == "none":
@@ -2208,6 +2886,13 @@ class TaskPatch(BaseModel):
     eta: Optional[str] = None       # e.g. "2026-W18", "2026-04-30", or "" to clear
     owners: Optional[list[str]] = None    # full replacement; [] clears
     features: Optional[list[str]] = None  # full replacement; [] clears
+    # #314: external-URL capsule tokens. Each is a full replacement; ``[]``
+    # clears all values for that key. Values must be whitespace-free (the
+    # lexer reads a single word); URL-encode spaces if needed.
+    url: Optional[list[str]] = None    # generic ``#url <val>``; supports ``LABEL:url`` prefix
+    hsd: Optional[list[str]] = None    # ``#hsd <id>`` -> hsdes.intel.com
+    jira: Optional[list[str]] = None   # ``#jira <KEY>`` -> jira.devtools.intel.com
+    pr: Optional[list[str]] = None     # ``#pr <owner/repo#N>`` -> github.com
     # New title text (trimmed). None = no change. Empty string is rejected
     # because a blank declaration line cannot be re-parsed. The keyword
     # (!task / !AR) and every trailing #attr / @owner token are preserved.
@@ -2413,6 +3098,29 @@ def patch_task(
             cleaned = [f.strip() for f in body.features if f and f.strip()]
             md = replace_multi_attr(md, t.line, "feature", cleaned)
             changed = True
+        # #314 / #316: external-URL capsule tokens.
+        # Non-#url values must remain whitespace-free (HSD ID, JIRA key,
+        # PR spec).  #url additionally accepts a markdown-link form
+        # ``[Label with spaces](https://…)`` whose interior spaces live
+        # inside the brackets — that shape is now the preferred syntax.
+        _md_link_re = _re.compile(r"^\[[^\]]+\]\([^\s()]+(?:\([^\s()]*\)[^\s()]*)*\)$")
+        for _link_key in ("url", "hsd", "jira", "pr"):
+            _link_val = getattr(body, _link_key)
+            if _link_val is None:
+                continue
+            _cleaned = [v.strip() for v in _link_val if v and v.strip()]
+            for _v in _cleaned:
+                if not any(ch.isspace() for ch in _v):
+                    continue
+                if _link_key == "url" and _md_link_re.match(_v):
+                    continue
+                raise HTTPException(
+                    400,
+                    f"#{_link_key} value must not contain whitespace; "
+                    "URL-encode spaces or use `[Label](https://…)` MD form",
+                )
+            md = replace_multi_attr(md, t.line, _link_key, _cleaned)
+            changed = True
         if body.add_note is not None and body.add_note.strip():
             # Guardrail: refuse note text that looks like a task / AR declaration.
             # Persisting it as a `#note` continuation would silently lose the
@@ -2468,6 +3176,12 @@ def patch_task(
             features=body.features,
             title=body.title.strip() if body.title is not None else None,
             add_note=body.add_note,
+            # #314: pass link-token replacements through to the index update.
+            link_attrs={
+                k: [v.strip() for v in getattr(body, k) if v and v.strip()]
+                for k in ("url", "hsd", "jira", "pr")
+                if getattr(body, k) is not None
+            },
         )
 
     # ── Propagate to all ref-row files ────────────────────────────────────
@@ -2489,6 +3203,14 @@ def patch_task(
             ref_patch["owners"] = [o.strip().lstrip("@") for o in body.owners if o and o.strip()]
         if body.features is not None:
             ref_patch["features"] = [f.strip() for f in body.features if f and f.strip()]
+        # #314: propagate link-token replacements to every ref row so the
+        # cross-file @link mirror stays consistent with the canonical decl.
+        for _link_key in ("url", "hsd", "jira", "pr"):
+            _link_val = getattr(body, _link_key)
+            if _link_val is not None:
+                ref_patch[_link_key] = [
+                    v.strip() for v in _link_val if v and v.strip()
+                ]
         # Notes are journal entries — propagate them too so cross-file
         # ref rows (e.g. a weekly note's `#task T-XXX` reference) carry
         # the same audit trail as the canonical declaration. See user
@@ -2703,6 +3425,7 @@ def delete_task(
 def list_users(
     s: Session = Depends(get_session),
     with_display: bool = False,
+    project: str | None = Query(default=None, description="Restrict to users who own tasks in this project."),
 ) -> list[Any]:
     """List User.name values. When ``with_display=1`` returns a richer
     shape ``[{"name": "nsaddaga", "display": "Prasad Addagarla"}, ...]``
@@ -2713,14 +3436,41 @@ def list_users(
     least one task — keeps the FilterBar dropdown free of orphan rows
     left behind by pre-canonicalization (#174) reindexes.
 
+    #312: pass ``project=<name>`` to further restrict to users who own
+    at least one *active* task inside that project. Combined with the
+    fact that archived tasks live in ``archive.db`` (not this engine),
+    archiving a project or note causes its exclusive owners to drop
+    from every project-scoped users query — which is what the FilterBar,
+    per-task autocomplete, and owner chip suggestion lists want.
+
     Without the flag, returns a plain string list including all User
     rows (used by admin / member-management UIs that need every user)."""
     if not with_display:
-        return [u.name for u in s.exec(select(User).order_by(User.name)).all()]
-    rows = s.exec(
-        select(User.name).join(TaskOwner, TaskOwner.user_id == User.id)
-        .group_by(User.name).order_by(User.name)
-    ).all()
+        if project is None:
+            return [u.name for u in s.exec(select(User).order_by(User.name)).all()]
+        rows = s.exec(
+            select(User.name)
+            .join(TaskOwner, TaskOwner.user_id == User.id)
+            .join(TaskProject, TaskProject.task_id == TaskOwner.task_id)
+            .join(Project, Project.id == TaskProject.project_id)
+            .where(Project.name == project)
+            .group_by(User.name).order_by(User.name)
+        ).all()
+        return [r if isinstance(r, str) else r[0] for r in rows]
+    if project is None:
+        rows = s.exec(
+            select(User.name).join(TaskOwner, TaskOwner.user_id == User.id)
+            .group_by(User.name).order_by(User.name)
+        ).all()
+    else:
+        rows = s.exec(
+            select(User.name)
+            .join(TaskOwner, TaskOwner.user_id == User.id)
+            .join(TaskProject, TaskProject.task_id == TaskOwner.task_id)
+            .join(Project, Project.id == TaskProject.project_id)
+            .where(Project.name == project)
+            .group_by(User.name).order_by(User.name)
+        ).all()
     names = [r if isinstance(r, str) else r[0] for r in rows]
     disp = _owner_display_map(names)
     return [{"name": n, "display": disp.get(n, n)} for n in names]

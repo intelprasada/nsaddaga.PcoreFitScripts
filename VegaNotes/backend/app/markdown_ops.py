@@ -652,7 +652,18 @@ def _strip_attr_from_continuations(md: str, task_line_no: int, key: str) -> str:
     if task_line_no < 0 or task_line_no >= len(lines):
         return md
     base = _line_indent(lines[task_line_no])
-    pat = re.compile(rf"\s*#{re.escape(key)}\s+\S+", re.IGNORECASE)
+    # #316: for #url also strip markdown-link values that contain
+    # internal whitespace. Order matters — try the MD-link shape first.
+    if key.lower() == "url":
+        pats = [
+            re.compile(
+                r"\s*#url\s+\[[^\]]+\]\([^\s()]+(?:\([^\s()]*\)[^\s()]*)*\)",
+                re.IGNORECASE,
+            ),
+            re.compile(r"\s*#url\s+\S+", re.IGNORECASE),
+        ]
+    else:
+        pats = [re.compile(rf"\s*#{re.escape(key)}\s+\S+", re.IGNORECASE)]
     # A nested `!task` / `!AR` declaration is a *child* task, not a
     # continuation of the parent's note text. Stripping its attrs would
     # silently nuke its own state (issue #199 — patching the parent's
@@ -687,7 +698,8 @@ def _strip_attr_from_continuations(md: str, task_line_no: int, key: str) -> str:
         # whitespace inside the body proper.
         lead = body[: len(body) - len(body.lstrip())]
         rest = body[len(lead):]
-        rest = pat.sub("", rest)
+        for _pat in pats:
+            rest = _pat.sub("", rest)
         if key == "owner":
             rest = re.sub(r"\s*@[a-zA-Z][\w.-]*", "", rest)
         rest = re.sub(r"\s{2,}", " ", rest).strip()
@@ -865,7 +877,17 @@ def remove_attr(md: str, line_no: int, key: str) -> str:
     while body.endswith("\n") or body.endswith("\r"):
         nl = body[-1] + nl
         body = body[:-1]
-    body = re.sub(rf"\s*#{re.escape(key)}\s+\S+", "", body, flags=re.IGNORECASE)
+    if key.lower() == "url":
+        # #316: #url values may be a markdown link `[Label](https://…)`
+        # containing internal whitespace.  Match either shape so a stored
+        # MD-form value is stripped in full, not just the `[Label` prefix.
+        body = re.sub(
+            r"\s*#url\s+\[[^\]]+\]\([^\s()]+(?:\([^\s()]*\)[^\s()]*)*\)",
+            "", body, flags=re.IGNORECASE,
+        )
+        body = re.sub(r"\s*#url\s+\S+", "", body, flags=re.IGNORECASE)
+    else:
+        body = re.sub(rf"\s*#{re.escape(key)}\s+\S+", "", body, flags=re.IGNORECASE)
     if key == "owner":
         body = re.sub(r"\s*@[a-zA-Z][\w.-]*", "", body)
     body = re.sub(r"\s{2,}", " ", body).rstrip()
@@ -1139,6 +1161,14 @@ def patch_ref_rows(md: str, ref_id: str, patch: dict) -> tuple[str, bool]:
             cleaned = [f.strip() for f in patch["features"] if f and f.strip()]
             md = replace_multi_attr(md, line_no, "feature", cleaned)
             changed = True
+        # #314: propagate url/hsd/jira/pr link-token replacements to every
+        # #task / #AR ref row that mirrors this task.  Same semantics as
+        # ``features`` above: pass a list for full replacement, ``[]`` clears.
+        for _link_key in ("url", "hsd", "jira", "pr"):
+            if _link_key in patch:
+                _cleaned = [v.strip() for v in patch[_link_key] if v and v.strip()]
+                md = replace_multi_attr(md, line_no, _link_key, _cleaned)
+                changed = True
         if "add_note" in patch and patch["add_note"]:
             md = append_note(md, line_no, patch["add_note"])
             changed = True

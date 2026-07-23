@@ -50,8 +50,8 @@ describe("extraTagChips (issue #275)", () => {
   });
 
   it("expands multi-value arrays to one chip each", () => {
-    const t = mkTask({ jira: ["ABC-1", "ABC-2"] });
-    expect(extraTagChips(t).map((c) => c.value)).toEqual(["ABC-1", "ABC-2"]);
+    const t = mkTask({ area: ["auth", "billing"] });
+    expect(extraTagChips(t).map((c) => c.value)).toEqual(["auth", "billing"]);
   });
 
   it("mixes empty and non-empty in an array", () => {
@@ -83,6 +83,31 @@ describe("extraTagChips (issue #275)", () => {
 
   it("handles missing attrs gracefully", () => {
     const t = mkTask({} as Record<string, string>);
+    expect(extraTagChips(t)).toEqual([]);
+  });
+
+  // #318 follow-up to #316: link tokens (url/hsd/jira/pr) have their own
+  // clickable capsule via <LinkChips />; do not double-render them as
+  // generic `#tag` chips.
+  it("hides url/hsd/jira/pr link tokens (rendered via LinkChips instead)", () => {
+    const t = mkTask({
+      url:  "[Design](https://example.com/design)",
+      hsd:  ["1234567", "9876543"],
+      jira: "ABC-42",
+      pr:   "owner/repo#7",
+      area: "auth", // real extra tag — should still show
+    });
+    const keys = extraTagChips(t).map((c) => c.key);
+    expect(keys).toEqual(["area"]);
+  });
+
+  it("hides link tokens case-insensitively", () => {
+    const t = mkTask({
+      URL:  "[X](https://x.example.com)",
+      HSD:  "9999",
+      JIRA: "ABC-1",
+      PR:   "o/r#3",
+    } as unknown as Record<string, string>);
     expect(extraTagChips(t)).toEqual([]);
   });
 });
