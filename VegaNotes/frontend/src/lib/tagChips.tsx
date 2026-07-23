@@ -16,6 +16,10 @@ const HIDDEN_KEYS = new Set<string>([
   "status", "task", "ar", "link", "estimate", "note",
   // Free-form scheduling attrs already shown as part of eta or notes.
   "estimate_units",
+  // #314 / #316 external-link tokens: rendered as their own clickable
+  // capsule via <LinkChips />, so we skip them here to avoid a second
+  // ugly `#url=[Label](https://…)` tag chip on the same card.
+  "url", "hsd", "jira", "pr",
 ]);
 
 export interface TagChip {
