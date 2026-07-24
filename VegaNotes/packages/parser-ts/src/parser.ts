@@ -104,7 +104,7 @@ function lex(line: string): Item[] {
       // Known status/note read until the next attr; everything else
       // (including arbitrary unknown attrs) reads a single whitespace-
       // delimited value. Empty value → keep as prose (`#urgent`).
-      const untilHash = known && (name === "status" || name === "note");
+      const untilHash = known && (name === "status" || name === "note" || name === "progress");
       // #316: #url accepts `[Label](https://…)` MD-link values with
       // internal whitespace so chips get a user-supplied label.
       let value: string;

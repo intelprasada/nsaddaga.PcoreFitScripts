@@ -115,6 +115,12 @@ REGISTRY: Dict[str, TokenSpec] = {
     "hsd":      TokenSpec("hsd",      multi=True),
     "jira":     TokenSpec("jira",     multi=True),
     "pr":       TokenSpec("pr",       multi=True),
+    # #320: recurring progress metric on tasks — single value shaped like
+    # ``N/D``, ``N/D label``, or bare ``N`` for an unbounded counter.
+    # Stored as-is; parsed into (numerator, denominator, label) by the
+    # frontend / DSL. Weekly rollover carries the value forward via the
+    # task_uuid so the archive naturally accumulates a per-week history.
+    "progress": TokenSpec("progress", multi=False),
 }
 
 
