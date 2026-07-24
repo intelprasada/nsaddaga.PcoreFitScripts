@@ -201,6 +201,15 @@ export interface ArchiveSummary {
   top_owners: { name: string; count: number }[];
 }
 
+// #320: one row from `GET /api/tasks/{ref}/progress-history`.
+export interface ProgressHistoryRow {
+  /** ISO week, e.g. `"2026-W29"`. */
+  week: string;
+  numerator: number;
+  denominator: number | null;
+  label: string | null;
+}
+
 export const api = {
   notes: () => req<{ id: number; path: string; title: string }[]>("/notes"),
   note:  (id: number) => req<{ id: number; path: string; title: string; body_md: string; etag: string; prose_etag?: string; tasks_etag?: string }>(`/notes/${id}`),
@@ -270,6 +279,8 @@ export const api = {
     hsd?: string[];
     jira?: string[];
     pr?: string[];
+    // #320: recurring metric.  Empty string clears the token.
+    progress?: string;
     add_note?: string;
     notes?: string;
     title?: string;
@@ -293,6 +304,11 @@ export const api = {
       `/tasks/${ref}`,
       { method: "DELETE" },
     ),
+
+  // #320: weekly history for the recurring `#progress` metric.  Rolls up
+  // main.db + archive.db and groups by ISO week.
+  taskProgressHistory: (ref: number | string) =>
+    req<ProgressHistoryRow[]>(`/tasks/${ref}/progress-history`),
 
   getTask: (ref: number | string, opts?: { includeChildren?: boolean }) => {
     const qs = new URLSearchParams();

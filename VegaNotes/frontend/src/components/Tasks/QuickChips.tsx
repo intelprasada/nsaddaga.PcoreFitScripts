@@ -17,6 +17,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type Task } from "../../api/client";
 import { formatIntelWw } from "@veganotes/parser";
 import { LinkChips } from "./LinkChips";
+import { ProgressChip } from "./ProgressChip";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -371,6 +372,10 @@ export function QuickChips({ task, canWrite = true }: QuickChipsProps) {
       <OwnersChips  task={task} canWrite={canWrite} />
       {/* #314: external-URL capsule chips (HSD / JIRA / PR / URL). */}
       <LinkChips    task={task} />
+      {/* #320: recurring #progress metric chip.  History is fetched on
+          demand inside the popover; the card chip renders w/o a
+          sparkline (history=null) to keep the card list fast. */}
+      <ProgressChip task={task} />
     </>
   );
 }
