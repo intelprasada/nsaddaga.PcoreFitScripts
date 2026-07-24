@@ -138,3 +138,45 @@ describe("bare-hashtag + exists/nexists (issue #275)", () => {
     ]);
   });
 });
+
+describe("#320 progress sugar", () => {
+  it("`progress = has` compiles to progress_has=1", () => {
+    expect(compileClauses(["progress=has"])).toEqual([["progress_has", "1"]]);
+    expect(compileClauses(["progress = HAS"])).toEqual([["progress_has", "1"]]);
+  });
+
+  it("`progress > N%` compiles to progress_min_pct=N", () => {
+    expect(compileClauses(["progress>50%"])).toEqual([["progress_min_pct", "50"]]);
+    expect(compileClauses(["progress >= 25"])).toEqual([["progress_min_pct", "25"]]);
+  });
+
+  it("`progress < N%` compiles to progress_max_pct=N", () => {
+    expect(compileClauses(["progress<25%"])).toEqual([["progress_max_pct", "25"]]);
+    expect(compileClauses(["progress <= 99"])).toEqual([["progress_max_pct", "99"]]);
+  });
+
+  it("literal `progress = <value>` falls through to attr eq path", () => {
+    expect(compileClauses(["progress=30/54"])).toEqual([["attr", "progress:eq:30/54"]]);
+  });
+
+  it("bands stack: `progress > 25%` + `progress < 75%`", () => {
+    expect(compileClauses(["progress>25%", "progress<75%"])).toEqual([
+      ["progress_min_pct", "25"],
+      ["progress_max_pct", "75"],
+    ]);
+  });
+
+  it("rejects garbage percent values", () => {
+    expect(() => compileClauses(["progress>abc"])).toThrow(DSLError);
+    expect(() => compileClauses(["progress<-5%"])).toThrow(DSLError);
+  });
+
+  it("rounds fractional percent inputs to nearest integer", () => {
+    expect(compileClauses(["progress>=50.4%"])).toEqual([["progress_min_pct", "50"]]);
+    expect(compileClauses(["progress>=50.6%"])).toEqual([["progress_min_pct", "51"]]);
+  });
+
+  it("`@progress exists` still works via the generic attr path", () => {
+    expect(compileClauses(["@progress exists"])).toEqual([["attr", "progress:exists:"]]);
+  });
+});
