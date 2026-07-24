@@ -2893,6 +2893,10 @@ class TaskPatch(BaseModel):
     hsd: Optional[list[str]] = None    # ``#hsd <id>`` -> hsdes.intel.com
     jira: Optional[list[str]] = None   # ``#jira <KEY>`` -> jira.devtools.intel.com
     pr: Optional[list[str]] = None     # ``#pr <owner/repo#N>`` -> github.com
+    # #320: recurring progress metric. Single value shaped like ``N``,
+    # ``N/D``, or ``N/D label`` (label is [A-Za-z][\w-]*). Empty string
+    # ("") clears the token.
+    progress: Optional[str] = None
     # New title text (trimmed). None = no change. Empty string is rejected
     # because a blank declaration line cannot be re-parsed. The keyword
     # (!task / !AR) and every trailing #attr / @owner token are preserved.
@@ -2966,6 +2970,130 @@ def task_activity(
             "meta": meta,
         })
     return out
+
+
+@router.get("/tasks/{task_ref}/progress-history")
+def task_progress_history(
+    task_ref: str,
+    s: Session = Depends(get_session),
+    user: str = Depends(require_user),
+) -> list[dict[str, Any]]:
+    """Weekly history of a task's ``#progress`` metric (#320).
+
+    Aggregates ``TaskAttr(key='progress')`` rows across main.db and
+    archive.db, groups by ISO week derived from the containing note's
+    filename (``ww29.md`` → ``YYYY-W29``), and returns one row per week
+    sorted ascending.  When two notes fall in the same ISO week the
+    one with the newer ``updated_at`` wins.
+
+    Response shape::
+
+        [ { "week": "2026-W29", "numerator": 30, "denominator": 54,
+            "label": "fixed" }, ... ]
+
+    Access is RBAC-scoped via :func:`_require_task_access`.
+    """
+    import re as _re
+    t = _resolve_task(task_ref, s)
+    _require_task_access(s, user, t)
+    if not t.task_uuid:
+        # An unstamped task has no cross-file identity to hang a history
+        # off — return the single main-db reading (if any) and no
+        # archive rollup.
+        return _progress_history_for_uuid(s, None, t.id)
+
+    return _progress_history_for_uuid(s, t.task_uuid, t.id)
+
+
+_WW_RE = _re.compile(r"(?i)(?:^|[^0-9a-z])ww(\d{1,2})(?![0-9])")
+_ISO_YEARWEEK_RE = _re.compile(r"(20\d{2})[-_]?W(\d{1,2})", _re.IGNORECASE)
+_PROGRESS_HEAD_RE = _re.compile(r"^(\d+)(?:/(\d+))?(?:\s+([A-Za-z][\w-]*))?")
+
+
+def _iso_week_for_note(path: str, updated_at: datetime) -> str:
+    """Derive ``YYYY-Www`` for a note.
+
+    Tries ``YYYY-Www`` / ``YYYY_Www`` first, then ``wwNN`` (year from
+    ``updated_at``), then falls back to the ISO calendar week of
+    ``updated_at``.
+    """
+    base = path.rsplit("/", 1)[-1]
+    m = _ISO_YEARWEEK_RE.search(base)
+    if m:
+        return f"{m.group(1)}-W{int(m.group(2)):02d}"
+    m = _WW_RE.search(base)
+    if m:
+        return f"{updated_at.year:04d}-W{int(m.group(1)):02d}"
+    iso = updated_at.isocalendar()
+    return f"{iso[0]:04d}-W{iso[1]:02d}"
+
+
+def _parse_progress_value(value: str) -> Optional[dict[str, Any]]:
+    if not value:
+        return None
+    m = _PROGRESS_HEAD_RE.match(value.strip())
+    if not m:
+        return None
+    num = int(m.group(1))
+    denom = int(m.group(2)) if m.group(2) else None
+    label = m.group(3)
+    return {"numerator": num, "denominator": denom, "label": label}
+
+
+def _progress_history_for_uuid(
+    s: Session, task_uuid: Optional[str], task_pk: Optional[int],
+) -> list[dict[str, Any]]:
+    # week -> (updated_at_ts, payload)
+    by_week: dict[str, tuple[float, dict[str, Any]]] = {}
+
+    def _record(week: str, updated_at: datetime, parsed: dict[str, Any]) -> None:
+        ts = updated_at.timestamp()
+        row = {"week": week, **parsed}
+        prior = by_week.get(week)
+        if prior is None or prior[0] < ts:
+            by_week[week] = (ts, row)
+
+    # -- main.db reading -------------------------------------------------
+    q = (
+        select(TaskAttr.value, Note.path, Note.updated_at)
+        .join(Task, Task.id == TaskAttr.task_id)
+        .join(Note, Note.id == Task.note_id)
+        .where(TaskAttr.key == "progress")
+    )
+    if task_uuid:
+        q = q.where(Task.task_uuid == task_uuid)
+    elif task_pk is not None:
+        q = q.where(Task.id == task_pk)
+    else:
+        return []
+    for value, path, updated_at in s.exec(q).all():
+        parsed = _parse_progress_value(value or "")
+        if not parsed:
+            continue
+        _record(_iso_week_for_note(path, updated_at), updated_at, parsed)
+
+    # -- archive.db rollup ----------------------------------------------
+    if task_uuid:
+        with _open_archive_session() as archive:
+            aq = (
+                select(TaskAttr.value, Note.path, Note.updated_at)
+                .join(Task, Task.id == TaskAttr.task_id)
+                .join(Note, Note.id == Task.note_id)
+                .where(TaskAttr.key == "progress")
+                .where(Task.task_uuid == task_uuid)
+            )
+            try:
+                arows = archive.exec(aq).all()
+            except Exception:
+                arows = []
+        for value, path, updated_at in arows:
+            parsed = _parse_progress_value(value or "")
+            if not parsed:
+                continue
+            _record(_iso_week_for_note(path, updated_at), updated_at, parsed)
+
+    return [payload for _week, (_ts, payload) in sorted(by_week.items())]
+
 
 
 @router.patch("/tasks/{task_ref}")
@@ -3121,6 +3249,30 @@ def patch_task(
                 )
             md = replace_multi_attr(md, t.line, _link_key, _cleaned)
             changed = True
+        # #320: single-valued recurring-progress metric.
+        # Accepted shapes:  ``N``, ``N/D``, ``N/D label`` where label is
+        # ``[A-Za-z][\w-]*``. Empty string clears the token.
+        if body.progress is not None:
+            _p = body.progress.strip()
+            if _p == "":
+                md = remove_attr(md, t.line, "progress")
+            else:
+                if not _re.match(
+                    r"^\d+(?:/\d+)?(?:\s+[A-Za-z][\w-]*)?$", _p,
+                ):
+                    raise HTTPException(
+                        400,
+                        "#progress must be `N`, `N/D`, or `N/D label` "
+                        "(label = [A-Za-z][\\w-]*); got: " + repr(_p),
+                    )
+                # Extra sanity — denominator must be > 0 when supplied.
+                _m = _re.match(r"^(\d+)(?:/(\d+))?", _p)
+                if _m and _m.group(2) is not None and int(_m.group(2)) == 0:
+                    raise HTTPException(
+                        400, "#progress denominator must be positive",
+                    )
+                md = replace_attr(md, t.line, "progress", _p)
+            changed = True
         if body.add_note is not None and body.add_note.strip():
             # Guardrail: refuse note text that looks like a task / AR declaration.
             # Persisting it as a `#note` continuation would silently lose the
@@ -3182,6 +3334,9 @@ def patch_task(
                 for k in ("url", "hsd", "jira", "pr")
                 if getattr(body, k) is not None
             },
+            # #320: single-valued progress metric flows through the same
+            # single-attr update path used by priority/eta.
+            progress=body.progress.strip() if body.progress is not None else None,
         )
 
     # ── Propagate to all ref-row files ────────────────────────────────────
@@ -3211,6 +3366,11 @@ def patch_task(
                 ref_patch[_link_key] = [
                     v.strip() for v in _link_val if v and v.strip()
                 ]
+        # #320: propagate the current-week progress metric to every ref row
+        # so a subsequent reindex of a referring weekly note cannot push a
+        # stale value back over the canonical decl.
+        if body.progress is not None:
+            ref_patch["progress"] = body.progress.strip()
         # Notes are journal entries — propagate them too so cross-file
         # ref rows (e.g. a weekly note's `#task T-XXX` reference) carry
         # the same audit trail as the canonical declaration. See user

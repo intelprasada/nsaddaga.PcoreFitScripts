@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
@@ -228,6 +229,7 @@ def apply_single_task_patch_to_index(
     title: str | None = None,
     add_note: str | None = None,
     link_attrs: dict[str, list[str]] | None = None,
+    progress: str | None = None,
 ) -> None:
     """Cheap variant of :func:`reindex_file` for a single-task popover patch.
 
@@ -394,6 +396,22 @@ def apply_single_task_patch_to_index(
                 session.add(TaskAttr(
                     task_id=task_id, key=_k, value=_v, value_norm=_v.lower(),
                 ))
+
+    # #320: single-valued progress metric. Empty string clears the row;
+    # a value is stored with a normalized form of just the "N/D" numeric
+    # head (so DSL predicates can compare without re-splitting the label).
+    if progress is not None:
+        p = progress.strip()
+        session.exec(
+            text("DELETE FROM taskattr WHERE task_id = :tid AND key = 'progress'")
+            .bindparams(tid=task_id)
+        )
+        if p:
+            m = re.match(r"^(\d+)(?:/(\d+))?", p)
+            norm = m.group(0) if m else p.lower()
+            session.add(TaskAttr(
+                task_id=task_id, key="progress", value=p, value_norm=norm,
+            ))
 
 
 def update_note_body_only(

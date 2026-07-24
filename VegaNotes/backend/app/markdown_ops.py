@@ -654,6 +654,7 @@ def _strip_attr_from_continuations(md: str, task_line_no: int, key: str) -> str:
     base = _line_indent(lines[task_line_no])
     # #316: for #url also strip markdown-link values that contain
     # internal whitespace. Order matters — try the MD-link shape first.
+    # #320: for #progress also strip an optional trailing label word.
     if key.lower() == "url":
         pats = [
             re.compile(
@@ -662,6 +663,11 @@ def _strip_attr_from_continuations(md: str, task_line_no: int, key: str) -> str:
             ),
             re.compile(r"\s*#url\s+\S+", re.IGNORECASE),
         ]
+    elif key.lower() == "progress":
+        pats = [re.compile(
+            r"\s*#progress\s+\d+(?:/\d+)?(?:\s+[A-Za-z][\w-]*)?",
+            re.IGNORECASE,
+        )]
     else:
         pats = [re.compile(rf"\s*#{re.escape(key)}\s+\S+", re.IGNORECASE)]
     # A nested `!task` / `!AR` declaration is a *child* task, not a
@@ -854,6 +860,21 @@ def replace_attr(md: str, line_no: int, key: str, new_value: str) -> str:
         nl = body[-1] + nl
         body = body[:-1]
     pat = re.compile(rf"#{re.escape(key)}\s+(\S+)", re.IGNORECASE)
+    # #320: #progress may carry an optional trailing label word
+    # (`#progress 30/54 fixed`) that a single-`\S+` capture would leave
+    # dangling. Match the full value shape so replace strips it cleanly.
+    if key.lower() == "progress":
+        pat = re.compile(
+            r"#progress\s+\d+(?:/\d+)?(?:\s+[A-Za-z][\w-]*)?",
+            re.IGNORECASE,
+        )
+        if pat.search(body):
+            body = pat.sub(f"#progress {new_value}", body, count=1)
+        else:
+            sep = "" if not body or body.endswith(" ") else " "
+            body = f"{body}{sep}#progress {new_value}"
+        lines[line_no] = body + nl
+        return "".join(lines)
     if pat.search(body):
         body = pat.sub(f"#{key} {new_value}", body, count=1)
     else:
@@ -886,6 +907,13 @@ def remove_attr(md: str, line_no: int, key: str) -> str:
             "", body, flags=re.IGNORECASE,
         )
         body = re.sub(r"\s*#url\s+\S+", "", body, flags=re.IGNORECASE)
+    elif key.lower() == "progress":
+        # #320: strip `N/D[ label]?` fully so a stale trailing label word
+        # doesn't leak into the file after a clear.
+        body = re.sub(
+            r"\s*#progress\s+\d+(?:/\d+)?(?:\s+[A-Za-z][\w-]*)?",
+            "", body, flags=re.IGNORECASE,
+        )
     else:
         body = re.sub(rf"\s*#{re.escape(key)}\s+\S+", "", body, flags=re.IGNORECASE)
     if key == "owner":
@@ -1169,6 +1197,13 @@ def patch_ref_rows(md: str, ref_id: str, patch: dict) -> tuple[str, bool]:
                 _cleaned = [v.strip() for v in patch[_link_key] if v and v.strip()]
                 md = replace_multi_attr(md, line_no, _link_key, _cleaned)
                 changed = True
+        # #320: propagate progress metric — single-valued, so a
+        # replace_attr / remove_attr pair is the right shape.
+        if "progress" in patch:
+            _pv = (patch["progress"] or "").strip()
+            md = (replace_attr(md, line_no, "progress", _pv)
+                  if _pv else remove_attr(md, line_no, "progress"))
+            changed = True
         if "add_note" in patch and patch["add_note"]:
             md = append_note(md, line_no, patch["add_note"])
             changed = True
