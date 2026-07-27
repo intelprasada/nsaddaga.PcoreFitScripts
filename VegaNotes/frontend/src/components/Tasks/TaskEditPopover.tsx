@@ -4,6 +4,10 @@ import { api, ApiError, type ChildTask, type Task } from "../../api/client";
 import { TitleWithBreakHints } from "../../lib/titleWrap";
 import { extraTagChips } from "../../lib/tagChips";
 import { nextArStatus, AR_STATUS_STYLES } from "./arStatus";
+import {
+  parseProgressValue, progressColor, PROGRESS_COLOR_CLASS,
+  sparklinePoints, trendBetween, type ParsedProgress,
+} from "../../lib/progressChip";
 
 const STATUSES = ["todo", "in-progress", "blocked", "done"];
 const PRIORITIES = ["", "P0", "P1", "P2", "P3"];
@@ -184,6 +188,12 @@ function PopoverForm({
   const initialJira = attrCsv("jira");
   const initialPr = attrCsv("pr");
   const initialUrl = attrCsv("url");
+  // #320: single-valued progress.
+  const initialProgress = ((): string => {
+    const v = task.attrs.progress;
+    if (v == null) return "";
+    return Array.isArray(v) ? (v[0] ?? "") : String(v);
+  })();
   const noteHistory = task.note_history ?? (task.notes ? task.notes.split("\n").filter(Boolean) : []);
 
   const [status, setStatus] = useState(task.status);
@@ -196,6 +206,8 @@ function PopoverForm({
   const [jira, setJira] = useState(initialJira);
   const [pr, setPr] = useState(initialPr);
   const [urlField, setUrlField] = useState(initialUrl);
+  // #320
+  const [progress, setProgress] = useState(initialProgress);
   const [newNote, setNewNote] = useState("");
   const [newArTitle, setNewArTitle] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -296,6 +308,11 @@ function PopoverForm({
         if (cur !== orig) {
           patch[key] = key === "url" ? splitUrlCsv(cur) : splitCsv(cur);
         }
+      }
+      // #320: single-valued progress token. Trim before diffing so a
+      // stray whitespace edit doesn't force a rewrite.
+      if (progress.trim() !== initialProgress.trim()) {
+        patch.progress = progress.trim();
       }
       if (newNote.trim()) patch.add_note = newNote;
       if (Object.keys(patch).length === 0) return Promise.resolve(task);
@@ -537,6 +554,14 @@ function PopoverForm({
             <input className="border rounded px-2 py-1 text-sm w-full font-mono"
               value={urlField} onChange={(e) => setUrlField(e.target.value)}
               placeholder="[Design Doc](https://example.com/design)" />
+          </Field>
+
+          {/* #320: recurring #progress metric. */}
+          <Field label="Progress" hint="Recurring metric. Shapes: `N`, `N/D`, or `N/D label` (e.g. `30/54 fixed`). Empty clears.">
+            <input className="border rounded px-2 py-1 text-sm w-full font-mono"
+              value={progress} onChange={(e) => setProgress(e.target.value)}
+              placeholder="30/54 fixed" />
+            <ProgressHistorySection task={task} />
           </Field>
 
           {extraTagChips(task).length > 0 && (
@@ -836,5 +861,108 @@ function TrashIcon({ size = 14 }: { size?: number }) {
       <path d="M14 11v6" />
       <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
     </svg>
+  );
+}
+
+/**
+ * #320: weekly history panel for a task's `#progress` metric.
+ *
+ * Renders a sparkline of the last-N percent readings plus a compact
+ * table (week → N/D → label → arrow) driven by
+ * `GET /api/tasks/{ref}/progress-history`.  Hidden entirely when the
+ * task has no history (avoids empty-state clutter on tasks that don't
+ * use the metric).
+ */
+function ProgressHistorySection({ task }: { task: Task }) {
+  const ref = task.task_uuid ?? task.id;
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["task-progress-history", ref],
+    queryFn: () => api.taskProgressHistory(ref),
+    staleTime: 30_000,
+  });
+
+  if (isLoading) return null;
+  if (isError) return null;
+  const rows = data ?? [];
+  if (rows.length === 0) return null;
+
+  const parsed = rows.map((r) => ({
+    week: r.week,
+    p: parseProgressValue(
+      r.denominator != null
+        ? `${r.numerator}/${r.denominator}${r.label ? ` ${r.label}` : ""}`
+        : `${r.numerator}${r.label ? ` ${r.label}` : ""}`,
+    ),
+    raw: r,
+  })).filter((x) => x.p !== null) as { week: string; p: ParsedProgress; raw: typeof rows[number] }[];
+
+  if (parsed.length === 0) return null;
+
+  const values = parsed.map((x) => x.p.percent ?? x.p.numerator);
+  const sparkW = 160;
+  const sparkH = 32;
+  const points = sparklinePoints(values, sparkW, sparkH);
+  const latest = parsed[parsed.length - 1].p;
+  const latestColor = progressColor(latest);
+
+  return (
+    <div className="mt-2 border rounded p-2 bg-slate-50">
+      <div className="flex items-center justify-between mb-1">
+        <div className="text-xs font-semibold text-slate-700">
+          Weekly history <span className="opacity-60">({parsed.length})</span>
+        </div>
+        <svg
+          width={sparkW}
+          height={sparkH}
+          viewBox={`0 0 ${sparkW} ${sparkH}`}
+          className={PROGRESS_COLOR_CLASS[latestColor].split(" ").find((c) => c.startsWith("text-")) ?? "text-slate-700"}
+          aria-hidden="true"
+        >
+          <polyline
+            points={points}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        </svg>
+      </div>
+      <table className="w-full text-xs font-mono">
+        <thead className="text-slate-500">
+          <tr>
+            <th className="text-left font-normal">Week</th>
+            <th className="text-right font-normal">Reading</th>
+            <th className="text-right font-normal">%</th>
+            <th className="text-left font-normal pl-2">Label</th>
+            <th className="text-right font-normal w-6"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {parsed.map((row, i) => {
+            const prev = i > 0 ? parsed[i - 1].p : null;
+            const trend = trendBetween(prev, row.p);
+            const arrow = trend === "up" ? "▲" : trend === "down" ? "▼" : "·";
+            const arrowClass =
+              trend === "up" ? "text-emerald-600" :
+              trend === "down" ? "text-rose-600" : "text-slate-400";
+            const numeric = row.p.denominator != null
+              ? `${row.p.numerator}/${row.p.denominator}`
+              : String(row.p.numerator);
+            return (
+              <tr key={row.week} className="border-t border-slate-200">
+                <td className="text-slate-700">{row.week}</td>
+                <td className="text-right">{numeric}</td>
+                <td className="text-right text-slate-500">
+                  {row.p.percent != null ? `${row.p.percent}%` : "—"}
+                </td>
+                <td className="pl-2 text-slate-500">{row.p.label ?? ""}</td>
+                <td className={"text-right " + arrowClass}>{arrow}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }

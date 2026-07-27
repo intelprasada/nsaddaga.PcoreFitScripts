@@ -20,6 +20,8 @@ const HIDDEN_KEYS = new Set<string>([
   // capsule via <LinkChips />, so we skip them here to avoid a second
   // ugly `#url=[Label](https://…)` tag chip on the same card.
   "url", "hsd", "jira", "pr",
+  // #320: recurring metric — has its own <ProgressChip /> capsule.
+  "progress",
 ]);
 
 export interface TagChip {
