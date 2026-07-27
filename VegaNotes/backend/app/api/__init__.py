@@ -2001,6 +2001,17 @@ def list_tasks(
     # is the historical behaviour. Open tasks are unaffected — only the
     # `status = done` set is scoped.
     done_scope: str = Query(default="active"),
+    # #320: filter by the recurring #progress metric.  All three are
+    # independent — combine to narrow further.
+    #   progress_min_pct=50  -> only tasks with `#progress N/D` where
+    #                           N/D * 100 >= 50 (bare counters skipped
+    #                           since they have no percent).
+    #   progress_max_pct=99  -> only tasks whose percent is <= 99.
+    #   progress_has=1       -> only tasks that have any `#progress`
+    #                           token at all (matches counter form too).
+    progress_min_pct: Optional[int] = Query(default=None, ge=0, le=1000),
+    progress_max_pct: Optional[int] = Query(default=None, ge=0, le=1000),
+    progress_has: bool = Query(default=False),
 ) -> dict[str, Any]:
     if done_scope not in ("active", "all"):
         raise HTTPException(
@@ -2171,6 +2182,37 @@ def list_tasks(
                 f"AND ax{i}.{col} {sql_op} :{vp})"
             )
             params[vp] = value
+
+    # ── #320: recurring #progress metric filters ─────────────────────────
+    # value_norm stores the numeric head (`N` or `N/D`) so we can compute
+    # percent inline via a CASE.  Bare counters (denom missing) are
+    # excluded from the min/max_pct filters — they have no percent to
+    # compare — but are kept by `progress_has`.
+    if progress_has:
+        where.append(
+            "EXISTS (SELECT 1 FROM taskattr pgh "
+            "WHERE pgh.task_id = t.id AND pgh.key = 'progress')"
+        )
+    if progress_min_pct is not None or progress_max_pct is not None:
+        pct_clauses = []
+        if progress_min_pct is not None:
+            pct_clauses.append(
+                "(CAST(substr(pgn.value_norm, 1, instr(pgn.value_norm, '/') - 1) AS REAL) * 100.0 / "
+                "CAST(substr(pgn.value_norm, instr(pgn.value_norm, '/') + 1) AS REAL)) >= :pg_min_pct"
+            )
+            params["pg_min_pct"] = float(progress_min_pct)
+        if progress_max_pct is not None:
+            pct_clauses.append(
+                "(CAST(substr(pgn.value_norm, 1, instr(pgn.value_norm, '/') - 1) AS REAL) * 100.0 / "
+                "CAST(substr(pgn.value_norm, instr(pgn.value_norm, '/') + 1) AS REAL)) <= :pg_max_pct"
+            )
+            params["pg_max_pct"] = float(progress_max_pct)
+        where.append(
+            "EXISTS (SELECT 1 FROM taskattr pgn "
+            "WHERE pgn.task_id = t.id AND pgn.key = 'progress' "
+            "AND instr(pgn.value_norm, '/') > 0 "  # only ratio form
+            f"AND {' AND '.join(pct_clauses)})"
+        )
 
     # ── ORDER BY ─────────────────────────────────────────────────────────
     order_clauses: list[str] = []
