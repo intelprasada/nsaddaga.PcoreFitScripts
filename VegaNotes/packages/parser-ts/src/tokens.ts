@@ -53,6 +53,9 @@ export const REGISTRY: Record<string, TokenSpec> = {
   hsd:      { name: "hsd",      multi: true },
   jira:     { name: "jira",     multi: true },
   pr:       { name: "pr",       multi: true },
+  // #320: recurring progress metric — single value `N/D`, `N/D label`,
+  // or bare `N` counter. Parsed & rendered client-side by progressChip.ts.
+  progress: { name: "progress", multi: false },
 };
 
 export const isKnown = (name: string): boolean => name in REGISTRY;

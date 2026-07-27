@@ -219,7 +219,7 @@ def lex(line: str) -> List[Union[TextChunk, Token]]:
             # else we use single-word reads with stop_at_delimiter so that
             # `#foo #bar` lexes as two bare hashtags, not `foo="#bar"`.
             spec_known = is_known(name)
-            use_until_hash = spec_known and name in ("status", "note")
+            use_until_hash = spec_known and name in ("status", "note", "progress")
             # #316: #url accepts a markdown link `[Label](https://…)` value
             # spanning internal whitespace, so users get an aesthetic
             # user-supplied label instead of a raw hostname. Falls through
