@@ -38,6 +38,7 @@ make test
 | [supertracker](tools/supertracker/README.md) | Python | Tkinter viewer for CTE tracker `.elog` files with repeated header stripping |
 | [interfacespec](tools/interfacespec/README.md) | Python | RTL connectivity pipeline + GUI for generating Interface Spec documents from ICF/hier/gen files |
 | [gen-smt-todos](tools/gen-smt-todos/README.md) | Python | Scans fe/msid RTL for SMT/JNC TODO comments and emits a TSV summary |
+| [teamhub](tools/teamhub/README.md) | Python | Live team-performance dashboard (HTTP server + Chart.js UI) summarizing turnins, commits, HSDs, and pipe-time across GFC and JNC |
 
 ---
 
@@ -55,6 +56,7 @@ core-tools/
 │   ├── interfacespec  # alias: is
 │   ├── supercsv       # alias: sc
 │   ├── supertracker   # alias: st
+│   ├── teamhub        # alias: th
 │   └── email-sender   # alias: email
 │
 ├── tools/             # Each tool in its own subdirectory
@@ -74,6 +76,13 @@ core-tools/
 │       ├── README.md
 │       ├── requirements.txt
 │       └── tests/
+│   ├── teamhub/       # Live team-performance dashboard (HTTP server + Chart.js UI)
+│   │   ├── README.md
+│   │   ├── requirements.txt
+│   │   ├── dashboard_server.py
+│   │   ├── dashboard.html
+│   │   ├── gen_prose_summaries.py
+│   │   └── tests/
 │
 ├── utils/             # GitHub API utilities + user setup scripts
 │   ├── README.md              # Usage documentation
@@ -130,3 +139,68 @@ See [docs/developer-guide.md](docs/developer-guide.md).
 ## Release Process
 
 See [docs/release-process.md](docs/release-process.md).
+
+---
+
+## Dev vs Prod branches
+
+This repo uses two long-lived branches:
+
+| Branch | Purpose | Protection |
+| --- | --- | --- |
+| `main` | Active development. All PRs land here. | No force-push, no deletion. |
+| `prod` | Stable code that deployment pipelines pull from. Only fast-forward promotions from `main`. | PR required, no force-push, no deletion. |
+
+### Normal dev flow
+
+1. Branch off `main`.
+2. Open a PR into `main`.
+3. Merge when checks pass.
+
+### Promoting to prod
+
+Use the **Promote main → prod** workflow (Actions tab → *Promote main → prod* → *Run workflow*).
+
+- Leave `sha` empty to promote the current `main` tip, or enter a specific SHA.
+- The workflow refuses any SHA that isn't an ancestor of `main`, and refuses non-fast-forward moves of `prod`.
+- Each promotion is tagged `prod-YYYYMMDD-HHMMSS`.
+
+### Hotfix flow
+
+1. Branch off `prod` (e.g. `hotfix/foo`).
+2. Open a PR into `prod` and merge.
+3. Cherry-pick the fix onto `main` so it doesn't get lost on the next promotion.
+
+### CI conventions
+
+Deployment jobs should gate on `if: github.ref == 'refs/heads/prod'`. All other CI (tests, lint) should run on every branch.
+
+### Running a local prod instance
+
+The `scripts/prod-start.sh` helper runs backend + frontend from a sibling git worktree pinned to `prod`. It does **not** touch the dev processes.
+
+Bootstrap once:
+
+```bash
+# From the core-tools (dev) checkout:
+git worktree add ../core-tools-prod prod
+./VegaNotes/scripts/prod-start.sh --install   # creates prod venv + npm install + vite build
+```
+
+Everyday flow:
+
+```bash
+./VegaNotes/scripts/prod-start.sh --sync      # ff-only pull to origin/prod
+./VegaNotes/scripts/prod-start.sh --restart   # relaunch prod backend + frontend
+```
+
+Ports (distinct from dev):
+
+| | Dev | Prod |
+| --- | --- | --- |
+| Backend | 8000 | 8100 |
+| Frontend | 5173 | 4173 |
+| Data dir | `.devdata/` | `.proddata/` |
+
+Frontend runs `vite preview` off a built `dist/` (production bundle), not the dev server.
+

@@ -1,0 +1,80 @@
+name: Promote main → prod
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit SHA on main to promote (leave empty for main tip)"
+        required: false
+        default: ""
+      note:
+        description: "Release note (goes into the promotion tag message)"
+        required: false
+        default: "manual promotion"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: promote-to-prod
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Resolve target SHA
+        id: resolve
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.sha }}" ]; then
+            TARGET="${{ inputs.sha }}"
+          else
+            TARGET="$(git rev-parse origin/main)"
+          fi
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "Promoting SHA: $TARGET"
+
+      - name: Verify SHA is an ancestor of main
+        run: |
+          set -euo pipefail
+          TARGET="${{ steps.resolve.outputs.target }}"
+          git fetch origin main --quiet
+          if ! git merge-base --is-ancestor "$TARGET" origin/main; then
+            echo "::error::$TARGET is not an ancestor of main. Refusing to promote."
+            exit 1
+          fi
+
+      - name: Fast-forward prod to target
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TARGET="${{ steps.resolve.outputs.target }}"
+          git fetch origin prod --quiet
+          PROD_SHA="$(git rev-parse origin/prod)"
+          if ! git merge-base --is-ancestor "$PROD_SHA" "$TARGET"; then
+            echo "::error::prod ($PROD_SHA) is not an ancestor of target ($TARGET). Would require force-push. Aborting."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git push origin "$TARGET:refs/heads/prod"
+
+      - name: Tag the promotion
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TARGET="${{ steps.resolve.outputs.target }}"
+          STAMP="$(date -u +%Y%m%d-%H%M%S)"
+          TAG="prod-$STAMP"
+          git tag -a "$TAG" "$TARGET" -m "prod promotion: ${{ inputs.note }}"
+          git push origin "$TAG"
+          echo "Tagged $TARGET as $TAG"

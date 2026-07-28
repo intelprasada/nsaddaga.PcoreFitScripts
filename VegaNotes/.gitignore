@@ -29,6 +29,8 @@ dist/
 *.sqlite-journal
 *.sqlite-wal
 *.sqlite-shm
+.devdata/
+.proddata/
 
 # Env
 .env
