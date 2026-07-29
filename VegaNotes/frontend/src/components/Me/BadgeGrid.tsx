@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type MeBadges } from "../../api/client";
+import { parseBadgeProgress } from "../../lib/badgeProgress";
 
 function fmtDate(iso: string): string {
   // Trim to YYYY-MM-DD; full timestamp clutters the tile.
@@ -61,29 +62,37 @@ export function BadgeGrid() {
 
       {showLocked && data.locked.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-          {data.locked.map((b) => (
+          {data.locked.map((b) => {
+            const prog = parseBadgeProgress(b.progress);
+            return (
             <div
               key={b.key}
               className="rounded border border-slate-200 bg-slate-50 p-3 opacity-80"
               title={b.description}
             >
-              <div className="text-sm font-semibold text-slate-600">🔒 {b.title}</div>
+              <div className="text-sm font-semibold text-slate-600 flex items-center gap-1.5">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="text-slate-400 shrink-0">
+                  <rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                </svg>
+                {b.title}
+              </div>
               <div className="text-xs text-slate-500 mt-0.5 line-clamp-2">{b.description}</div>
-              {b.progress != null && (
+              {prog && (
                 <div className="mt-1.5">
                   <div className="h-1.5 bg-slate-200 rounded overflow-hidden">
                     <div
                       className="h-full bg-sky-400"
-                      style={{ width: `${Math.round(Math.max(0, Math.min(1, b.progress)) * 100)}%` }}
+                      style={{ width: `${Math.round(prog.ratio * 100)}%` }}
                     />
                   </div>
                   <div className="text-[10px] text-slate-500 mt-0.5">
-                    {Math.round(Math.max(0, Math.min(1, b.progress)) * 100)}%
+                    {prog.label}
                   </div>
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
