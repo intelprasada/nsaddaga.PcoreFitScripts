@@ -143,6 +143,14 @@ function compileOne(c: Clause, raw: string): Array<[string, string]> {
     return [["kind", c.value]];
   }
   if (c.lhs === "eta") return compileEta(c, raw);
+  // #320: `progress` sugar → dedicated backend params.
+  //   progress = has          -> progress_has=1
+  //   progress > 50%          -> progress_min_pct=50
+  //   progress < 25%          -> progress_max_pct=25
+  //   progress >= 50%         -> progress_min_pct=50   (same as >)
+  //   progress <= 99%         -> progress_max_pct=99
+  //   progress = <literal>    -> generic attr eq path
+  if (c.lhs === "progress") return compileProgress(c, raw);
   if (FIXED_COLUMNS.has(c.lhs)) {
     if (!FIXED_OPS.has(c.op)) {
       throw new DSLError(
@@ -172,6 +180,43 @@ function compileEta(c: Clause, raw: string): Array<[string, string]> {
       return [["attr", `eta:${c.op}:${c.value}`]];
     default:
       throw new DSLError(`unsupported operator on eta: ${c.op} (clause ${raw})`);
+  }
+}
+
+// #320: `progress` sugar — routes numeric-percent comparisons and the
+// `progress = has` shorthand to the dedicated backend params.  Anything
+// else falls through to the generic `@progress` attr path (equality on
+// the raw string).
+function compileProgress(c: Clause, raw: string): Array<[string, string]> {
+  const parsePct = (v: string): string => {
+    const s = v.trim().replace(/%\s*$/, "");
+    const n = Number(s);
+    if (!Number.isFinite(n) || n < 0 || n > 1000) {
+      throw new DSLError(`progress value must be a percent 0-1000 (got "${v}")`);
+    }
+    return String(Math.round(n));
+  };
+  switch (c.op) {
+    case "eq":
+      if (c.value.trim().toLowerCase() === "has") {
+        return [["progress_has", "1"]];
+      }
+      // Literal equality on the raw stored value falls through to the
+      // generic attr path — matches `#progress 30/54 fixed` verbatim.
+      return [["attr", `progress:eq:${c.value}`]];
+    case "gt":
+    case "gte":
+      return [["progress_min_pct", parsePct(c.value)]];
+    case "lt":
+    case "lte":
+      return [["progress_max_pct", parsePct(c.value)]];
+    case "ne":
+    case "in":
+    case "nin":
+    case "like":
+      return [["attr", `progress:${c.op}:${c.value}`]];
+    default:
+      throw new DSLError(`unsupported operator on progress: ${c.op} (clause ${raw})`);
   }
 }
 
