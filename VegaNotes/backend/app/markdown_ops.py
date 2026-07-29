@@ -1085,6 +1085,99 @@ def append_note(md: str, task_line_no: int, text: str) -> str:
     return "".join(lines[:insert_at] + new_block + lines[insert_at:])
 
 
+def _note_continuation_lines(lines: list[str], task_line_no: int) -> list[int]:
+    """Source-line indices of standalone ``#note`` continuation lines directly
+    under the task at ``task_line_no``, in document order.
+
+    Mirrors :func:`append_note`'s block scan exactly so the index of a note in
+    this list matches both what ``append_note`` would emit and the order the
+    API returns ``note_history`` in (for notes authored through the UI, which
+    are always one ``#note`` per continuation line). Scanning stops at the
+    first line whose indent falls back to (or below) the task's own indent, or
+    the first continuation line that is not a ``#note``.
+    """
+    if task_line_no < 0 or task_line_no >= len(lines):
+        raise ValueError(f"line {task_line_no} out of range")
+    task_raw = lines[task_line_no]
+    task_ws_len = len(task_raw) - len(task_raw.lstrip(" \t"))
+    out: list[int] = []
+    idx = task_line_no + 1
+    while idx < len(lines):
+        raw = lines[idx]
+        stripped = raw.lstrip(" \t")
+        ind = len(raw) - len(stripped)
+        if ind <= task_ws_len:
+            break
+        if not re.match(r"#note(\s|$)", stripped, re.IGNORECASE):
+            break
+        out.append(idx)
+        idx += 1
+    return out
+
+
+def _note_text_at(raw: str) -> str:
+    """Extract the note body from a ``<pad>#note <text>`` line (no newline)."""
+    stripped = raw.lstrip(" \t")
+    body = stripped[len("#note"):]
+    return body.strip()
+
+
+def edit_note(
+    md: str, task_line_no: int, index: int, new_text: str,
+    *, expect: str | None = None,
+) -> str:
+    """Replace the text of the ``index``-th ``#note`` continuation line.
+
+    ``expect`` (optional) is item-level optimistic concurrency: when supplied,
+    the note currently at ``index`` must have exactly that text, else a
+    ``ValueError`` is raised so the caller can surface a 409 instead of editing
+    the wrong entry (guards against index drift from inline notes or a
+    concurrent write). Preserves the line's indentation and trailing newline.
+    """
+    text = (new_text or "").strip()
+    if not text:
+        raise ValueError("note text must not be empty; delete the note instead")
+    lines = md.splitlines(keepends=True)
+    note_lines = _note_continuation_lines(lines, task_line_no)
+    if index < 0 or index >= len(note_lines):
+        raise IndexError(f"note index {index} out of range (have {len(note_lines)})")
+    target = note_lines[index]
+    raw = lines[target]
+    nl = ""
+    body = raw
+    while body.endswith(("\n", "\r")):
+        nl = body[-1] + nl
+        body = body[:-1]
+    if expect is not None and _note_text_at(body) != expect.strip():
+        raise ValueError("note changed since it was loaded; refetch and retry")
+    lead = body[:len(body) - len(body.lstrip(" \t"))]
+    lines[target] = f"{lead}#note {text}{nl}"
+    return "".join(lines)
+
+
+def remove_note(
+    md: str, task_line_no: int, index: int, *, expect: str | None = None,
+) -> str:
+    """Delete the ``index``-th ``#note`` continuation line under the task.
+
+    ``expect`` behaves as in :func:`edit_note` — a mismatch raises so the
+    caller never deletes the wrong note after index drift.
+    """
+    lines = md.splitlines(keepends=True)
+    note_lines = _note_continuation_lines(lines, task_line_no)
+    if index < 0 or index >= len(note_lines):
+        raise IndexError(f"note index {index} out of range (have {len(note_lines)})")
+    target = note_lines[index]
+    if expect is not None:
+        body = lines[target]
+        while body.endswith(("\n", "\r")):
+            body = body[:-1]
+        if _note_text_at(body) != expect.strip():
+            raise ValueError("note changed since it was loaded; refetch and retry")
+    del lines[target]
+    return "".join(lines)
+
+
 def replace_multi_attr(md: str, line_no: int, key: str, values: list[str]) -> str:
     """Replace every occurrence of a multi-valued attr on ``line_no`` with ``values``.
 
@@ -1140,6 +1233,43 @@ def find_ref_row_lines(md: str, ref_id: str) -> list[int]:
         if m and m.group(1) == ref_id:
             result.append(i)
     return result
+
+
+def _retarget_ref_note_by_text(
+    md: str, task_line_no: int, old_text: str, new_text: str | None,
+) -> tuple[str, bool]:
+    """Edit or delete a ref row's ``#note`` line by matching its text (#333).
+
+    Ref rows mirror a task in another file; their note ordering may differ from
+    the canonical block, so edit/delete here matches by the *old* note text
+    rather than index. ``new_text=None`` deletes the matched line; otherwise it
+    is rewritten to ``#note <new_text>``. Only the first match under the ref
+    row is touched. Returns ``(new_md, changed)``.
+    """
+    want = (old_text or "").strip()
+    if not want:
+        return md, False
+    lines = md.splitlines(keepends=True)
+    try:
+        note_lines = _note_continuation_lines(lines, task_line_no)
+    except ValueError:
+        return md, False
+    for target in note_lines:
+        raw = lines[target]
+        nl = ""
+        body = raw
+        while body.endswith(("\n", "\r")):
+            nl = body[-1] + nl
+            body = body[:-1]
+        if _note_text_at(body) != want:
+            continue
+        if new_text is None:
+            del lines[target]
+        else:
+            lead = body[:len(body) - len(body.lstrip(" \t"))]
+            lines[target] = f"{lead}#note {new_text.strip()}{nl}"
+        return "".join(lines), True
+    return md, False
 
 
 def patch_ref_rows(md: str, ref_id: str, patch: dict) -> tuple[str, bool]:
@@ -1207,6 +1337,16 @@ def patch_ref_rows(md: str, ref_id: str, patch: dict) -> tuple[str, bool]:
         if "add_note" in patch and patch["add_note"]:
             md = append_note(md, line_no, patch["add_note"])
             changed = True
+        # #333: mirror an individual note edit / delete into ref rows by text
+        # match, so a subsequent reindex of this file can't resurrect a note
+        # the user just removed / re-add the pre-edit text.
+        if "edit_note" in patch and patch["edit_note"]:
+            _en = patch["edit_note"]
+            md, _did = _retarget_ref_note_by_text(md, line_no, _en.get("old", ""), _en.get("new", ""))
+            changed = changed or _did
+        if "delete_note_text" in patch and patch["delete_note_text"]:
+            md, _did = _retarget_ref_note_by_text(md, line_no, patch["delete_note_text"], None)
+            changed = changed or _did
 
     return md, changed
 
