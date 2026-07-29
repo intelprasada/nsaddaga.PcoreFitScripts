@@ -1,16 +1,26 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+// The dev server and `vite preview` proxy /api, /ws and /healthz to the
+// backend. Both the listen port and the backend target are env-overridable so
+// dev and prod can run side-by-side on swapped ports without cross-wiring —
+// e.g. prod on :5173/:8000 (the shared team URL) and dev on :4173/:8100.
+// Defaults preserve the original single-instance behaviour (:5173 → :8000).
+const BACKEND_PORT = process.env.VEGA_BACKEND_PORT ?? "8000";
+const FRONTEND_PORT = Number(process.env.VEGA_FRONTEND_PORT ?? "5173");
+const backend = `http://localhost:${BACKEND_PORT}`;
+const proxy = {
+  "/api": backend,
+  "/ws": { target: `ws://localhost:${BACKEND_PORT}`, ws: true },
+  "/healthz": backend,
+};
+
 export default defineConfig({
   plugins: [react()],
-  server: {
-    port: 5173,
-    proxy: {
-      "/api": "http://localhost:8000",
-      "/ws":  { target: "ws://localhost:8000", ws: true },
-      "/healthz": "http://localhost:8000",
-    },
-  },
+  server: { port: FRONTEND_PORT, proxy },
+  // `vite preview` (used by prod-start.sh) needs its own proxy block so the
+  // built bundle's /api calls reach the prod backend, not whatever is on :8000.
+  preview: { port: FRONTEND_PORT, proxy },
   build: {
     outDir: "dist",
     emptyOutDir: true,

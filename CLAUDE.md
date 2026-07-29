@@ -36,8 +36,8 @@ If the toplevel is unexpected or `HEAD` doesn't match the table, **stop and ask*
 
    | | Backend | Frontend | Data dir |
    | --- | --- | --- | --- |
-   | Dev  | `:8000` | `:5173` (vite dev) | `.devdata/` |
-   | Prod | `:8100` | `:4173` (vite preview) | `.proddata/` |
+   | Dev  | `:8100` | `:4173` (vite dev) | `.devdata/` |
+   | Prod | `:8000` | `:5173` (vite preview) | `.proddata/` |
 
 ---
 
