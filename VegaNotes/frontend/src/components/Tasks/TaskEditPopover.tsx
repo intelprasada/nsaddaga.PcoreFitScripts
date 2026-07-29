@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, type ChildTask, type Task } from "../../api/client";
 import { TitleWithBreakHints } from "../../lib/titleWrap";
 import { extraTagChips } from "../../lib/tagChips";
+import { validateProgress, validateNoSpaceCsv } from "../../lib/taskFieldValidation";
 import { nextArStatus, AR_STATUS_STYLES } from "./arStatus";
 import {
   parseProgressValue, progressColor, PROGRESS_COLOR_CLASS,
@@ -66,7 +67,7 @@ export function TaskEditPopover({ task: initialTask, onClose }: Props) {
     >
       <div className="min-h-full flex items-start sm:items-center justify-center p-4">
         <div
-          className="bg-white rounded-lg shadow-xl w-[480px] max-w-[95vw]
+          className="bg-white rounded-lg shadow-xl w-[880px] max-w-[95vw]
                      max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden my-4"
           onClick={(e) => e.stopPropagation()}
         >
@@ -213,6 +214,23 @@ function PopoverForm({
   const [err, setErr] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmDeleteArId, setConfirmDeleteArId] = useState<number | null>(null);
+  // Links section starts expanded only when at least one link field already
+  // has a value — the common (empty) case stays collapsed so four rarely-used
+  // inputs don't dominate the form (#329).
+  const [linksOpen, setLinksOpen] = useState<boolean>(
+    () => !!(initialHsd || initialJira || initialPr || initialUrl),
+  );
+
+  // Live per-field validation mirroring the backend PATCH rules (#329). Save
+  // is disabled while any of these is non-null; each surfaces inline under its
+  // field so the user sees the problem before hitting a server 400.
+  const fieldErrors = {
+    progress: validateProgress(progress),
+    hsd: validateNoSpaceCsv(hsd, "HSD"),
+    jira: validateNoSpaceCsv(jira, "JIRA"),
+    pr: validateNoSpaceCsv(pr, "PR"),
+  };
+  const hasFieldErrors = Object.values(fieldErrors).some(Boolean);
 
   // Parent-title inline pencil (issue #283).
   const [editingTitle, setEditingTitle] = useState(false);
@@ -425,7 +443,7 @@ function PopoverForm({
             <div className="flex items-center gap-1 mt-0.5">
               <input
                 ref={titleInputRef}
-                className="border rounded px-2 py-1 text-sm font-semibold flex-1 min-w-0"
+                className="vega-input text-sm font-semibold flex-1 min-w-0"
                 value={titleDraft}
                 onChange={(e) => setTitleDraft(e.target.value)}
                 onKeyDown={(e) => {
@@ -494,78 +512,112 @@ function PopoverForm({
       <div className="p-5 pt-3 overflow-y-auto flex-1">
         <form
           id="task-edit-form"
-          className="space-y-3"
-          onSubmit={(e) => { e.preventDefault(); setErr(null); save.mutate(); }}
+          className="grid grid-cols-1 md:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] gap-5"
+          onSubmit={(e) => { e.preventDefault(); if (hasFieldErrors) return; setErr(null); save.mutate(); }}
         >
-          <Field label="Status">
-            <select className="border rounded px-2 py-1 text-sm w-full"
-              value={status} onChange={(e) => setStatus(e.target.value)}>
-              {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </Field>
-
-          <Field label="Priority">
-            <select className="border rounded px-2 py-1 text-sm w-full"
-              value={priority} onChange={(e) => setPriority(e.target.value)}>
-              {PRIORITIES.map((p) => <option key={p} value={p}>{p || "(none)"}</option>)}
-            </select>
-          </Field>
-
-          <Field label="ETA" hint="Intel WW (e.g. 2026-W18) or ISO date (2026-04-30). Empty to clear.">
-            <input className="border rounded px-2 py-1 text-sm w-full font-mono"
-              value={eta} onChange={(e) => setEta(e.target.value)}
-              placeholder="2026-W18" />
-          </Field>
-
-          <Field label="Owners" hint={`Comma-separated. Known: ${knownUsers.join(", ") || "(none)"}`}>
-            <input className="border rounded px-2 py-1 text-sm w-full"
-              value={owners} onChange={(e) => setOwners(e.target.value)}
-              placeholder="alice, bob" list="known-users" />
-            <datalist id="known-users">
-              {knownUsers.map((u) => <option key={u} value={u} />)}
-            </datalist>
-          </Field>
-
-          <Field label="Features" hint="Comma-separated.">
-            <input className="border rounded px-2 py-1 text-sm w-full"
-              value={features} onChange={(e) => setFeatures(e.target.value)}
-              placeholder="auth, billing" />
-          </Field>
-
-          {/* #314: external-URL capsule tokens. Each field is CSV; whitespace
-              inside a value is rejected server-side. Values become clickable
-              chips rendered by <LinkChips />. */}
-          <Field label="HSD" hint="Comma-separated HSD IDs. e.g. 1234567, 2345678">
-            <input className="border rounded px-2 py-1 text-sm w-full font-mono"
-              value={hsd} onChange={(e) => setHsd(e.target.value)}
-              placeholder="1234567" />
-          </Field>
-          <Field label="JIRA" hint="Comma-separated Jira keys. e.g. ABC-42, XYZ-9">
-            <input className="border rounded px-2 py-1 text-sm w-full font-mono"
-              value={jira} onChange={(e) => setJira(e.target.value)}
-              placeholder="ABC-42" />
-          </Field>
-          <Field label="PR" hint="Comma-separated GitHub PRs as owner/repo#N.">
-            <input className="border rounded px-2 py-1 text-sm w-full font-mono"
-              value={pr} onChange={(e) => setPr(e.target.value)}
-              placeholder="owner/repo#42" />
-          </Field>
-          <Field label="URLs" hint="Comma-separated. Preferred syntax: [Label](https://…) — the label becomes the chip text.">
-            <input className="border rounded px-2 py-1 text-sm w-full font-mono"
-              value={urlField} onChange={(e) => setUrlField(e.target.value)}
-              placeholder="[Design Doc](https://example.com/design)" />
-          </Field>
-
-          {/* #320: recurring #progress metric. */}
-          <Field label="Progress" hint="Recurring metric. Shapes: `N`, `N/D`, or `N/D label` (e.g. `30/54 fixed`). Empty clears.">
-            <input className="border rounded px-2 py-1 text-sm w-full font-mono"
-              value={progress} onChange={(e) => setProgress(e.target.value)}
-              placeholder="30/54 fixed" />
+          {/* METADATA pane (right / order-2) — status, people, links and tags
+              are set occasionally, so they take the narrower column (#329). */}
+          <div className="space-y-4 min-w-0 md:order-2">
+          {/* Status & schedule — short fields laid out two-up (#329). */}
+          <Section title="Status & schedule">
+            <FieldGrid>
+              <Field label="Status">
+                <select className="vega-select"
+                  value={status} onChange={(e) => setStatus(e.target.value)}>
+                  {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </Field>
+              <Field label="Priority">
+                <select className="vega-select"
+                  value={priority} onChange={(e) => setPriority(e.target.value)}>
+                  {PRIORITIES.map((p) => <option key={p} value={p}>{p || "(none)"}</option>)}
+                </select>
+              </Field>
+            </FieldGrid>
+            <FieldGrid>
+              <Field label="ETA" hint="Intel WW (2026-W18) or ISO date. Empty to clear.">
+                <input className="vega-input font-mono"
+                  value={eta} onChange={(e) => setEta(e.target.value)}
+                  placeholder="2026-W18" />
+              </Field>
+              <Field label="Progress" hint="`N`, `N/D`, or `N/D label`. Empty clears." error={fieldErrors.progress}>
+                <input className={`vega-input font-mono ${fieldErrors.progress ? "border-rose-400 focus:ring-rose-100" : ""}`}
+                  aria-invalid={!!fieldErrors.progress}
+                  value={progress} onChange={(e) => setProgress(e.target.value)}
+                  placeholder="30/54 fixed" />
+              </Field>
+            </FieldGrid>
             <ProgressHistorySection task={task} />
-          </Field>
+          </Section>
+
+          {/* People & scope. */}
+          <Section title="People &amp; scope">
+            <Field label="Owners" hint="Comma-separated. Type to autocomplete known users.">
+              <input className="vega-input"
+                value={owners} onChange={(e) => setOwners(e.target.value)}
+                placeholder="alice, bob" list="known-users" />
+              <datalist id="known-users">
+                {knownUsers.map((u) => <option key={u} value={u} />)}
+              </datalist>
+            </Field>
+            <Field label="Features" hint="Comma-separated.">
+              <input className="vega-input"
+                value={features} onChange={(e) => setFeatures(e.target.value)}
+                placeholder="auth, billing" />
+            </Field>
+          </Section>
+
+          {/* External links — collapsed by default when empty so the four
+              rarely-used fields don't dominate the form (#314/#329). */}
+          <section className="vega-section space-y-3">
+            <button type="button"
+              className="vega-section-title hover:text-slate-700"
+              onClick={() => setLinksOpen((o) => !o)}
+              aria-expanded={linksOpen}>
+              <span className="text-slate-400">{linksOpen ? "▾" : "▸"}</span>
+              Links
+              {(() => {
+                const n = [hsd, jira, pr, urlField].filter((s) => s.trim()).length;
+                return !linksOpen && n > 0
+                  ? <span className="ml-1 rounded-full bg-slate-200 px-1.5 text-[10px] text-slate-600 normal-case">{n}</span>
+                  : null;
+              })()}
+            </button>
+            {linksOpen && (
+              <>
+                <FieldGrid>
+                  <Field label="HSD" hint="Comma-separated IDs." error={fieldErrors.hsd}>
+                    <input className={`vega-input font-mono ${fieldErrors.hsd ? "border-rose-400 focus:ring-rose-100" : ""}`}
+                      aria-invalid={!!fieldErrors.hsd}
+                      value={hsd} onChange={(e) => setHsd(e.target.value)}
+                      placeholder="1234567" />
+                  </Field>
+                  <Field label="JIRA" hint="Comma-separated keys." error={fieldErrors.jira}>
+                    <input className={`vega-input font-mono ${fieldErrors.jira ? "border-rose-400 focus:ring-rose-100" : ""}`}
+                      aria-invalid={!!fieldErrors.jira}
+                      value={jira} onChange={(e) => setJira(e.target.value)}
+                      placeholder="ABC-42" />
+                  </Field>
+                </FieldGrid>
+                <FieldGrid>
+                  <Field label="PR" hint="owner/repo#N, comma-separated." error={fieldErrors.pr}>
+                    <input className={`vega-input font-mono ${fieldErrors.pr ? "border-rose-400 focus:ring-rose-100" : ""}`}
+                      aria-invalid={!!fieldErrors.pr}
+                      value={pr} onChange={(e) => setPr(e.target.value)}
+                      placeholder="owner/repo#42" />
+                  </Field>
+                  <Field label="URLs" hint="[Label](https://…), comma-separated.">
+                    <input className="vega-input font-mono"
+                      value={urlField} onChange={(e) => setUrlField(e.target.value)}
+                      placeholder="[Design Doc](https://…)" />
+                  </Field>
+                </FieldGrid>
+              </>
+            )}
+          </section>
 
           {extraTagChips(task).length > 0 && (
-            <Field label="Tags" hint="Bare `#tag` attributes parsed from the .md file. Add or remove by editing the source markdown.">
+            <Section title="Tags">
               <div className="flex flex-wrap gap-1">
                 {extraTagChips(task).map((c) => (
                   <span
@@ -578,14 +630,17 @@ function PopoverForm({
                   </span>
                 ))}
               </div>
-            </Field>
+              <div className="vega-field-hint">Bare <code>#tag</code> attributes from the .md file — edit the source to change.</div>
+            </Section>
           )}
+          </div>
 
+          {/* PRIMARY pane (left / order-1) — ARs and notes are added/removed far
+              more often than metadata, so they lead and take the wider column. */}
+          <div className="space-y-4 min-w-0 md:order-1">
           {task.kind === "task" && (
-            <Field
-              label={`Action requests${arChildren.length ? ` (${arChildren.length})` : ""}`}
-              hint="Click the pencil to edit an AR in this popover. Click the status chip to cycle it. Click the trash to delete."
-            >
+            <Section title={`Action requests${arChildren.length ? ` (${arChildren.length})` : ""}`}>
+              <div className="vega-field-hint -mt-1">Pencil edits · status chip cycles · trash deletes.</div>
               {arChildren.length > 0 && (
                 <ul className="border rounded divide-y bg-slate-50 mb-2 max-h-56 overflow-y-auto">
                   {arChildren.map((ar) => (
@@ -619,7 +674,7 @@ function PopoverForm({
               )}
               <div className="flex gap-2">
                 <input
-                  className="border rounded px-2 py-1 text-sm flex-1"
+                  className="vega-input flex-1"
                   value={newArTitle}
                   onChange={(e) => setNewArTitle(e.target.value)}
                   onKeyDown={(e) => {
@@ -644,38 +699,41 @@ function PopoverForm({
                   {addAr.isPending ? "adding…" : "+ AR"}
                 </button>
               </div>
-            </Field>
+            </Section>
           )}
 
-          <Field label="Notes — history" hint={noteHistory.length === 0 ? "No prior notes." : `${noteHistory.length} entr${noteHistory.length === 1 ? "y" : "ies"}, oldest first. Read-only — entries are append-only and preserved verbatim from the .md file.`}>
-            {noteHistory.length === 0 ? (
-              <div className="text-xs italic text-slate-400 border border-dashed rounded p-2">
-                (none)
-              </div>
-            ) : (
-              <ul className="border rounded divide-y bg-slate-50 max-h-32 overflow-y-auto">
-                {noteHistory.map((line, i) => (
-                  <li key={i} className="px-2 py-1 text-xs font-mono text-slate-700 whitespace-pre-wrap break-words">
-                    {line}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Field>
+          <Section title="Notes">
+            <Field label="History" hint={noteHistory.length === 0 ? "No prior notes." : `${noteHistory.length} entr${noteHistory.length === 1 ? "y" : "ies"}, oldest first · read-only.`}>
+              {noteHistory.length === 0 ? (
+                <div className="text-xs italic text-slate-400 border border-dashed rounded p-2">
+                  (none)
+                </div>
+              ) : (
+                <ul className="border rounded divide-y bg-white max-h-32 overflow-y-auto">
+                  {noteHistory.map((line, i) => (
+                    <li key={i} className="px-2 py-1 text-xs font-mono text-slate-700 whitespace-pre-wrap break-words">
+                      {line}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Field>
 
-          <Field label="Add a note" hint={task.kind === "task"
-            ? "Appended as a new `#note` continuation line. Auto-prefixed with timestamp + your @handle. For action items, use the 'Add an AR' field above instead — typing `!AR …` here will be rejected."
-            : "Appended as a new `#note` continuation line. Auto-prefixed with timestamp + your @handle."}>
-            <textarea
-              className="border rounded px-2 py-1 text-sm w-full font-mono"
-              rows={3}
-              value={newNote}
-              onChange={(e) => setNewNote(e.target.value)}
-              placeholder="e.g. filed bug 12345; waiting on @alice for review"
-            />
-          </Field>
+            <Field label="Add a note" hint={task.kind === "task"
+              ? "Appended as a `#note` line, prefixed with timestamp + your @handle. Use 'Add an AR' above for action items."
+              : "Appended as a `#note` line, prefixed with timestamp + your @handle."}>
+              <textarea
+                className="vega-textarea font-mono"
+                rows={3}
+                value={newNote}
+                onChange={(e) => setNewNote(e.target.value)}
+                placeholder="e.g. filed bug 12345; waiting on @alice for review"
+              />
+            </Field>
+          </Section>
+          </div>
 
-          {err && <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded p-2">{err}</div>}
+          {err && <div className="md:col-span-2 text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded p-2">{err}</div>}
         </form>
       </div>
 
@@ -696,19 +754,28 @@ function PopoverForm({
             </button>
           </div>
         ) : (
+          // Destructive action kept visually distinct (outlined danger) and far
+          // from the primary Save on the opposite edge, behind a confirm step.
           <button type="button" onClick={() => setConfirmDelete(true)}
-            className="text-xs text-rose-600 hover:text-rose-800 underline"
+            className="inline-flex items-center gap-1.5 rounded-md border border-rose-200 px-2.5 py-1 text-xs font-medium text-rose-600 transition-colors hover:bg-rose-50 hover:border-rose-300"
             title={task.kind === "ar"
               ? "Remove this AR line from the source .md file"
               : "Remove this task line (and any sub-tasks / ARs / #note continuations) from the source .md file"}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M3 6h18" /><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" /><path d="M6 6l1 14a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-14" />
+            </svg>
             Delete {task.kind === "ar" ? "AR" : "task"}
           </button>
         )}
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          {hasFieldErrors && (
+            <span className="text-[11px] text-rose-500">Fix highlighted fields</span>
+          )}
           <button type="button" onClick={onClose}
-            className="rounded border px-3 py-1 text-sm">cancel</button>
-          <button type="submit" form="task-edit-form" disabled={save.isPending}
-            className="rounded bg-sky-600 text-white px-3 py-1 text-sm disabled:opacity-50">
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100">cancel</button>
+          <button type="submit" form="task-edit-form" disabled={save.isPending || hasFieldErrors}
+            title={hasFieldErrors ? "Resolve the highlighted validation errors first" : undefined}
+            className="rounded-md bg-sky-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50 disabled:hover:bg-sky-600">
             {save.isPending ? "saving…" : "save"}
           </button>
         </div>
@@ -820,14 +887,37 @@ function ArRow({
   );
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function Field({ label, hint, error, children }: { label: string; hint?: string; error?: string | null; children: React.ReactNode }) {
   return (
     <label className="block">
-      <div className="text-xs text-slate-600 mb-0.5">{label}</div>
+      <div className="vega-field-label">{label}</div>
       {children}
-      {hint && <div className="text-[11px] text-slate-400 mt-0.5">{hint}</div>}
+      {error
+        ? <div className="mt-1 flex items-start gap-1 text-[11px] text-rose-600">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mt-px shrink-0" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" /><path d="M12 8v4" /><path d="M12 16h.01" />
+            </svg>
+            <span>{error}</span>
+          </div>
+        : hint ? <div className="vega-field-hint">{hint}</div> : null}
     </label>
   );
+}
+
+// Grouping primitives for the popover body (#329). A Section is a titled,
+// lightly-boxed cluster of related fields; FieldGrid lays short fields out
+// two-up to use the modal's width instead of an ever-growing single column.
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="vega-section space-y-3">
+      <div className="vega-section-title">{title}</div>
+      {children}
+    </section>
+  );
+}
+
+function FieldGrid({ children }: { children: React.ReactNode }) {
+  return <div className="grid grid-cols-2 gap-3">{children}</div>;
 }
 
 /**
