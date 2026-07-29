@@ -918,8 +918,15 @@ def remove_attr(md: str, line_no: int, key: str) -> str:
         body = re.sub(rf"\s*#{re.escape(key)}\s+\S+", "", body, flags=re.IGNORECASE)
     if key == "owner":
         body = re.sub(r"\s*@[a-zA-Z][\w.-]*", "", body)
-    body = re.sub(r"\s{2,}", " ", body).rstrip()
-    lines[line_no] = body + nl
+    # Preserve the leading indentation. Collapsing runs of whitespace across the
+    # WHOLE line (including the indent) silently changed a task/AR's indent level
+    # and reparented it in the outline — e.g. adding an #hsd to one AR flattened
+    # its 2-tab indent to 1, making it a sibling of its parent task and orphaning
+    # every other AR (T-800631 lost all its ARs from the card). Only collapse
+    # runs *inside* the body proper.
+    lead = body[: len(body) - len(body.lstrip())]
+    rest = re.sub(r"\s{2,}", " ", body[len(lead):]).rstrip()
+    lines[line_no] = lead + rest + nl
     return "".join(lines)
 
 
@@ -1248,8 +1255,11 @@ def remove_tag(md: str, task_line_no: int, key: str, value: str | None = None) -
             body = body[:-1]
         new_body = pat.sub("", body)
         if new_body != body:
-            new_body = re.sub(r"\s{2,}", " ", new_body).rstrip()
-            lines[i] = new_body + nl
+            # Preserve leading indent (see remove_attr) — collapsing the whole
+            # line would flatten a task/AR's indent and reparent it.
+            lead = new_body[: len(new_body) - len(new_body.lstrip())]
+            rest = re.sub(r"\s{2,}", " ", new_body[len(lead):]).rstrip()
+            lines[i] = lead + rest + nl
     return "".join(lines)
 
 
