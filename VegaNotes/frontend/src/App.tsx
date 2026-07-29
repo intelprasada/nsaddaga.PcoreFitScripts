@@ -1,22 +1,30 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useUI } from "./store/ui";
 import { FilterBar } from "./components/FilterBar/FilterBar";
-import { KanbanBoard } from "./components/Kanban/KanbanBoard";
-import { AgendaView } from "./components/Agenda/AgendaView";
-import { TimelineView } from "./components/Timeline/TimelineView";
-import { CalendarView } from "./components/Calendar/CalendarView";
-import { GraphView } from "./components/Graph/GraphView";
-import { MyTasksView } from "./components/Tasks/MyTasksView";
-import { MeView } from "./components/Me/MeView";
+// View components are code-split (#329 perf): each dynamic import becomes its
+// own chunk so the heavy view-only libs — CodeMirror (editor), FullCalendar
+// (calendar), ReactFlow (graph) and Chart.js (dashboard) — no longer ship in
+// the initial bundle. React.lazy needs a default export, so the named exports
+// are re-mapped in the loader.
+const KanbanBoard   = lazy(() => import("./components/Kanban/KanbanBoard").then((m) => ({ default: m.KanbanBoard })));
+const AgendaView    = lazy(() => import("./components/Agenda/AgendaView").then((m) => ({ default: m.AgendaView })));
+const TimelineView  = lazy(() => import("./components/Timeline/TimelineView").then((m) => ({ default: m.TimelineView })));
+const CalendarView  = lazy(() => import("./components/Calendar/CalendarView").then((m) => ({ default: m.CalendarView })));
+const GraphView     = lazy(() => import("./components/Graph/GraphView").then((m) => ({ default: m.GraphView })));
+const MyTasksView   = lazy(() => import("./components/Tasks/MyTasksView").then((m) => ({ default: m.MyTasksView })));
+const MeView        = lazy(() => import("./components/Me/MeView").then((m) => ({ default: m.MeView })));
+const HelpView      = lazy(() => import("./components/Help/HelpView").then((m) => ({ default: m.HelpView })));
+const DashboardView = lazy(() => import("./components/Dashboard/DashboardView").then((m) => ({ default: m.DashboardView })));
+const ArchiveView   = lazy(() => import("./components/Archive/ArchiveView").then((m) => ({ default: m.ArchiveView })));
+const AdminPanel    = lazy(() => import("./components/Admin/AdminPanel").then((m) => ({ default: m.AdminPanel })));
+const NoteEditor    = lazy(() => import("./components/Editor/NoteEditor").then((m) => ({ default: m.NoteEditor })));
+// Always-mounted chrome stays eager — lazy-loading a component that is never
+// unmounted would just Suspend on first paint with no benefit.
 import { UnlockToast } from "./components/Me/UnlockToast";
 import { CelebrationOverlay } from "./components/Celebration/CelebrationOverlay";
-import { HelpView } from "./components/Help/HelpView";
-import { DashboardView } from "./components/Dashboard/DashboardView";
-import { ArchiveView } from "./components/Archive/ArchiveView";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
-import { NoteEditor } from "./components/Editor/NoteEditor";
 import { Sidebar } from "./components/Sidebar/Sidebar";
-import { AdminPanel } from "./components/Admin/AdminPanel";
 import { ChangePasswordModal } from "./components/Auth/ChangePasswordModal";
 import { QuoteBar } from "./components/QuoteBar/QuoteBar";
 import { FocusBanner } from "./components/FocusBanner/FocusBanner";
@@ -25,7 +33,6 @@ import {
   IconGraph, IconArchive, IconDashboard, IconMe, IconHelp, IconAdmin,
   IconChevronDown, IconKey, IconLogout, IconSearch,
 } from "./components/icons";
-import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "./api/client";
 import { loadPersistedDrafts, persistDirtyDrafts } from "./store/draftStorage";
 
@@ -848,6 +855,18 @@ function ContextualFilterBar() {
   return <FilterBar />;
 }
 
+// Lightweight fallback shown while a lazily-loaded view chunk is fetched.
+function ViewLoading() {
+  return (
+    <div className="flex h-full items-center justify-center p-10 text-slate-400">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="animate-spin" aria-hidden="true">
+        <path d="M21 12a9 9 0 1 1-6.2-8.6" />
+      </svg>
+      <span className="ml-2 text-sm">Loading…</span>
+    </div>
+  );
+}
+
 export default function App() {
   const [selectedPath, setSelectedPath] = useState<string>("");
   // Lazy-init from localStorage so a page reload (F5, HMR, browser
@@ -881,7 +900,9 @@ export default function App() {
             }}
           />
           <main className="flex-1 overflow-y-auto">
-            <ViewSwitcher selectedPath={selectedPath} setSelectedPath={setSelectedPath} draft={draft} setDraft={setDraft} />
+            <Suspense fallback={<ViewLoading />}>
+              <ViewSwitcher selectedPath={selectedPath} setSelectedPath={setSelectedPath} draft={draft} setDraft={setDraft} />
+            </Suspense>
           </main>
         </div>
         <CommandPalette />
