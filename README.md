@@ -194,12 +194,12 @@ Everyday flow:
 ./VegaNotes/scripts/prod-start.sh --restart   # relaunch prod backend + frontend
 ```
 
-Ports (distinct from dev):
+Ports (prod owns the shared URL; dev moved to the high ports):
 
 | | Dev | Prod |
 | --- | --- | --- |
-| Backend | 8000 | 8100 |
-| Frontend | 5173 | 4173 |
+| Backend | 8100 | 8000 |
+| Frontend | 4173 | 5173 |
 | Data dir | `.devdata/` | `.proddata/` |
 
 Frontend runs `vite preview` off a built `dist/` (production bundle), not the dev server.

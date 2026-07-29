@@ -12,9 +12,9 @@
 #   --install        Install/refresh deps in the prod worktree (venv + npm)
 #   --sync           git fetch + fast-forward prod worktree to origin/prod
 #
-# Ports (distinct from dev):
-#   Backend:  8100  (dev uses 8000)
-#   Frontend: 4173  (vite preview; dev uses 5173)
+# Ports: prod owns the shared team URL (:5173/:8000); dev moved to :4173/:8100.
+#   Backend:  8000  (dev uses 8100)
+#   Frontend: 5173  (vite preview; dev uses 4173)
 
 set -euo pipefail
 
@@ -27,8 +27,8 @@ PROD_ROOT="$PROD_CORE_ROOT/VegaNotes"
 DATA_DIR="${VEGANOTES_PROD_DATA_DIR:-$PROD_ROOT/.proddata}"
 VENV="${PROD_VENV_PATH:-$PROD_ROOT/backend/.venv}"
 
-BACKEND_PORT="${VEGANOTES_PROD_BACKEND_PORT:-8100}"
-FRONTEND_PORT="${VEGANOTES_PROD_FRONTEND_PORT:-4173}"
+BACKEND_PORT="${VEGANOTES_PROD_BACKEND_PORT:-8000}"
+FRONTEND_PORT="${VEGANOTES_PROD_FRONTEND_PORT:-5173}"
 
 BACKEND_LOG=/tmp/vega-prod-backend.log
 FRONTEND_LOG=/tmp/vega-prod-frontend.log
@@ -144,9 +144,13 @@ start_frontend() {
     echo "✗ $PROD_ROOT/frontend/dist missing. Run './scripts/prod-start.sh --install' to build." >&2
     exit 1
   fi
-  echo "▶ Starting prod frontend (vite preview :$FRONTEND_PORT)..."
+  echo "▶ Starting prod frontend (vite preview :$FRONTEND_PORT → API :$BACKEND_PORT)..."
   cd "$PROD_ROOT/frontend"
-  setsid npx vite preview --host --port "$FRONTEND_PORT" > "$FRONTEND_LOG" 2>&1 < /dev/null &
+  # VEGA_BACKEND_PORT points the preview server's /api proxy at the prod
+  # backend (not whatever is on :8000). Without it the built bundle's API
+  # calls would hit the wrong instance once dev/prod share a host.
+  VEGA_BACKEND_PORT="$BACKEND_PORT" VEGA_FRONTEND_PORT="$FRONTEND_PORT" \
+    setsid npx vite preview --host --port "$FRONTEND_PORT" > "$FRONTEND_LOG" 2>&1 < /dev/null &
   local fpid=$!
   echo "$fpid" >> "$PID_FILE"
   echo "  PID=$fpid"
