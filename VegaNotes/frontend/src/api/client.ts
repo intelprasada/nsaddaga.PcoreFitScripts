@@ -282,6 +282,11 @@ export const api = {
     // #320: recurring metric.  Empty string clears the token.
     progress?: string;
     add_note?: string;
+    // #333: edit / delete an individual note by index. `expect` is the
+    // note's current text — an item-level guard so a stale index can't
+    // rewrite the wrong entry.
+    edit_note?: { index: number; text: string; expect?: string };
+    delete_note?: { index: number; expect?: string };
     notes?: string;
     title?: string;
   }) =>

@@ -211,6 +211,10 @@ function PopoverForm({
   const [progress, setProgress] = useState(initialProgress);
   const [newNote, setNewNote] = useState("");
   const [newArTitle, setNewArTitle] = useState("");
+  // #333: per-note inline edit + delete-confirm state (index into note_history).
+  const [editingNoteIdx, setEditingNoteIdx] = useState<number | null>(null);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [confirmDeleteNoteIdx, setConfirmDeleteNoteIdx] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmDeleteArId, setConfirmDeleteArId] = useState<number | null>(null);
@@ -402,6 +406,32 @@ function PopoverForm({
     },
     onError: (e: unknown) => {
       applyApiError(e, "edit");
+    },
+  });
+
+  // #333: edit / delete individual notes, like ARs. `expect` carries the
+  // note's current text so a stale index can't rewrite the wrong entry.
+  const editNote = useMutation({
+    mutationFn: ({ index, text, expect }: { index: number; text: string; expect: string }) =>
+      api.updateTask(task.task_uuid ?? task.id, { edit_note: { index, text, expect } }),
+    onSuccess: () => {
+      setEditingNoteIdx(null);
+      setNoteDraft("");
+      invalidateTaskCaches();
+    },
+    onError: (e: unknown) => applyApiError(e, "edit"),
+  });
+
+  const deleteNote = useMutation({
+    mutationFn: ({ index, expect }: { index: number; expect: string }) =>
+      api.updateTask(task.task_uuid ?? task.id, { delete_note: { index, expect } }),
+    onSuccess: () => {
+      setConfirmDeleteNoteIdx(null);
+      invalidateTaskCaches();
+    },
+    onError: (e: unknown) => {
+      applyApiError(e, "delete");
+      setConfirmDeleteNoteIdx(null);
     },
   });
 
@@ -703,17 +733,34 @@ function PopoverForm({
           )}
 
           <Section title="Notes">
-            <Field label="History" hint={noteHistory.length === 0 ? "No prior notes." : `${noteHistory.length} entr${noteHistory.length === 1 ? "y" : "ies"}, oldest first · read-only.`}>
+            <Field label={`History${noteHistory.length ? ` (${noteHistory.length})` : ""}`} hint={noteHistory.length === 0 ? "No prior notes." : "Oldest first · hover a note to edit or delete."}>
               {noteHistory.length === 0 ? (
                 <div className="text-xs italic text-slate-400 border border-dashed rounded p-2">
                   (none)
                 </div>
               ) : (
-                <ul className="border rounded divide-y bg-white max-h-32 overflow-y-auto">
+                <ul className="border rounded divide-y bg-white max-h-40 overflow-y-auto">
                   {noteHistory.map((line, i) => (
-                    <li key={i} className="px-2 py-1 text-xs font-mono text-slate-700 whitespace-pre-wrap break-words">
-                      {line}
-                    </li>
+                    <NoteRow
+                      key={i}
+                      text={line}
+                      editing={editingNoteIdx === i}
+                      draft={noteDraft}
+                      confirmDelete={confirmDeleteNoteIdx === i}
+                      busy={(editNote.isPending && editingNoteIdx === i) || (deleteNote.isPending && confirmDeleteNoteIdx === i)}
+                      onStartEdit={() => { setErr(null); setConfirmDeleteNoteIdx(null); setEditingNoteIdx(i); setNoteDraft(line); }}
+                      onDraftChange={setNoteDraft}
+                      onCancelEdit={() => { setEditingNoteIdx(null); setNoteDraft(""); }}
+                      onSaveEdit={() => {
+                        const t = noteDraft.trim();
+                        if (!t || t === line) { setEditingNoteIdx(null); setNoteDraft(""); return; }
+                        setErr(null);
+                        editNote.mutate({ index: i, text: t, expect: line });
+                      }}
+                      onRequestDelete={() => { setErr(null); setEditingNoteIdx(null); setConfirmDeleteNoteIdx(i); }}
+                      onCancelDelete={() => setConfirmDeleteNoteIdx(null)}
+                      onConfirmDelete={() => { setErr(null); deleteNote.mutate({ index: i, expect: line }); }}
+                    />
                   ))}
                 </ul>
               )}
@@ -882,6 +929,80 @@ function ArRow({
             <TrashIcon />
           </button>
         </>
+      )}
+    </li>
+  );
+}
+
+// #333: an individual note row — mirrors ArRow's view / inline-edit / confirm-
+// delete affordances so notes feel first-class like action requests.
+interface NoteRowProps {
+  text: string;
+  editing: boolean;
+  draft: string;
+  confirmDelete: boolean;
+  busy: boolean;
+  onStartEdit: () => void;
+  onDraftChange: (v: string) => void;
+  onCancelEdit: () => void;
+  onSaveEdit: () => void;
+  onRequestDelete: () => void;
+  onCancelDelete: () => void;
+  onConfirmDelete: () => void;
+}
+
+function NoteRow({
+  text, editing, draft, confirmDelete, busy,
+  onStartEdit, onDraftChange, onCancelEdit, onSaveEdit,
+  onRequestDelete, onCancelDelete, onConfirmDelete,
+}: NoteRowProps) {
+  if (editing) {
+    return (
+      <li className="px-2 py-1.5 flex items-start gap-2 text-xs bg-sky-50/50">
+        <textarea
+          autoFocus
+          className="vega-textarea font-mono flex-1 min-h-[2.2rem]"
+          rows={2}
+          value={draft}
+          onChange={(e) => onDraftChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); onSaveEdit(); }
+            if (e.key === "Escape") { e.preventDefault(); onCancelEdit(); }
+          }}
+        />
+        <span className="shrink-0 flex flex-col gap-1 pt-0.5">
+          <button type="button" onClick={onSaveEdit} disabled={busy}
+            className="rounded bg-sky-600 text-white px-2 py-0.5 disabled:opacity-50" title="Save (⌘/Ctrl+Enter)">
+            {busy ? "…" : "save"}
+          </button>
+          <button type="button" onClick={onCancelEdit}
+            className="rounded border px-2 py-0.5" title="Cancel (Esc)">cancel</button>
+        </span>
+      </li>
+    );
+  }
+  return (
+    <li className="group px-2 py-1.5 flex items-start gap-2 text-xs">
+      <div className="flex-1 min-w-0 font-mono text-slate-700 whitespace-pre-wrap break-words">{text}</div>
+      {confirmDelete ? (
+        <span className="shrink-0 flex items-center gap-1">
+          <button type="button" onClick={onCancelDelete} className="rounded border px-1.5 py-0.5">no</button>
+          <button type="button" onClick={onConfirmDelete} disabled={busy}
+            className="rounded bg-rose-600 text-white px-1.5 py-0.5 disabled:opacity-50">
+            {busy ? "…" : "yes"}
+          </button>
+        </span>
+      ) : (
+        <span className="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+          <button type="button" onClick={onStartEdit}
+            className="text-orange-500 hover:text-orange-700 leading-none px-1" title="Edit this note" aria-label="Edit note">
+            ✎
+          </button>
+          <button type="button" onClick={onRequestDelete}
+            className="text-rose-600 hover:text-rose-800 leading-none px-1" title="Delete this note" aria-label="Delete note">
+            <TrashIcon />
+          </button>
+        </span>
       )}
     </li>
   );

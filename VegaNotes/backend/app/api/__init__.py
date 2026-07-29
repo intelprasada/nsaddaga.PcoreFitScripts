@@ -30,6 +30,7 @@ from ..markdown_ops import (
     merge_with_disk_tasks,
     remove_attr, replace_task_title, roll_to_next_week, update_task_status,
     find_ref_row_lines, patch_ref_rows, insert_ar_ref_row_after,
+    edit_note, remove_note,
 )
 from ..models import (
     ActivityEvent, Feature, Link, Note, Project, ProjectMember, Task, TaskAttr,
@@ -2922,6 +2923,17 @@ def remove_member(
 
 # ---------- tasks: PATCH (status round-trip to .md) ------------------------
 
+class NoteEdit(BaseModel):
+    index: int
+    text: str
+    expect: Optional[str] = None
+
+
+class NoteDelete(BaseModel):
+    index: int
+    expect: Optional[str] = None
+
+
 class TaskPatch(BaseModel):
     status: Optional[str] = None
     priority: Optional[str] = None  # e.g. "P1", "P2", or "" to clear
@@ -2947,6 +2959,12 @@ class TaskPatch(BaseModel):
     # Multi-line input becomes one `#note` per non-empty line, all sharing
     # the same auto-prepended timestamp + author. Existing notes are kept.
     add_note: Optional[str] = None
+    # Edit / delete an individual `#note` continuation line by its index in
+    # the task's note block (#333). ``expect`` is the note's current text —
+    # an item-level optimistic-concurrency guard so a stale index never
+    # rewrites the wrong entry. Both address the same block append_note writes.
+    edit_note: Optional[NoteEdit] = None
+    delete_note: Optional[NoteDelete] = None
     # Legacy "overwrite the whole notes block" — only honored if `add_note`
     # is not provided. Empty string clears the block. Kept for backwards
     # compat but discouraged because it destroys history (see issue #53).
@@ -3337,6 +3355,38 @@ def patch_task(
             md = replace_notes(md, t.line, t.indent, body.notes)
             changed = True
 
+        # #333: edit / delete an individual existing note by index. These are
+        # mutually exclusive with add_note in practice but handled independently
+        # so a single PATCH could, in theory, add and edit. Index / expect
+        # mismatches surface as 404 / 409 rather than touching the wrong line.
+        if body.delete_note is not None:
+            try:
+                md = remove_note(md, t.line, body.delete_note.index, expect=body.delete_note.expect)
+            except IndexError:
+                raise HTTPException(404, f"note index {body.delete_note.index} not found")
+            except ValueError as e:
+                raise HTTPException(409, str(e))
+            changed = True
+        if body.edit_note is not None:
+            new_note_text = (body.edit_note.text or "").strip()
+            if not new_note_text:
+                raise HTTPException(400, "note text must not be empty; delete the note instead")
+            # Same !AR / !task guardrail as add_note (issue #125).
+            _low = new_note_text.lstrip().lstrip("-*+ ").lstrip().lower()
+            if _low.startswith(("!ar ", "!ar\t", "!task ", "!task\t")) or _low in {"!ar", "!task"}:
+                raise HTTPException(
+                    400,
+                    "note text starts with `!AR` or `!task` — that won't be "
+                    "recognized as a task. Use the 'Add an AR' field instead.",
+                )
+            try:
+                md = edit_note(md, t.line, body.edit_note.index, new_note_text, expect=body.edit_note.expect)
+            except IndexError:
+                raise HTTPException(404, f"note index {body.edit_note.index} not found")
+            except ValueError as e:
+                raise HTTPException(409, str(e))
+            changed = True
+
         if not changed:
             return _task_to_dict(s, t)
 
@@ -3350,36 +3400,43 @@ def patch_task(
         # below the insertion point if append_note added rows.
         new_disk = full.read_text(encoding="utf-8")
         new_mtime = full.stat().st_mtime
-        line_shift = 0
-        line_shift_pivot = -1
-        if body.add_note is not None and body.add_note.strip():
-            line_shift = sum(1 for ln in body.add_note.split("\n") if ln.strip())
-            line_shift_pivot = t.line
-        apply_single_task_patch_to_index(
-            s,
-            note_id=note.id,
-            task_id=task_id,
-            new_body_md=new_disk,
-            new_mtime=new_mtime,
-            line_shift=line_shift,
-            line_shift_pivot=line_shift_pivot,
-            status=body.status,
-            priority=body.priority,
-            eta=body.eta,
-            owners=body.owners,
-            features=body.features,
-            title=body.title.strip() if body.title is not None else None,
-            add_note=body.add_note,
-            # #314: pass link-token replacements through to the index update.
-            link_attrs={
-                k: [v.strip() for v in getattr(body, k) if v and v.strip()]
-                for k in ("url", "hsd", "jira", "pr")
-                if getattr(body, k) is not None
-            },
-            # #320: single-valued progress metric flows through the same
-            # single-attr update path used by priority/eta.
-            progress=body.progress.strip() if body.progress is not None else None,
-        )
+        # #333: editing / deleting an individual note re-derives the task's
+        # `note` attrs and can shift lines below it. The fast single-task
+        # patcher has no note-mutation param, so fall back to a full
+        # reindex_file for correctness (note edits are infrequent).
+        if body.edit_note is not None or body.delete_note is not None:
+            reindex_file(full, s)
+        else:
+            line_shift = 0
+            line_shift_pivot = -1
+            if body.add_note is not None and body.add_note.strip():
+                line_shift = sum(1 for ln in body.add_note.split("\n") if ln.strip())
+                line_shift_pivot = t.line
+            apply_single_task_patch_to_index(
+                s,
+                note_id=note.id,
+                task_id=task_id,
+                new_body_md=new_disk,
+                new_mtime=new_mtime,
+                line_shift=line_shift,
+                line_shift_pivot=line_shift_pivot,
+                status=body.status,
+                priority=body.priority,
+                eta=body.eta,
+                owners=body.owners,
+                features=body.features,
+                title=body.title.strip() if body.title is not None else None,
+                add_note=body.add_note,
+                # #314: pass link-token replacements through to the index update.
+                link_attrs={
+                    k: [v.strip() for v in getattr(body, k) if v and v.strip()]
+                    for k in ("url", "hsd", "jira", "pr")
+                    if getattr(body, k) is not None
+                },
+                # #320: single-valued progress metric flows through the same
+                # single-attr update path used by priority/eta.
+                progress=body.progress.strip() if body.progress is not None else None,
+            )
 
     # ── Propagate to all ref-row files ────────────────────────────────────
     # Any .md file that references this task via `#task T-XXXX` / `#AR T-XXXX`
@@ -3420,6 +3477,13 @@ def patch_task(
         # visible in every md file that references the task.
         if body.add_note is not None and body.add_note.strip():
             ref_patch["add_note"] = body.add_note
+        # #333: mirror note edit / delete into ref rows by text match (needs the
+        # `expect` text; the popover always sends it). Without this a deleted
+        # note could reappear from a stale ref row on the next reindex.
+        if body.delete_note is not None and body.delete_note.expect:
+            ref_patch["delete_note_text"] = body.delete_note.expect
+        if body.edit_note is not None and body.edit_note.expect:
+            ref_patch["edit_note"] = {"old": body.edit_note.expect, "new": body.edit_note.text.strip()}
 
         if ref_patch:
             # Pre-filter: only notes whose cached body contains the ref_id text.
