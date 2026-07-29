@@ -175,3 +175,32 @@ Use the **Promote main → prod** workflow (Actions tab → *Promote main → pr
 
 Deployment jobs should gate on `if: github.ref == 'refs/heads/prod'`. All other CI (tests, lint) should run on every branch.
 
+### Running a local prod instance
+
+The `scripts/prod-start.sh` helper runs backend + frontend from a sibling git worktree pinned to `prod`. It does **not** touch the dev processes.
+
+Bootstrap once:
+
+```bash
+# From the core-tools (dev) checkout:
+git worktree add ../core-tools-prod prod
+./VegaNotes/scripts/prod-start.sh --install   # creates prod venv + npm install + vite build
+```
+
+Everyday flow:
+
+```bash
+./VegaNotes/scripts/prod-start.sh --sync      # ff-only pull to origin/prod
+./VegaNotes/scripts/prod-start.sh --restart   # relaunch prod backend + frontend
+```
+
+Ports (distinct from dev):
+
+| | Dev | Prod |
+| --- | --- | --- |
+| Backend | 8000 | 8100 |
+| Frontend | 5173 | 4173 |
+| Data dir | `.devdata/` | `.proddata/` |
+
+Frontend runs `vite preview` off a built `dist/` (production bundle), not the dev server.
+

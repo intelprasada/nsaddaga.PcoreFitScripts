@@ -84,13 +84,31 @@ def normalize_status(value: str) -> str:
     return v
 
 
+_PROGRESS_HEAD_RE = _re.compile(r"^\s*(\d+)(?:/(\d+))?")
+
+
+def normalize_progress(value: str) -> str | None:
+    """Extract the numeric head of a `#progress` value (#320).
+
+    Returns ``"N"`` or ``"N/D"`` so DSL predicates can compute a
+    percent without re-splitting the optional trailing label word.
+    Returns ``None`` for garbage so downstream code can treat the row
+    as un-indexed.
+    """
+    if not value:
+        return None
+    m = _PROGRESS_HEAD_RE.match(value)
+    if not m:
+        return None
+    return m.group(0).strip()
+
+
 @dataclass(frozen=True)
 class TokenSpec:
     name: str
     multi: bool = False
     # value -> normalized representation used for indexing/sorting
     normalize: Callable[[str], object] | None = None
-
 
 REGISTRY: Dict[str, TokenSpec] = {
     "task":     TokenSpec("task",     multi=True),
@@ -117,10 +135,11 @@ REGISTRY: Dict[str, TokenSpec] = {
     "pr":       TokenSpec("pr",       multi=True),
     # #320: recurring progress metric on tasks — single value shaped like
     # ``N/D``, ``N/D label``, or bare ``N`` for an unbounded counter.
-    # Stored as-is; parsed into (numerator, denominator, label) by the
-    # frontend / DSL. Weekly rollover carries the value forward via the
-    # task_uuid so the archive naturally accumulates a per-week history.
-    "progress": TokenSpec("progress", multi=False),
+    # Stored as-is; ``value_norm`` is set to the numeric head so DSL
+    # filters can compute a percent without re-splitting the label.
+    # Weekly rollover carries the value forward via the task_uuid so
+    # the archive naturally accumulates a per-week history.
+    "progress": TokenSpec("progress", multi=False, normalize=normalize_progress),
 }
 
 
