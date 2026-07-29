@@ -215,6 +215,7 @@ function PopoverForm({
   const [editingNoteIdx, setEditingNoteIdx] = useState<number | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
   const [confirmDeleteNoteIdx, setConfirmDeleteNoteIdx] = useState<number | null>(null);
+  const [newTag, setNewTag] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmDeleteArId, setConfirmDeleteArId] = useState<number | null>(null);
@@ -435,6 +436,21 @@ function PopoverForm({
     },
   });
 
+  // #333: add / remove free-form bare `#tag`s.
+  const addTag = useMutation({
+    mutationFn: (tag: string) =>
+      api.updateTask(task.task_uuid ?? task.id, { add_tag: tag }),
+    onSuccess: () => { setNewTag(""); invalidateTaskCaches(); },
+    onError: (e: unknown) => applyApiError(e, "edit"),
+  });
+
+  const removeTag = useMutation({
+    mutationFn: ({ key, value }: { key: string; value?: string }) =>
+      api.updateTask(task.task_uuid ?? task.id, { remove_tag: { key, value } }),
+    onSuccess: () => invalidateTaskCaches(),
+    onError: (e: unknown) => applyApiError(e, "edit"),
+  });
+
   const commitTitle = () => {
     const trimmed = titleDraft.trim();
     if (!trimmed) {
@@ -646,23 +662,61 @@ function PopoverForm({
             )}
           </section>
 
-          {extraTagChips(task).length > 0 && (
-            <Section title="Tags">
+          <Section title="Tags">
+            {extraTagChips(task).length > 0 ? (
               <div className="flex flex-wrap gap-1">
                 {extraTagChips(task).map((c) => (
                   <span
                     key={c.reactKey}
-                    className="chip chip-tag"
+                    className="chip chip-tag inline-flex items-center gap-1"
                     title={c.value ? `${c.key} = ${c.value}` : `Tag: #${c.key}`}
                   >
                     #{c.key}
                     {c.value ? <span className="opacity-60">={c.value}</span> : null}
+                    <button
+                      type="button"
+                      onClick={() => { setErr(null); removeTag.mutate({ key: c.key, value: c.value || undefined }); }}
+                      disabled={removeTag.isPending}
+                      className="ml-0.5 -mr-0.5 rounded-full leading-none px-1 text-slate-500 hover:text-rose-600 hover:bg-rose-100 disabled:opacity-50"
+                      title={`Remove #${c.key}`}
+                      aria-label={`Remove tag ${c.key}`}
+                    >
+                      ×
+                    </button>
                   </span>
                 ))}
               </div>
-              <div className="vega-field-hint">Bare <code>#tag</code> attributes from the .md file — edit the source to change.</div>
-            </Section>
-          )}
+            ) : (
+              <div className="text-xs italic text-slate-400">No tags yet.</div>
+            )}
+            <div className="flex gap-2 mt-2">
+              <input
+                className="vega-input flex-1"
+                value={newTag}
+                onChange={(e) => setNewTag(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    const t = newTag.trim().replace(/^#/, "");
+                    if (t && !addTag.isPending) { setErr(null); addTag.mutate(t); }
+                  }
+                }}
+                placeholder="add a tag (e.g. urgent)"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const t = newTag.trim().replace(/^#/, "");
+                  if (t && !addTag.isPending) { setErr(null); addTag.mutate(t); }
+                }}
+                disabled={!newTag.trim() || addTag.isPending}
+                className="rounded bg-slate-600 text-white px-3 py-1 text-xs disabled:opacity-50"
+              >
+                {addTag.isPending ? "…" : "+ tag"}
+              </button>
+            </div>
+            <div className="vega-field-hint">Free-form single-word markers. Reserved keys (status, eta, …) have their own fields.</div>
+          </Section>
           </div>
 
           {/* PRIMARY pane (left / order-1) — ARs and notes are added/removed far

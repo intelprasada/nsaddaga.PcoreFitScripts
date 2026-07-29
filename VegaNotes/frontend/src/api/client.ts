@@ -287,6 +287,9 @@ export const api = {
     // rewrite the wrong entry.
     edit_note?: { index: number; text: string; expect?: string };
     delete_note?: { index: number; expect?: string };
+    // #333: add / remove a free-form bare `#tag`.
+    add_tag?: string;
+    remove_tag?: { key: string; value?: string };
     notes?: string;
     title?: string;
   }) =>
