@@ -624,7 +624,13 @@ export interface LockedBadge {
   key: string;
   title: string;
   description: string;
-  progress: number | null;
+  /**
+   * Human-readable progress toward the badge, e.g. "0/1" or "5/13 day(s)".
+   * The backend emits a *string*, not a 0–1 ratio — the previous
+   * ``number | null`` typing caused ``Math.min(1, "0/1")`` → NaN and a
+   * literal "NaN%" on every locked badge (#329).
+   */
+  progress: string | null;
 }
 
 export interface MeBadges {

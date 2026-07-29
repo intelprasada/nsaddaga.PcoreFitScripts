@@ -20,6 +20,11 @@ import { AdminPanel } from "./components/Admin/AdminPanel";
 import { ChangePasswordModal } from "./components/Auth/ChangePasswordModal";
 import { QuoteBar } from "./components/QuoteBar/QuoteBar";
 import { FocusBanner } from "./components/FocusBanner/FocusBanner";
+import {
+  IconMyTasks, IconEditor, IconKanban, IconAgenda, IconTimeline, IconCalendar,
+  IconGraph, IconArchive, IconDashboard, IconMe, IconHelp, IconAdmin,
+  IconChevronDown, IconKey, IconLogout, IconSearch,
+} from "./components/icons";
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "./api/client";
 import { loadPersistedDrafts, persistDirtyDrafts } from "./store/draftStorage";
@@ -663,29 +668,70 @@ function NextWeekButton({ selectedPath, entry, flushSave, onCreated }: {
 }
 
 
+type ViewKey =
+  | "editor" | "kanban" | "agenda" | "timeline" | "calendar" | "graph"
+  | "admin" | "my-tasks" | "me" | "help" | "dashboard" | "archive";
+
+const VIEW_META: Record<ViewKey, { label: string; Icon: (p: { size?: number }) => JSX.Element }> = {
+  "my-tasks": { label: "My Tasks",  Icon: IconMyTasks },
+  editor:     { label: "Editor",    Icon: IconEditor },
+  kanban:     { label: "Kanban",    Icon: IconKanban },
+  agenda:     { label: "Agenda",    Icon: IconAgenda },
+  timeline:   { label: "Timeline",  Icon: IconTimeline },
+  calendar:   { label: "Calendar",  Icon: IconCalendar },
+  graph:      { label: "Graph",     Icon: IconGraph },
+  archive:    { label: "Archive",   Icon: IconArchive },
+  dashboard:  { label: "Dashboard", Icon: IconDashboard },
+  me:         { label: "Me",        Icon: IconMe },
+  help:       { label: "Help",      Icon: IconHelp },
+  admin:      { label: "Admin",     Icon: IconAdmin },
+};
+
+// Primary workspace views stay inline; secondary/utility views collapse into a
+// "More" menu so the bar reads as a small set of primary actions rather than a
+// wall of 12 equal-weight tabs (#329).
+const PRIMARY_VIEWS: ViewKey[] = ["my-tasks", "editor", "kanban", "agenda", "timeline", "calendar", "graph"];
+const MORE_VIEWS: ViewKey[] = ["archive", "dashboard", "me", "help"];
+
+function openCommandPalette() {
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, ctrlKey: true, bubbles: true }));
+}
+
 function NavBar() {
   const { view, set } = useUI();
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => api.me() });
   const [changingPw, setChangingPw] = useState(false);
-  const tabs: ("editor" | "kanban" | "agenda" | "timeline" | "calendar" | "graph" | "admin" | "my-tasks" | "me" | "help" | "dashboard" | "archive")[] = [
-    "my-tasks", "editor", "kanban", "agenda", "timeline", "calendar", "graph", "archive", "me", "help", "dashboard",
-  ];
-  if (me?.is_admin) tabs.push("admin");
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [userOpen, setUserOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement>(null);
+  const userRef = useRef<HTMLDivElement>(null);
+
+  const moreViews: ViewKey[] = me?.is_admin ? [...MORE_VIEWS, "admin"] : MORE_VIEWS;
+  const moreActive = moreViews.includes(view as ViewKey);
+
+  // Close the popovers on outside-click / Escape.
+  useEffect(() => {
+    function onDown(e: MouseEvent) {
+      if (moreRef.current && !moreRef.current.contains(e.target as Node)) setMoreOpen(false);
+      if (userRef.current && !userRef.current.contains(e.target as Node)) setUserOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") { setMoreOpen(false); setUserOpen(false); }
+    }
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("mousedown", onDown); window.removeEventListener("keydown", onKey); };
+  }, []);
 
   const logout = async () => {
     // HTTP Basic has no real "logout" — there's no portable, JS-driven way
     // to clear the browser's cached credentials. We do the best we can:
-    //
     //   1. Drop our React Query cache so no stale identity lingers in the UI.
     //   2. Fire two requests with bogus Authorization headers so the
-    //      browser's credential cache for this origin is overwritten with
-    //      garbage. (One request isn't always enough on Chrome.)
-    //   3. Hard-replace the URL with a cache-buster so bfcache can't restore
-    //      the previous session.
-    //
-    // This is reliable on Firefox; usually-works on Chrome/Edge/Safari.
-    // For deterministic multi-user testing, an incognito/private window per
-    // identity is still the gold-standard approach.
+    //      browser's credential cache for this origin is overwritten.
+    //   3. Hard-replace the URL with a cache-buster so bfcache can't restore.
+    // Reliable on Firefox; usually-works on Chrome/Edge/Safari. For
+    // deterministic multi-user testing, use an incognito window per identity.
     qc.clear();
     for (let i = 0; i < 2; i++) {
       try {
@@ -698,36 +744,89 @@ function NavBar() {
     window.location.replace("/?_logout=" + Date.now());
   };
 
+  const initial = (me?.name ?? "?").charAt(0).toUpperCase();
+
   return (
-    <nav className="flex items-center gap-3 bg-white border-b px-4 py-2">
-      <span className="font-bold text-lg text-sky-700">VegaNotes</span>
-      {tabs.map((v) => (
-        <button key={v}
-          className={`text-sm rounded px-2 py-1 ${view === v ? "bg-sky-100 text-sky-900" : "text-slate-600 hover:bg-slate-100"}`}
-          onClick={() => set({ view: v })}>{v === "dashboard" ? "📊 dashboard" : v === "archive" ? "🗄️ archive" : v}</button>
-      ))}
-      {me && (
-        <span className="ml-auto text-xs text-slate-500">
-          {me.name}{me.is_admin ? " · admin" : ""}
-        </span>
-      )}
-      {me && (
-        <button
-          onClick={() => setChangingPw(true)}
-          className="text-xs text-slate-600 hover:bg-slate-100 rounded px-2 py-1 border"
-          title="Change your password"
-        >
-          change password
+    <nav className="vega-appbar">
+      <span className="flex items-center gap-1.5 pr-2 font-bold text-[15px] tracking-tight text-sky-700 select-none">
+        <span className="grid h-6 w-6 place-items-center rounded-md bg-sky-600 text-white text-xs font-black">V</span>
+        VegaNotes
+      </span>
+
+      {PRIMARY_VIEWS.map((v) => {
+        const { label, Icon } = VIEW_META[v];
+        const active = view === v;
+        return (
+          <button key={v} className={`vega-tab ${active ? "vega-tab-active" : ""}`}
+            aria-current={active ? "page" : undefined}
+            onClick={() => set({ view: v })}>
+            <Icon size={16} /><span>{label}</span>
+          </button>
+        );
+      })}
+
+      {/* More menu (secondary + admin) */}
+      <div className="relative" ref={moreRef}>
+        <button className={`vega-tab ${moreActive ? "vega-tab-active" : ""}`}
+          aria-haspopup="menu" aria-expanded={moreOpen}
+          onClick={() => setMoreOpen((o) => !o)}>
+          <span>More</span><IconChevronDown size={14} />
         </button>
-      )}
-      <button
-        onClick={logout}
-        className="text-xs text-slate-600 hover:bg-slate-100 rounded px-2 py-1 border"
-        title="Sign out. Note: HTTP Basic credentials are cached by the browser; if the prompt re-appears with the old user already accepted, hard-refresh (Ctrl+Shift+R) or use a private/incognito window for the cleanest switch."
-      >
-        logout
-      </button>
-      <span className="text-xs text-slate-400">⌘K</span>
+        {moreOpen && (
+          <div role="menu" className="absolute left-0 top-full mt-1 min-w-[172px] rounded-lg border border-slate-200 bg-white py-1 shadow-lg z-40">
+            {moreViews.map((v) => {
+              const { label, Icon } = VIEW_META[v];
+              const active = view === v;
+              return (
+                <button key={v} role="menuitem"
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-sm ${active ? "text-sky-900 bg-sky-50" : "text-slate-700 hover:bg-slate-100"}`}
+                  onClick={() => { set({ view: v }); setMoreOpen(false); }}>
+                  <Icon size={16} /><span>{label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="ml-auto flex items-center gap-1.5">
+        <button className="vega-iconbtn" onClick={openCommandPalette} title="Command palette">
+          <IconSearch size={14} /><span className="hidden sm:inline">Search</span>
+          <kbd className="ml-0.5 rounded bg-slate-100 px-1 text-[10px] text-slate-500">⌘K</kbd>
+        </button>
+
+        {me && (
+          <div className="relative" ref={userRef}>
+            <button className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-slate-100"
+              aria-haspopup="menu" aria-expanded={userOpen}
+              onClick={() => setUserOpen((o) => !o)}>
+              <span className="grid h-7 w-7 place-items-center rounded-full bg-sky-100 text-sky-800 text-xs font-bold">{initial}</span>
+              <span className="hidden md:flex flex-col items-start leading-tight">
+                <span className="text-xs font-semibold text-slate-800">{me.name}</span>
+                {me.is_admin && <span className="text-[10px] uppercase tracking-wide text-slate-400">admin</span>}
+              </span>
+              <IconChevronDown size={14} className="text-slate-400" />
+            </button>
+            {userOpen && (
+              <div role="menu" className="absolute right-0 top-full mt-1 min-w-[184px] rounded-lg border border-slate-200 bg-white py-1 shadow-lg z-40">
+                <div className="px-3 py-1.5 text-xs text-slate-400 border-b border-slate-100">
+                  Signed in as <span className="font-semibold text-slate-600">{me.name}</span>
+                </div>
+                <button role="menuitem"
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100"
+                  onClick={() => { setChangingPw(true); setUserOpen(false); }}>
+                  <IconKey size={15} /> Change password
+                </button>
+                <button role="menuitem"
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-sm text-rose-600 hover:bg-rose-50"
+                  onClick={logout}>
+                  <IconLogout size={15} /> Log out
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
       {changingPw && <ChangePasswordModal onClose={() => setChangingPw(false)} />}
     </nav>
   );
@@ -737,6 +836,17 @@ function NavBar() {
 // HMR / browser tab discards. The ``loadPersistedDrafts`` /
 // ``persistDirtyDrafts`` helpers live in ``store/draftStorage.ts``
 // so they can be unit-tested in isolation.
+
+// The global filter controls only drive task-bearing views. Rendering them on
+// the editor / dashboard / me / help / archive / admin surfaces (where nothing
+// consumes them) was pure clutter, so gate on the active view (#329).
+const FILTERABLE_VIEWS = new Set<string>(["my-tasks", "kanban", "agenda", "timeline", "calendar", "graph"]);
+
+function ContextualFilterBar() {
+  const view = useUI((s) => s.view);
+  if (!FILTERABLE_VIEWS.has(view)) return null;
+  return <FilterBar />;
+}
 
 export default function App() {
   const [selectedPath, setSelectedPath] = useState<string>("");
@@ -754,7 +864,7 @@ export default function App() {
         <QuoteBar />
         <FocusBanner />
         <NavBar />
-        <FilterBar />
+        <ContextualFilterBar />
         <div className="flex-1 flex overflow-hidden">
           <Sidebar
             selectedPath={selectedPath}

@@ -87,7 +87,11 @@ export function FocusBanner() {
   return (
     <div className="vega-focus-banner border-y border-amber-200 bg-amber-50/60">
       <div className="mx-auto max-w-7xl px-4 py-2 flex items-start gap-3">
-        <div className="shrink-0 text-amber-700 select-none pt-0.5" aria-hidden>📌</div>
+        <div className="shrink-0 text-amber-600 select-none pt-0.5" aria-hidden>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 2l2.4 5.4 5.6.5-4.2 3.7 1.3 5.6L12 19.8 6.9 22.7l1.3-5.6L4 13.4l5.6-.5L12 2Z" />
+          </svg>
+        </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <div className="text-xs font-semibold tracking-wide uppercase text-amber-800">
