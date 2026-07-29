@@ -30,7 +30,7 @@ from ..markdown_ops import (
     merge_with_disk_tasks,
     remove_attr, replace_task_title, roll_to_next_week, update_task_status,
     find_ref_row_lines, patch_ref_rows, insert_ar_ref_row_after,
-    edit_note, remove_note,
+    edit_note, remove_note, add_tag, remove_tag,
 )
 from ..models import (
     ActivityEvent, Feature, Link, Note, Project, ProjectMember, Task, TaskAttr,
@@ -2934,6 +2934,11 @@ class NoteDelete(BaseModel):
     expect: Optional[str] = None
 
 
+class TagRef(BaseModel):
+    key: str
+    value: Optional[str] = None
+
+
 class TaskPatch(BaseModel):
     status: Optional[str] = None
     priority: Optional[str] = None  # e.g. "P1", "P2", or "" to clear
@@ -2965,6 +2970,10 @@ class TaskPatch(BaseModel):
     # rewrites the wrong entry. Both address the same block append_note writes.
     edit_note: Optional[NoteEdit] = None
     delete_note: Optional[NoteDelete] = None
+    # #333: add / remove a free-form bare `#tag`. add_tag is a single word;
+    # remove_tag pins to a bare tag or a valued custom attr.
+    add_tag: Optional[str] = None
+    remove_tag: Optional[TagRef] = None
     # Legacy "overwrite the whole notes block" — only honored if `add_note`
     # is not provided. Empty string clears the block. Kept for backwards
     # compat but discouraged because it destroys history (see issue #53).
@@ -3387,6 +3396,17 @@ def patch_task(
                 raise HTTPException(409, str(e))
             changed = True
 
+        # #333: add / remove a free-form bare `#tag`.
+        if body.add_tag is not None and body.add_tag.strip():
+            try:
+                md = add_tag(md, t.line, body.add_tag)
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+            changed = True
+        if body.remove_tag is not None and body.remove_tag.key.strip():
+            md = remove_tag(md, t.line, body.remove_tag.key, body.remove_tag.value)
+            changed = True
+
         if not changed:
             return _task_to_dict(s, t)
 
@@ -3404,7 +3424,7 @@ def patch_task(
         # `note` attrs and can shift lines below it. The fast single-task
         # patcher has no note-mutation param, so fall back to a full
         # reindex_file for correctness (note edits are infrequent).
-        if body.edit_note is not None or body.delete_note is not None:
+        if body.edit_note is not None or body.delete_note is not None or body.add_tag is not None or body.remove_tag is not None:
             reindex_file(full, s)
         else:
             line_shift = 0
@@ -3484,6 +3504,11 @@ def patch_task(
             ref_patch["delete_note_text"] = body.delete_note.expect
         if body.edit_note is not None and body.edit_note.expect:
             ref_patch["edit_note"] = {"old": body.edit_note.expect, "new": body.edit_note.text.strip()}
+        # #333: mirror free-tag add / remove into ref rows.
+        if body.add_tag is not None and body.add_tag.strip():
+            ref_patch["add_tag"] = body.add_tag.strip()
+        if body.remove_tag is not None and body.remove_tag.key.strip():
+            ref_patch["remove_tag"] = {"key": body.remove_tag.key.strip(), "value": body.remove_tag.value}
 
         if ref_patch:
             # Pre-filter: only notes whose cached body contains the ref_id text.

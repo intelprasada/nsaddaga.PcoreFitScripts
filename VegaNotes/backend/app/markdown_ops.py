@@ -1178,6 +1178,81 @@ def remove_note(
     return "".join(lines)
 
 
+_TAG_NAME_RE = re.compile(r"^[A-Za-z][\w-]*$")
+
+
+def add_tag(md: str, task_line_no: int, tag: str) -> str:
+    """Append a bare ``#tag`` presence token to the task declaration line (#333).
+
+    Tags are free-form single-word markers (``[A-Za-z][\\w-]*``) with no value.
+    Reserved attribute keys (``status``/``eta``/… anything :func:`is_known`)
+    are rejected — those have dedicated fields. Idempotent: a tag already on
+    the line is left untouched.
+    """
+    name = tag.strip().lstrip("#")
+    if not _TAG_NAME_RE.match(name):
+        raise ValueError(f"invalid tag {tag!r}; use a single word [A-Za-z][\\w-]*")
+    if is_known(name):
+        raise ValueError(f"{name!r} is a reserved attribute, not a free tag")
+    lines = md.splitlines(keepends=True)
+    if task_line_no < 0 or task_line_no >= len(lines):
+        raise ValueError(f"line {task_line_no} out of range")
+    raw = lines[task_line_no]
+    nl = ""
+    body = raw
+    while body.endswith(("\n", "\r")):
+        nl = body[-1] + nl
+        body = body[:-1]
+    # Idempotent — bare `#name` already present (not `#name value`).
+    if re.search(rf"#{re.escape(name)}(?=\s|$|#)", body, re.IGNORECASE):
+        return md
+    sep = "" if not body or body.endswith(" ") else " "
+    lines[task_line_no] = f"{body}{sep}#{name}{nl}"
+    return "".join(lines)
+
+
+def remove_tag(md: str, task_line_no: int, key: str, value: str | None = None) -> str:
+    """Remove a tag token from the task line and its continuation lines (#333).
+
+    ``value`` (optional) pins the removal to a valued custom attr
+    (``#key value``); when omitted a bare ``#key`` presence token is removed.
+    Scans the task's continuation block too, since bare tags may live on an
+    attribute continuation line.
+    """
+    name = (key or "").strip().lstrip("#")
+    if not name:
+        raise ValueError("empty tag key")
+    lines = md.splitlines(keepends=True)
+    if task_line_no < 0 or task_line_no >= len(lines):
+        raise ValueError(f"line {task_line_no} out of range")
+    task_raw = lines[task_line_no]
+    task_ws_len = len(task_raw) - len(task_raw.lstrip(" \t"))
+    end = task_line_no + 1
+    while end < len(lines):
+        raw = lines[end]
+        stripped = raw.lstrip(" \t")
+        ind = len(raw) - len(stripped)
+        if ind <= task_ws_len:
+            break
+        end += 1
+    if value:
+        pat = re.compile(rf"\s*#{re.escape(name)}\s+{re.escape(value)}(?=\s|$)", re.IGNORECASE)
+    else:
+        pat = re.compile(rf"\s*#{re.escape(name)}(?=\s|$|#)", re.IGNORECASE)
+    for i in range(task_line_no, end):
+        raw = lines[i]
+        nl = ""
+        body = raw
+        while body.endswith(("\n", "\r")):
+            nl = body[-1] + nl
+            body = body[:-1]
+        new_body = pat.sub("", body)
+        if new_body != body:
+            new_body = re.sub(r"\s{2,}", " ", new_body).rstrip()
+            lines[i] = new_body + nl
+    return "".join(lines)
+
+
 def replace_multi_attr(md: str, line_no: int, key: str, values: list[str]) -> str:
     """Replace every occurrence of a multi-valued attr on ``line_no`` with ``values``.
 
@@ -1347,6 +1422,21 @@ def patch_ref_rows(md: str, ref_id: str, patch: dict) -> tuple[str, bool]:
         if "delete_note_text" in patch and patch["delete_note_text"]:
             md, _did = _retarget_ref_note_by_text(md, line_no, patch["delete_note_text"], None)
             changed = changed or _did
+        # #333: mirror free-tag add / remove into ref rows.
+        if "add_tag" in patch and patch["add_tag"]:
+            try:
+                new_md = add_tag(md, line_no, patch["add_tag"])
+            except ValueError:
+                new_md = md
+            if new_md != md:
+                md = new_md
+                changed = True
+        if "remove_tag" in patch and patch["remove_tag"]:
+            _rt = patch["remove_tag"]
+            new_md = remove_tag(md, line_no, _rt.get("key", ""), _rt.get("value") or None)
+            if new_md != md:
+                md = new_md
+                changed = True
 
     return md, changed
 
