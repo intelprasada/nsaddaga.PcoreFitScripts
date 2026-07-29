@@ -6,6 +6,10 @@
 #   --backend-only   Start backend only
 #   --frontend-only  Start frontend only
 #   --restart        Kill any existing backend/frontend session and relaunch both
+#
+# The backend auto-reloads on app/*.py changes (like the frontend's Vite HMR),
+# so you rarely need --restart after a backend edit. Disable with
+# VEGANOTES_DEV_RELOAD=false.
 
 set -euo pipefail
 
@@ -69,8 +73,21 @@ start_backend() {
   : "${VEGANOTES_PHONEBOOK_SCRAPER_ENABLED:=true}"
   : "${VEGANOTES_PHONEBOOK_DEFAULT_ANCHOR:=${USER:-}}"
   export VEGANOTES_PHONEBOOK_SCRAPER_ENABLED VEGANOTES_PHONEBOOK_DEFAULT_ANCHOR
+  # Hot-reload the backend on app/*.py changes so backend edits behave like the
+  # frontend's Vite HMR — no manual `--restart` needed after every save. Scoped
+  # to the `app` package so the reloader doesn't watch .devdata / .venv. This is
+  # dev-only (prod runs via prod-start.sh, which never sets this). Opt out with
+  # VEGANOTES_DEV_RELOAD=false on shared hosts or when the watcher is noisy.
+  # `$reload_flags` is intentionally unquoted so it splits into flags (or
+  # nothing) — safe under `set -u` since the var is always set.
+  : "${VEGANOTES_DEV_RELOAD:=true}"
+  local reload_flags=""
+  if [[ "$VEGANOTES_DEV_RELOAD" == "true" ]]; then
+    reload_flags="--reload --reload-dir app"
+    echo "  ↻ auto-reload on app/*.py changes (set VEGANOTES_DEV_RELOAD=false to disable)"
+  fi
   VEGANOTES_DATA_DIR="$DATA_DIR" setsid "$VENV/bin/uvicorn" app.main:app \
-    --port 8000 --log-level warning > "$BACKEND_LOG" 2>&1 < /dev/null &
+    --port 8000 --log-level warning $reload_flags > "$BACKEND_LOG" 2>&1 < /dev/null &
   local bpid=$!
   echo "$bpid" >> "$PID_FILE"
   echo "  PID=$bpid"
