@@ -15,12 +15,21 @@ const proxy = {
   "/healthz": backend,
 };
 
+// Hostnames the dev/preview server will answer to, so the app can be reached
+// by name (e.g. http://sccc06443708.sc.intel.com:5173) instead of a bare IP.
+// A leading-dot entry matches that domain and all subdomains, so ".intel.com"
+// covers every corp host. Override with VEGA_ALLOWED_HOSTS (comma-separated).
+const allowedHosts = (process.env.VEGA_ALLOWED_HOSTS ?? ".intel.com,localhost")
+  .split(",")
+  .map((h) => h.trim())
+  .filter(Boolean);
+
 export default defineConfig({
   plugins: [react()],
-  server: { port: FRONTEND_PORT, proxy },
+  server: { port: FRONTEND_PORT, host: true, allowedHosts, proxy },
   // `vite preview` (used by prod-start.sh) needs its own proxy block so the
   // built bundle's /api calls reach the prod backend, not whatever is on :8000.
-  preview: { port: FRONTEND_PORT, proxy },
+  preview: { port: FRONTEND_PORT, host: true, allowedHosts, proxy },
   build: {
     outDir: "dist",
     emptyOutDir: true,
