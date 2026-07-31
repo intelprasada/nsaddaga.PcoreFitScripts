@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# bin/vaak – entry-point wrapper for the Vaak web voice bridge.
+# ("Vaak" — Sanskrit वाक्, "speech/voice".)
+# Serves a browser text box (Win+H friendly) that injects dictated text into
+# any of your tmux-hosted CLI sessions via `tmux send-keys`. One bridge serves
+# every tmux session; pick the target from the web UI dropdown.
+#
+# Config is via env vars (VAAK_PORT / VAAK_TARGET / VAAK_TOKEN / VAAK_HOST);
+# `bin/vaak --port N` is accepted as a shortcut. See tools/vaak/README.md.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# `--port N` shortcut -> VAAK_PORT
+if [[ "${1:-}" == "--port" && -n "${2:-}" ]]; then
+  export VAAK_PORT="$2"; shift 2
+fi
+
+command -v tmux >/dev/null || { echo "vaak: tmux not found on PATH" >&2; exit 1; }
+
+exec python3 "${REPO_ROOT}/tools/vaak/vaak_server.py" "$@"

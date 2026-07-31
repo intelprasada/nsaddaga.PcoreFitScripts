@@ -14,5 +14,4 @@ alias sc            "$CORE_TOOLS_DIR/bin/supercsv"
 alias st            "$CORE_TOOLS_DIR/bin/supertracker"
 alias email         "$CORE_TOOLS_DIR/bin/email-sender"
 
-alias codelens      "$CORE_TOOLS_DIR/bin/codelens"
-alias cl            "$CORE_TOOLS_DIR/bin/codelens"
+alias vaak          "$CORE_TOOLS_DIR/bin/vaak"
