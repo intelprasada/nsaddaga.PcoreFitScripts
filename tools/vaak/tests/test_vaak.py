@@ -230,3 +230,28 @@ def test_send_all_drafts_keeps_submitted_items_on_separate_lines(tmp_path, monke
         assert not any(marker1 in ln and marker2 in ln for ln in lines)
     finally:
         subprocess.run(["tmux", "kill-session", "-t", sess], check=False)
+
+
+@pytest.mark.skipif(not _HAS_TMUX, reason="tmux not installed")
+def test_broadcast_send_to_multiple_sessions():
+    a = "vaak_bc_a_%s" % uuid.uuid4().hex[:8]
+    b = "vaak_bc_b_%s" % uuid.uuid4().hex[:8]
+    for s in (a, b):
+        subprocess.run(["tmux", "new", "-d", "-s", s], check=True)
+    try:
+        marker = "VAAK_BC_%s" % uuid.uuid4().hex[:6]
+        results = D.broadcast_send([a, b], "echo %s" % marker, submit=True)
+        assert len(results) == 2
+        assert all(r["ok"] for r in results)
+        assert {r["target"] for r in results} == {a, b}
+        for s in (a, b):
+            cap = subprocess.run(["tmux", "capture-pane", "-p", "-t", s],
+                                 capture_output=True, text=True, check=True)
+            assert marker in cap.stdout
+    finally:
+        for s in (a, b):
+            subprocess.run(["tmux", "kill-session", "-t", s], check=False)
+
+
+def test_broadcast_send_empty_targets():
+    assert D.broadcast_send([], "echo hi", submit=True) == []
