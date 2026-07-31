@@ -23,6 +23,8 @@ dropdown in the web UI.
   `capture-pane`, including scrollback history (choose 40–5000 lines in the
   mirror's "scrollback" selector), and optional in-page **ready alerts** ping
   when a session transitions from busy to ready.
+- **Broadcast**: tick multiple sessions in the nav (or “All” / “All ready”)
+  and send the same command to all of them at once.
 - **Mobile-friendly**: a responsive layout and a **QR** button (top bar) that
   encodes the current tokenized URL so you can open Vaak on your phone and
   dictate from there. The QR is rendered client-side from a locally-vendored
@@ -108,6 +110,7 @@ survive a Vaak restart and re-associate with the same session.
 | **Alert when ready** | Flash title + beep + toast when a watched session changes busy → ready. Persisted in this browser. |
 | **Show/Hide terminal mirror** | Toggle the read-only selected-pane mirror. Persisted in this browser. |
 | **Scrollback (lines)** | How many lines of tmux scrollback the mirror pulls (40–5000). Persisted per browser. tmux only retains up to its own `history-limit` (default 2000 — raise it with `tmux set -g history-limit 10000` for new sessions). |
+| **Font size (px)** | Text size of the terminal mirror (10–20px). Persisted per browser. |
 | **+ Add to queue** | Stage the box as a draft (allowed even while busy). |
 | **Send all in order / Auto-send when ready** | Flush the queue manually, or auto-flush on each busy→ready edge. |
 
@@ -144,6 +147,7 @@ Everything below returns JSON.
 | `GET /api/pane?target=&lines=` | Last captured tmux pane lines as `{target, lines}`. `lines` defaults to `VAAK_PANE_LINES` and is capped at 5000. |
 | `GET /api/drafts?session=` | Queued drafts for a session + its autoflush flag. |
 | `GET /api/info` | Default target, its resolved pane id, and all tmux panes as `[{id,label}]`. |
+| `POST /api/broadcast` | Body `{token, text, targets:[names], submit?}` — sends `text` to every target; returns per-target results. |
 | `POST /api/send` | `{token, text, target?, submit?}` — types `text` into `target` now. |
 | `POST /api/drafts/add` | `{token, session, text}` — enqueue a draft. |
 | `POST /api/drafts/update` | `{token, session, id, text}` — edit a draft. |

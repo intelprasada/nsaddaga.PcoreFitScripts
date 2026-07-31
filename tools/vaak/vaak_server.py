@@ -476,6 +476,21 @@ def send_all_drafts(session: str, submit: bool) -> tuple[int, list[str]]:
     return sent, errors
 
 
+def broadcast_send(targets, text: str, submit: bool) -> list[dict]:
+    """Send the same `text` to every tmux target in `targets`. Returns a list of
+    per-target result dicts {target, ok, info|error}. Each target gets exactly
+    one send, so this is immune to the multi-item concatenation the queue
+    guards against."""
+    results = []
+    for t in targets:
+        t = str(t)
+        ok, info = inject(t, text, submit)
+        r = {"target": t, "ok": ok}
+        r["info" if ok else "error"] = info
+        results.append(r)
+    return results
+
+
 # --- Auto-flush poller ------------------------------------------------------
 # For sessions with auto-flush enabled, watch for a busy->ready transition and
 # then send exactly one queued draft (the head of the queue). We require the
@@ -545,6 +560,8 @@ header .sub{color:#8b949e;font-size:12px}
 .sess:hover{background:#ffffff0d}
 .sess.active{background:#1f6feb26;border-left:3px solid #58a6ff;padding-left:9px}
 .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;background:#8b949e}
+.sess .bx{margin:0 3px 0 0;flex:0 0 auto;cursor:pointer;width:15px;height:15px}
+#bcastRow{border-top:1px dashed #30363d;padding-top:8px}
 .dot.ready{background:#3fb950}.dot.busy{background:#d29922}.dot.gone{background:#f85149}
 .sess .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
 .sess .cmd{color:#8b949e;font-size:11px;font-family:monospace}
@@ -641,6 +658,13 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
       <label><input type="checkbox" id="keep" checked> Keep focus</label>
       <label><input type="checkbox" id="readyAlert" checked> Alert when ready</label>
     </div>
+    <div class="row" id="bcastRow">
+      <button class="sec" id="bcastBtn">Broadcast to selected (0) \u2192</button>
+      <span class="hint">tick sessions in the list \u00b7</span>
+      <button class="mini sec" id="bcastAll">All</button>
+      <button class="mini sec" id="bcastReady">All ready</button>
+      <button class="mini sec" id="bcastNone">None</button>
+    </div>
     <div id="paneTools" class="row">
       <button class="sec mini" id="togglePane">Hide terminal mirror</button>
       <label class="hint">scrollback
@@ -649,6 +673,12 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
           <option value="500">500</option><option value="1000">1000</option>
           <option value="2000">2000</option><option value="5000">5000</option>
         </select> lines
+      </label>
+      <label class="hint">font
+        <select id="paneFont" style="background:#0b0f14;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:2px 6px;font-size:12px">
+          <option>10</option><option>11</option><option>12</option><option>13</option>
+          <option>14</option><option>16</option><option>18</option><option>20</option>
+        </select> px
       </label>
       <span class="hint" id="paneMeta">terminal mirror polls every 1.5s</span>
     </div>
@@ -672,8 +702,10 @@ const token=qs.get('token')||'';
 const msg=$('#msg'), log=$('#log');
 let sel=null;              // selected session name
 let sessions=[];
+const bcast=new Set();     // session names selected for broadcast
 let paneVisible=localStorage.getItem('vaakPaneVisible')!=='0';
 let paneLines=parseInt(localStorage.getItem('vaakPaneLines')||'1000',10)||1000;
+let paneFont=parseInt(localStorage.getItem('vaakPaneFont')||'12',10)||12;
 const prevStatus={};
 const originalTitle=document.title;
 let titleFlashTimer=null;
@@ -784,12 +816,17 @@ function renderNav(){
   sessions.forEach(s=>{
     const d=document.createElement('div');
     d.className='sess'+(s.name===sel?' active':'');
-    d.innerHTML=`<span class="dot ${s.status}"></span>`+
+    d.innerHTML=`<input type="checkbox" class="bx" ${bcast.has(s.name)?'checked':''} title="Include in broadcast">`+
+      `<span class="dot ${s.status}"></span>`+
       `<span class="nm">${esc(s.name)} <span class="cmd">${esc(s.command)}</span></span>`+
       `<span class="badge ${s.drafts?'':'zero'}">${s.drafts}</span>`;
+    const bx=d.querySelector('.bx');
+    bx.onclick=(e)=>{e.stopPropagation();
+      if(bx.checked)bcast.add(s.name); else bcast.delete(s.name); updateBcastBtn();};
     d.onclick=()=>{sel=s.name;renderNav();renderStatus(s);loadDrafts();loadPane();msg.focus();};
     el.appendChild(d);
   });
+  updateBcastBtn();
 }
 function renderStatus(s){
   $('#selName').textContent=s.name;
@@ -840,6 +877,31 @@ async function sendNow(){
   if($('#keep').checked)msg.focus();
   loadSessions();
 }
+function updateBcastBtn(){
+  const b=$('#bcastBtn'); if(b)b.textContent='Broadcast to selected ('+bcast.size+') \\u2192';
+}
+function selectBcast(mode){
+  bcast.clear();
+  sessions.forEach(s=>{if(mode==='all'||(mode==='ready'&&s.status==='ready'))bcast.add(s.name);});
+  renderNav();
+}
+async function broadcast(){
+  const text=msg.value;
+  if(!text.trim()){logline('type a command to broadcast','err');return;}
+  const targets=[...bcast];
+  if(!targets.length){logline('no sessions ticked for broadcast','err');return;}
+  try{
+    const d=await api('/api/broadcast',{text,targets,submit:$('#submit').checked});
+    const oks=(d.results||[]).filter(r=>r.ok).map(r=>r.target);
+    const bad=(d.results||[]).filter(r=>!r.ok);
+    logline('broadcast: '+d.sent+'/'+d.count+' \\u2192 ['+oks.join(', ')+']'+
+      (bad.length?(' \\u00b7 FAILED: '+bad.map(r=>r.target+' ('+r.error+')').join(', ')):''),
+      bad.length?'err':'ok');
+    if(!bad.length)msg.value='';
+  }catch(e){logline('broadcast error: '+e.message,'err');}
+  if($('#keep').checked)msg.focus();
+  loadSessions();
+}
 async function addToQueue(){
   if(!sel){logline('pick a session first','err');return;}
   const text=msg.value;if(!text.trim())return;
@@ -877,16 +939,24 @@ async function toggleAuto(){
   loadSessions();
 }
 
-$('#sendNow').onclick=sendNow;
-$('#addQ').onclick=addToQueue;
+$('#sendNow').onclick=sendNow;$('#addQ').onclick=addToQueue;
 $('#clear').onclick=()=>{msg.value='';msg.focus();};
 $('#sendAll').onclick=sendAll;
 $('#autoflush').onchange=toggleAuto;
 $('#rescan').onclick=loadSessions;
+$('#bcastBtn').onclick=broadcast;
+$('#bcastAll').onclick=()=>selectBcast('all');
+$('#bcastReady').onclick=()=>selectBcast('ready');
+$('#bcastNone').onclick=()=>{bcast.clear();renderNav();};
 $('#togglePane').onclick=()=>{paneVisible=!paneVisible;updatePaneVisibility();};
 $('#paneLines').value=String(paneLines);
 $('#paneLines').onchange=()=>{paneLines=parseInt($('#paneLines').value,10)||1000;
   localStorage.setItem('vaakPaneLines',String(paneLines));loadPane();};
+function applyPaneFont(){const pre=$('#pane');if(pre)pre.style.fontSize=paneFont+'px';}
+$('#paneFont').value=String(paneFont);
+$('#paneFont').onchange=()=>{paneFont=parseInt($('#paneFont').value,10)||12;
+  localStorage.setItem('vaakPaneFont',String(paneFont));applyPaneFont();};
+applyPaneFont();
 $('#readyAlert').checked=localStorage.getItem('vaakReadyAlert')!=='0';
 $('#readyAlert').onchange=()=>localStorage.setItem('vaakReadyAlert',$('#readyAlert').checked?'1':'0');
 window.addEventListener('focus',stopTitleFlash);
@@ -1012,6 +1082,15 @@ class Handler(BaseHTTPRequestHandler):
                               bool(body.get("submit", True)))
             self._json({"ok": ok, "injected": info} if ok
                        else {"ok": False, "error": info})
+            return
+
+        if p == "/api/broadcast":
+            results = broadcast_send(body.get("targets") or [],
+                                     str(body.get("text", "")),
+                                     bool(body.get("submit", True)))
+            self._json({"ok": True, "count": len(results),
+                        "sent": sum(1 for r in results if r["ok"]),
+                        "results": results})
             return
 
         # --- draft queue endpoints (all keyed by session name) ---
