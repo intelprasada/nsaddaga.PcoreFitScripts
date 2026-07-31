@@ -12,6 +12,7 @@ _CORE_TOOLS_BIN="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/bin" 2>/dev/null && pw
 alias is="${_CORE_TOOLS_BIN}/interfacespec"
 alias sc="${_CORE_TOOLS_BIN}/supercsv"
 alias st="${_CORE_TOOLS_BIN}/supertracker"
+alias th="${_CORE_TOOLS_BIN}/teamhub"
 alias email="${_CORE_TOOLS_BIN}/email-sender"
 
 unset _CORE_TOOLS_BIN
