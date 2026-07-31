@@ -27,6 +27,6 @@ Thumbs.db
 release/*.tar.gz
 release/*.zip
 
-# codelens runtime state
-tools/codelens/.cache/
-tools/codelens/.idsid_cache.json
+# vaak runtime state
+tools/vaak/drafts.json
+tools/vaak/.vaak/

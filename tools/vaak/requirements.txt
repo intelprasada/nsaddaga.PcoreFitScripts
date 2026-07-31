@@ -1,0 +1,8 @@
+Python 3.9+  (stdlib only — no external packages required)
+
+# Runtime notes
+#   * The backend is pure Python standard library (http.server, subprocess).
+#   * `tmux` must be on PATH — the bridge injects into tmux panes via
+#     `tmux send-keys`, and the CLI you dictate into must run inside tmux.
+#   * The browser viewing the page needs no extra software; Windows Voice
+#     Typing (Win+H) types into the page's text field like any web input.
