@@ -30,3 +30,7 @@ release/*.zip
 # vaak runtime state
 tools/vaak/drafts.json
 tools/vaak/.vaak/
+
+# teamhub runtime state
+tools/teamhub/.cache/
+tools/teamhub/.idsid_cache.json

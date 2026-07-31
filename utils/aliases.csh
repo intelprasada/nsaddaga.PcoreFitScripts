@@ -12,6 +12,7 @@
 alias is            "$CORE_TOOLS_DIR/bin/interfacespec"
 alias sc            "$CORE_TOOLS_DIR/bin/supercsv"
 alias st            "$CORE_TOOLS_DIR/bin/supertracker"
+alias th            "$CORE_TOOLS_DIR/bin/teamhub"
 alias email         "$CORE_TOOLS_DIR/bin/email-sender"
 
 alias vaak          "$CORE_TOOLS_DIR/bin/vaak"

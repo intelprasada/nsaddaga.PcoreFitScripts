@@ -1,0 +1,1843 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>TeamHub – H1 2026</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    /* Vibrant professional dashboard palette */
+    --bg:        #0a0f1f;
+    --bg-2:      #0d1428;
+    --panel:     #121b36;
+    --panel2:    #17224a;
+    --ink:       #f5f8ff;
+    --ink-2:     #d7deef;
+    --mute:      #a2b3d9;
+    --border:    #263863;
+    --border-2:  #32467a;
+    --grid:      rgba(162,179,217,0.16);
+
+    --accent:    #3b82f6;   /* primary blue-500 */
+    --accent-2:  #10b981;   /* emerald-500 */
+    --warn:      #f59e0b;
+    --bad:       #ef4444;
+    --violet:    #8b5cf6;
+    --cyan:      #06b6d4;
+  }
+  /* Anonymize themes — override accent hues + a subtle background tint. */
+  body.theme-marvel {
+    --accent:   #ff2b3a;     /* Marvel red */
+    --accent-2: #ffd93d;     /* Iron Man gold */
+    --violet:   #6d2ee2;
+    --bg:       #10060a;
+    --bg-2:     #180a12;
+    --panel:    #24101c;
+    --panel2:   #341728;
+    --border:   #5b1e2d;
+    --border-2: #7a2b3f;
+    background: radial-gradient(1200px 700px at 15% -10%, #4a0d18 0%, transparent 60%),
+                radial-gradient(1000px 600px at 100% 0%, #2a0a12 0%, transparent 55%),
+                var(--bg) !important;
+  }
+  body.theme-starwars {
+    --accent:   #ffe81f;     /* Star Wars crawl yellow */
+    --accent-2: #4fb3ff;     /* Rebel blue */
+    --violet:   #a855f7;
+    --bg:       #05070d;
+    --bg-2:     #0a0f1a;
+    --panel:    #10182a;
+    --panel2:   #182238;
+    --border:   #2a3a5a;
+    --border-2: #3c527a;
+    background: radial-gradient(1200px 700px at 15% -10%, #1c2a4a 0%, transparent 60%),
+                radial-gradient(1000px 600px at 100% 0%, #0f1a30 0%, transparent 55%),
+                var(--bg) !important;
+  }
+  body.theme-hobbit {
+    --accent:   #d4a24c;     /* Rivendell gold */
+    --accent-2: #7cbf6b;     /* Shire green */
+    --violet:   #8b6a3e;
+    --bg:       #0e0f0a;
+    --bg-2:     #12140d;
+    --panel:    #1a1d13;
+    --panel2:   #262a1c;
+    --border:   #3b4126;
+    --border-2: #575e37;
+    background: radial-gradient(1200px 700px at 15% -10%, #2a2e18 0%, transparent 60%),
+                radial-gradient(1000px 600px at 100% 0%, #1a2010 0%, transparent 55%),
+                var(--bg) !important;
+  }
+  body.theme-got {
+    --accent:   #a8322f;     /* Lannister crimson */
+    --accent-2: #6d8fb3;     /* Stark grey-blue */
+    --violet:   #7a2ca8;
+    --bg:       #0a0d10;
+    --bg-2:     #0f1216;
+    --panel:    #171b21;
+    --panel2:   #22272e;
+    --border:   #3a4048;
+    --border-2: #4d5460;
+    background: radial-gradient(1200px 700px at 15% -10%, #2a1213 0%, transparent 60%),
+                radial-gradient(1000px 600px at 100% 0%, #10161d 0%, transparent 55%),
+                var(--bg) !important;
+  }
+  body.theme-plain {
+    --accent:   #64748b;     /* slate — a bland "corporate anonymized" look */
+    --accent-2: #94a3b8;
+  }
+  * { box-sizing: border-box; }
+  html { font-size: 14px; }
+  body { margin:0; font-family: "Inter", -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+         background: radial-gradient(1200px 700px at 15% -10%, #16213f 0%, transparent 60%),
+                     radial-gradient(1000px 600px at 100% 0%, #12203e 0%, transparent 55%),
+                     var(--bg);
+         color:var(--ink); font-size:14px; -webkit-font-smoothing: antialiased; }
+  header { position:sticky; top:0; z-index:5; padding:16px 24px;
+           background: rgba(11,18,32,0.85); backdrop-filter: blur(8px);
+           border-bottom:1px solid var(--border); display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
+  header h1 { font-size:20px; margin:0; letter-spacing:.2px; font-weight:600; }
+  header .sub { color:var(--mute); font-size:13px; }
+  select, button { background:var(--panel2); color:var(--ink); border:1px solid var(--border-2);
+                    border-radius:8px; padding:8px 12px; font-size:13px; transition: border-color .15s ease; }
+  button { cursor:pointer; font-weight:500; }
+  button:hover, select:hover { border-color:var(--accent); }
+  button.is-active { background: linear-gradient(180deg, #1f3170 0%, #223880 100%); border-color: var(--accent); color: #e0e7ff; }
+  main { padding:20px 24px 44px; }
+  .kpis { display:grid; grid-template-columns: repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin-bottom:18px; }
+  .kpi { background: linear-gradient(180deg, var(--panel) 0%, var(--bg-2) 100%);
+         border:1px solid var(--border); border-radius:12px; padding:16px; }
+  .kpi .lbl { color:var(--mute); font-size:12px; text-transform:uppercase; letter-spacing:.6px; font-weight:500; }
+  .kpi .val { font-size:28px; font-weight:600; margin-top:6px; color:var(--ink); }
+  .grid { display:grid; grid-template-columns: 2fr 1fr; gap:16px; }
+  .grid-2 { display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-top:16px; }
+  .card { background: var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px;
+          box-shadow: 0 1px 0 rgba(255,255,255,0.02) inset, 0 8px 20px rgba(0,0,0,0.25); }
+  .card h3 { margin:0 0 12px 0; font-size:14px; color:var(--ink); font-weight:600; letter-spacing:.2px; }
+  .card .h-sub { color:var(--mute); font-size:12px; margin-bottom:8px; }
+  canvas { max-height: 340px; }
+  table { width:100%; border-collapse: collapse; font-size:13px; }
+  th, td { border-bottom:1px solid var(--border); padding:9px 8px; text-align:left; }
+  th { color:var(--mute); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.5px;
+       position:sticky; top:0; background:var(--panel); }
+  tr:hover td { background: rgba(96,165,250,.07); cursor:pointer; }
+  tr.sel td { background: rgba(96,165,250,.18); }
+  .pill { display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px;
+           background: rgba(96,165,250,.10); color: var(--ink-2); border:1px solid var(--border-2); }
+  .flex { display:flex; align-items:center; gap:10px; }
+  .spacer { flex:1; }
+  #status { color:var(--mute); font-size:12px; }
+
+  /* Tabs */
+  .tabs { display:flex; gap:6px; background:var(--panel2); border:1px solid var(--border-2);
+           border-radius:10px; padding:4px; }
+  .tab { background:transparent; color:var(--mute); border:none; padding:7px 14px;
+          border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; letter-spacing:.2px; }
+  .tab:hover { color:var(--ink); }
+  .tab.is-active { background: linear-gradient(180deg, #1f3170 0%, #223880 100%);
+                    color:var(--ink); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .lbl-strong { color:var(--ink); font-weight:600; font-size:14px; }
+  /* Engineer Summary tab */
+  .summary-list { display:flex; flex-direction:column; gap:14px; }
+  .summary-card { background: rgba(15,23,49,0.72); border:1px solid var(--border); border-radius:10px;
+                  padding:14px 16px; }
+  .summary-head { display:flex; justify-content:space-between; align-items:flex-start; gap:14px;
+                  border-bottom:1px solid var(--border); padding-bottom:8px; margin-bottom:10px; }
+  .summary-name { font-size:16px; font-weight:700; color:var(--ink); letter-spacing:.2px; }
+  .summary-header-text { text-align:right; font-size:13px; color:#d0dbfa; max-width:340px; line-height:1.4; }
+  .summary-body { display:grid; grid-template-columns: 1.4fr 1fr; gap:14px; }
+  .summary-unit { padding:6px 0 8px; border-bottom:1px dashed rgba(162,179,217,0.14); }
+  .summary-unit:last-child { border-bottom:none; }
+  .summary-unit-hd { font-size:13px; color:var(--ink); }
+  .summary-ti-list { display:flex; flex-wrap:wrap; gap:4px 6px; margin-top:2px; }
+  .summary-ti-list a.summary-ti { font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+                                   color:#93c5fd; text-decoration:none;
+                                   background:rgba(59,130,246,0.10); border:1px solid rgba(59,130,246,0.35);
+                                   border-radius:5px; padding:1px 6px; }
+  .summary-ti-list a.summary-ti:hover { background:rgba(59,130,246,0.28); color:#dbeafe; }
+  .summary-files { font-size:12px; color:#c4cef0; }
+  @media (max-width: 900px) { .summary-body { grid-template-columns: 1fr; } }
+  @media (max-width: 1000px) { .grid, .grid-2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>TeamHub</h1>
+  <span class="sub" id="window"></span>
+  <div class="spacer"></div>
+  <div class="tabs" role="tablist">
+    <button class="tab is-active" data-tab="team" role="tab">Team Overview</button>
+    <button class="tab" data-tab="eng"  role="tab">Engineer Detail</button>
+    <button class="tab" data-tab="ti"   role="tab">Turnins (TI)</button>
+    <button class="tab" data-tab="summary" role="tab">Engineer Summary</button>
+  </div>
+  <div class="spacer"></div>
+  <div class="flex">
+    <label for="range" class="sub">Window:</label>
+    <select id="range">
+      <option value="YTD">Year to Date</option>
+      <option value="MTD">This Month</option>
+      <option value="H1" selected>H1 (Jan–Jun)</option>
+      <option value="H2">H2 (Jul–Dec)</option>
+      <option value="FY">Full Year</option>
+    </select>
+    <label for="year" class="sub">Year:</label>
+    <input id="year" type="number" min="2020" max="2099" step="1" style="width:74px;" />
+    <label for="proj" class="sub">Project:</label>
+    <select id="proj">
+      <option value="ALL">Both (GFC + JNC)</option>
+      <option value="GFC">GFC</option>
+      <option value="JNC">JNC</option>
+    </select>
+    <button id="refresh">↻ Refresh</button>
+    <button id="forceRefresh" title="Bypass on-disk cache and re-mine git + turnininfo from scratch">⟳ Force refetch</button>
+    <label class="sub" for="anonTheme" style="margin-left:6px;">🕶</label>
+    <select id="anonTheme" title="Anonymize engineer names using a themed alias set">
+      <option value="off">Reveal names</option>
+      <option value="plain">Anon: Plain (A, B, C…)</option>
+      <option value="marvel" selected>Anon: Marvel</option>
+      <option value="starwars">Anon: Star Wars</option>
+      <option value="hobbit">Anon: LOTR / Hobbit</option>
+      <option value="got">Anon: Game of Thrones</option>
+    </select>
+    <span id="status"></span>
+  </div>
+</header>
+
+<main>
+  <!-- ============================== TEAM TAB ============================== -->
+  <div class="tab-panel" data-panel="team">
+    <section class="kpis" id="kpis"></section>
+
+    <div class="flex" style="margin:12px 0 4px 0;">
+      <span class="sub">View:</span>
+      <div class="tabs" role="tablist" style="margin:0;">
+        <button class="tab is-active view-toggle" data-view="commits">Commits</button>
+        <button class="tab view-toggle" data-view="turnins">Turnins</button>
+      </div>
+      <span class="sub" id="teamViewNote"></span>
+    </div>
+
+    <section class="grid">
+      <div class="card">
+        <h3 id="cardTitleBars1">Commits per Engineer</h3>
+        <canvas id="commitsChart"></canvas>
+      </div>
+      <div class="card">
+        <h3 id="cardTitlePie">Commit-Type Mix (Team)</h3>
+        <canvas id="pieTeam"></canvas>
+      </div>
+    </section>
+
+    <section class="grid-2">
+      <div class="card">
+        <h3 id="cardTitleBars2">Net Lines Changed per Engineer</h3>
+        <canvas id="linesChart"></canvas>
+      </div>
+      <div class="card">
+        <h3 id="cardTitleMonth">Monthly Commit Distribution (Team)</h3>
+        <canvas id="teamMonthChart"></canvas>
+      </div>
+    </section>
+
+    <section style="margin-top:16px;">
+      <div class="card">
+        <div class="flex">
+          <h3 style="margin:0" id="leaderTitle">Team Leaderboard</h3>
+          <span class="h-sub" id="leaderHint">Click a row to view that engineer in the Engineer Detail tab →</span>
+        </div>
+        <div style="max-height:420px; overflow:auto; margin-top:8px;">
+          <table id="tbl">
+            <thead id="tblHead">
+              <tr>
+                <th>Engineer</th><th>IDSID</th><th>Commits</th><th>Net Lines</th>
+                <th>Avg</th><th>Median</th><th>% ≤ Med</th><th>Pattern</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============================ ENGINEER TAB ============================ -->
+  <div class="tab-panel" data-panel="eng" hidden>
+    <section class="card" style="margin-bottom:16px;">
+      <div class="flex" style="gap:14px;">
+        <span class="lbl-strong">Engineer:</span>
+        <select id="engPicker" style="min-width:260px;"></select>
+        <span class="h-sub" id="engBadge"></span>
+      </div>
+    </section>
+
+    <section class="kpis" id="engKpis"></section>
+
+    <section class="grid-2">
+      <div class="card">
+        <h3 id="engMonthTitle">Monthly Commits</h3>
+        <canvas id="engMonthChart"></canvas>
+      </div>
+      <div class="card">
+        <h3 id="engMonthNetTitle">Net Lines per Month</h3>
+        <canvas id="engMonthNetChart"></canvas>
+      </div>
+    </section>
+
+    <section class="grid-2">
+      <div class="card">
+        <h3 id="pieEngTitle">Commit-Type Mix</h3>
+        <canvas id="pieEng"></canvas>
+      </div>
+      <div class="card">
+        <div class="flex" style="margin-bottom:8px;">
+          <h3 id="filesTitle" style="margin:0">Files Modified</h3>
+          <span class="h-sub" id="filesSub"></span>
+          <div class="spacer"></div>
+          <input id="fileFilter" type="text" placeholder="Filter files…"
+                 style="background:var(--panel2); color:var(--ink); border:1px solid var(--border-2);
+                        border-radius:8px; padding:6px 10px; font-size:13px; min-width:220px;" />
+        </div>
+        <div style="max-height:420px; overflow:auto;">
+          <table id="filesTbl">
+            <thead>
+              <tr>
+                <th style="width:52%">File Path</th>
+                <th>Commits</th>
+                <th>Added</th>
+                <th>Deleted</th>
+                <th>Net</th>
+                <th>% of Commits</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="fileDetailSection" style="margin-top:16px;" hidden>
+      <div class="card">
+        <div class="flex" style="margin-bottom:8px;">
+          <h3 id="fileDetailTitle" style="margin:0">Commits touching …</h3>
+          <span class="h-sub" id="fileDetailSub"></span>
+          <div class="spacer"></div>
+          <button id="fileDetailClose" style="padding:4px 10px;">✕ Close</button>
+        </div>
+        <div style="max-height:420px; overflow:auto;">
+          <table id="fileDetailTbl">
+            <thead>
+              <tr>
+                <th style="width:14%">Commit</th>
+                <th style="width:12%">Date</th>
+                <th style="width:44%">Subject</th>
+                <th>Added</th>
+                <th>Deleted</th>
+                <th>Net</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section style="margin-top:16px;">
+      <div class="card">
+        <div class="flex" style="margin-bottom:8px;">
+          <h3 id="commitsTitle" style="margin:0">Commits</h3>
+          <span class="h-sub" id="commitsSub"></span>
+          <div class="spacer"></div>
+          <input id="commitFilter" type="text" placeholder="Filter commits (subject or SHA)…"
+                 style="background:var(--panel2); color:var(--ink); border:1px solid var(--border-2);
+                        border-radius:8px; padding:6px 10px; font-size:13px; min-width:260px;" />
+        </div>
+        <div style="max-height:520px; overflow:auto;">
+          <table id="commitsTbl">
+            <thead>
+              <tr>
+                <th style="width:12%">Commit</th>
+                <th style="width:10%">Date</th>
+                <th style="width:44%">Subject</th>
+                <th>Files</th>
+                <th>Added</th>
+                <th>Deleted</th>
+                <th>Net</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- ============================ TURNINS TAB ============================= -->
+  <div class="tab-panel" data-panel="ti" hidden>
+    <section class="card" style="margin-bottom:12px;">
+      <div class="flex">
+        <label for="tiEngPicker" class="sub"><b>Engineer:</b></label>
+        <select id="tiEngPicker" style="min-width:320px;"></select>
+        <button id="tiReload">↻ Reload Turnins</button>
+        <span class="sub" id="tiHint">Cached per (engineer, project) for 10 min; first load sources HDK env (~15s)</span>
+      </div>
+    </section>
+    <section class="kpis" id="tiKpis"></section>
+
+    <section class="card">
+      <div class="flex">
+        <h3 style="margin:0;">Turnins</h3>
+        <span class="pill" id="tiCount">0 turnins</span>
+        <div class="spacer"></div>
+        <input id="tiFilter" placeholder="filter: comma-separated AND — e.g. released, pmh  (use -tok to exclude)" style="min-width:420px;"/>
+      </div>
+      <div style="max-height:640px; overflow:auto; margin-top:8px;">
+        <table id="tiTbl">
+          <thead>
+            <tr>
+              <th style="width:26px;"></th>
+              <th>Turnin</th>
+              <th>Turnin Time</th>
+              <th>Project</th>
+              <th>Status</th>
+              <th>Comment</th>
+              <th># Commits</th>
+              <th># Files</th>
+              <th title="HSD IDs added to core/common/cfg/bugs by this turnin">HSDs Added</th>
+              <th title="Time this turnin spent in the pipeline (turnin → completed for settled TIs, or current age for in-flight TIs)">Pipe Age</th>
+              <th>Code Review</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============================== SUMMARY TAB ============================ -->
+  <div class="tab-panel" data-panel="summary" hidden>
+    <section>
+      <div class="card">
+        <div class="flex" style="margin-bottom:10px;">
+          <h3 style="margin:0">Engineer Summary — H1 2026</h3>
+          <span class="h-sub" id="summaryHint">Factual per-engineer summary derived from turnininfo (TIs, HSDs, files, RTL units).</span>
+          <div class="spacer"></div>
+          <input id="summaryFilter" type="text" placeholder="Filter engineer…"
+                 style="background:var(--panel2); color:var(--ink); border:1px solid var(--border-2);
+                        border-radius:8px; padding:6px 10px; font-size:13px; min-width:180px;" />
+          <button id="summaryReload" title="Force refetch summaries">⟳ Refetch</button>
+        </div>
+        <div id="summaryList" class="summary-list"></div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<!-- Shared diff panel (visible across all tabs) -->
+<section id="diffSection" style="margin:16px 24px;" hidden>
+  <div class="card">
+    <div class="flex" style="margin-bottom:8px;">
+      <h3 id="diffTitle" style="margin:0">Diff</h3>
+      <span class="h-sub" id="diffSub"></span>
+      <div class="spacer"></div>
+      <button id="diffClose" style="padding:4px 10px;">✕ Close</button>
+    </div>
+    <pre id="diffBody"
+         style="max-height:520px; overflow:auto; margin:0;
+                background:#08101f; color:#e6ebff; padding:12px;
+                border:1px solid var(--border); border-radius:8px;
+                font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                font-size:12px; line-height:1.45; white-space:pre;"></pre>
+  </div>
+</section>
+
+<script>
+// Vibrant, saturated dashboard palette
+const COLORS = [
+  "#3b82f6", // blue-500
+  "#10b981", // emerald-500
+  "#f59e0b", // amber-500
+  "#ef4444", // red-500
+  "#8b5cf6", // violet-500
+  "#06b6d4", // cyan-500
+  "#f97316", // orange-500
+  "#ec4899", // pink-500
+  "#84cc16", // lime-500
+  "#14b8a6", // teal-500
+  "#eab308", // yellow-500
+  "#6366f1", // indigo-500
+];
+
+// Distinct per-project colors used whenever project=ALL and we stack GFC + JNC
+const PROJECT_COLORS = {
+  GFC: "#22d3ee", // cyan-400  — cool
+  JNC: "#f59e0b", // amber-500 — warm
+};
+
+// Chart.js defaults — professional, min 12, ticks/legends bumped to 13–14
+Chart.defaults.color = "#d7deef";
+Chart.defaults.borderColor = "rgba(162,179,217,0.16)";
+Chart.defaults.font.family = '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+Chart.defaults.font.size = 13;
+Chart.defaults.font.weight = "500";
+Chart.defaults.plugins.legend.labels.font = { size: 13, weight: "500" };
+Chart.defaults.plugins.legend.labels.color = "#e6ebff";
+Chart.defaults.plugins.legend.labels.boxWidth = 14;
+Chart.defaults.plugins.legend.labels.boxHeight = 14;
+Chart.defaults.plugins.legend.labels.padding = 16;
+Chart.defaults.plugins.tooltip.titleFont = { size: 14, weight: "600" };
+Chart.defaults.plugins.tooltip.bodyFont  = { size: 13, weight: "500" };
+Chart.defaults.plugins.tooltip.backgroundColor = "rgba(10,15,31,0.96)";
+Chart.defaults.plugins.tooltip.borderColor = "#32467a";
+Chart.defaults.plugins.tooltip.borderWidth = 1;
+Chart.defaults.plugins.tooltip.padding = 12;
+Chart.defaults.plugins.tooltip.cornerRadius = 8;
+
+const AXIS_TICK  = { color: "#c4cef0", font: { size: 13, weight: "500" } };
+const AXIS_TICKX = { color: "#c4cef0", font: { size: 13, weight: "500" }, autoSkip: false };
+const AXIS_GRID  = { color: "rgba(162,179,217,0.12)", drawBorder: false };
+const AXIS_GRIDX = { display: false, drawBorder: false };
+
+// Inline plugin: draw the numeric value on top of every bar (and per-segment
+// values inside each segment when the chart is stacked).
+const barValueLabels = {
+  id: "barValueLabels",
+  afterDatasetsDraw(chart, args, opts) {
+    const { ctx } = chart;
+    ctx.save();
+    ctx.font = '600 12px "Inter", -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = "center";
+    const stacked = !!(chart.options.scales && chart.options.scales.y && chart.options.scales.y.stacked);
+    const dss = chart.data.datasets;
+
+    // 1) Per-segment labels (only for stacked charts, and only if the segment
+    //    is tall enough to fit legibly).
+    if (stacked) {
+      dss.forEach((ds, di) => {
+        const meta = chart.getDatasetMeta(di);
+        if (meta.type !== "bar" || meta.hidden) return;
+        meta.data.forEach((bar, i) => {
+          const v = ds.data[i];
+          if (!v) return;
+          const { y, base } = bar.getProps(["y","base"], true);
+          const h = Math.abs(base - y);
+          if (h < 18) return; // too small to fit a label
+          const cx = bar.getProps(["x"], true).x;
+          const cy = (y + base) / 2;
+          ctx.fillStyle = "#0b1020";
+          ctx.shadowColor = "transparent";
+          ctx.textBaseline = "middle";
+          ctx.fillText(Number(v).toLocaleString(), cx, cy);
+        });
+      });
+    }
+
+    // 2) Top-of-stack (or top-of-bar) total for each x category
+    const catCount = chart.data.labels ? chart.data.labels.length : 0;
+    for (let i = 0; i < catCount; i++) {
+      let topY = null, topX = null, total = 0, anyVisible = false;
+      dss.forEach((ds, di) => {
+        const meta = chart.getDatasetMeta(di);
+        if (meta.type !== "bar" || meta.hidden) return;
+        const bar = meta.data[i];
+        if (!bar) return;
+        const v = ds.data[i];
+        if (v == null || Number.isNaN(v)) return;
+        anyVisible = true;
+        total += Number(v);
+        const { x, y, base } = bar.getProps(["x","y","base"], true);
+        const above = y <= base;
+        if (topY === null || (above ? y < topY : y > topY)) { topY = y; topX = x; }
+      });
+      if (!anyVisible || topY === null) continue;
+      ctx.fillStyle = "#eef2ff";
+      ctx.shadowColor = "rgba(0,0,0,0.55)";
+      ctx.shadowBlur = 3;
+      ctx.textBaseline = "bottom";
+      ctx.fillText(Number(total).toLocaleString(), topX, topY - 6);
+    }
+    ctx.restore();
+  }
+};
+Chart.register(barValueLabels);
+
+// Build a vertical gradient fill for bars (top→bottom of chart area)
+function makeGradient(ctx, area, color) {
+  if (!area) return color;
+  const g = ctx.createLinearGradient(0, area.top, 0, area.bottom);
+  g.addColorStop(0, color + "ff");
+  g.addColorStop(1, color + "55");
+  return g;
+}
+
+let charts = {};
+let currentData = null;
+let selectedEngineer = null;
+
+// --- Anonymization -----------------------------------------------------
+// A theme dropdown maps real engineer names to a themed alias pool. When a
+// theme is active, engineer identity throughout the dashboard is replaced by
+// the alias and IDSIDs are masked. A matching color scheme is applied to
+// the page via a body class. Internal state (selectedEngineer, API calls)
+// keeps real names so the backend keeps working normally.
+const ANON_THEMES = {
+  off:     { label: "Reveal names", pool: [], klass: "" },
+  plain:   { label: "Plain",   klass: "theme-plain",
+             pool: "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map(c=>`Engineer ${c}`) },
+  marvel:  { label: "Marvel",  klass: "theme-marvel", pool: [
+             "Iron Man","Captain America","Thor","Black Widow","Hulk","Hawkeye",
+             "Doctor Strange","Spider-Man","Black Panther","Scarlet Witch",
+             "Vision","Wolverine","Storm","Rocket","Groot","Star-Lord",
+             "Gamora","Loki","Nick Fury","Ant-Man","Falcon","Winter Soldier"] },
+  starwars:{ label: "Star Wars", klass: "theme-starwars", pool: [
+             "Luke Skywalker","Leia Organa","Han Solo","Chewbacca","Yoda",
+             "Obi-Wan Kenobi","Rey","Finn","Poe Dameron","Mace Windu",
+             "Ahsoka Tano","Din Djarin","Grogu","Boba Fett","Padmé Amidala",
+             "Qui-Gon Jinn","Lando Calrissian","Bo-Katan","Cassian Andor",
+             "Jyn Erso","Kylo Ren","Darth Maul"] },
+  hobbit:  { label: "LOTR",    klass: "theme-hobbit", pool: [
+             "Frodo","Samwise","Gandalf","Aragorn","Legolas","Gimli",
+             "Boromir","Pippin","Merry","Bilbo","Elrond","Galadriel",
+             "Éowyn","Faramir","Théoden","Arwen","Treebeard","Radagast",
+             "Thorin","Beorn"] },
+  got:     { label: "GoT",     klass: "theme-got", pool: [
+             "Jon Snow","Daenerys","Tyrion","Arya","Sansa","Cersei",
+             "Jaime","Bran","Brienne","Davos","Melisandre","Samwell",
+             "Theon","Missandei","Grey Worm","Podrick","Varys","Bronn",
+             "Tormund","Sandor Clegane"] },
+};
+
+let anonTheme = "marvel";
+let anonMap = {};                       // real name -> pseudonym
+function buildAnonMap(names) {
+  const theme = ANON_THEMES[anonTheme] || ANON_THEMES.off;
+  const pool = theme.pool;
+  if (!pool.length) return {};
+  const sorted = names.slice().sort((a,b)=>a.localeCompare(b));
+  const m = {};
+  sorted.forEach((n, i) => { m[n] = pool[i % pool.length]; });
+  return m;
+}
+function anonymize() { return anonTheme !== "off"; }
+function anonName(n) {
+  if (!anonymize() || !n) return n || "";
+  return anonMap[n] || n;
+}
+function anonId(id) {
+  if (!anonymize()) return id || "";
+  return id ? "•••••" : "";
+}
+function applyThemeClass() {
+  const body = document.body;
+  Object.values(ANON_THEMES).forEach(t => { if (t.klass) body.classList.remove(t.klass); });
+  const cur = ANON_THEMES[anonTheme];
+  if (cur && cur.klass) body.classList.add(cur.klass);
+}
+
+function fmt(n){ return (n>=0?"+":"") + n.toLocaleString(); }
+
+function renderKPIs(d) {
+  const el = document.getElementById("kpis");
+  const t = d.team_totals;
+  const items = [
+    ["Project", d.project],
+    ["Active Engineers", t.engineers + " / " + d.engineers.length],
+    ["Total Commits", t.total.toLocaleString()],
+    ["Net Lines Changed", fmt(t.net_lines)],
+    ["Window", (d.window.label || "") + "  (" + d.window.since + " → " + d.window.until + ")"],
+    ["Generated", d.generated_at],
+  ];
+  el.innerHTML = items.map(([l,v])=>`<div class="kpi"><div class="lbl">${l}</div><div class="val">${v}</div></div>`).join("");
+  document.getElementById("window").textContent = (d.window.label || "") + "  •  " + d.window.since + " → " + d.window.until;
+  document.querySelector("header h1").textContent = "TeamHub – " + (d.window.label || "");
+}
+
+function destroy(name){ if (charts[name]) { charts[name].destroy(); delete charts[name]; } }
+
+function barChart(id, labels, series, name, opts) {
+  destroy(name);
+  opts = opts || {};
+  const perBarColor = !!opts.perBarColor;
+  const stacked = !!opts.stacked;
+  const canvas = document.getElementById(id);
+  const cctx = canvas.getContext("2d");
+
+  const datasets = series.map((s, si) => {
+    const seriesColor = s.color || COLORS[si % COLORS.length];
+    const base = perBarColor
+      ? labels.map((_, i) => COLORS[i % COLORS.length])
+      : seriesColor;
+    const bg = (context) => {
+      const chart = context.chart;
+      const { chartArea } = chart;
+      if (!chartArea) return "rgba(59,130,246,0.4)";
+      if (perBarColor) {
+        return makeGradient(cctx, chartArea, base[context.dataIndex] || COLORS[0]);
+      }
+      return makeGradient(cctx, chartArea, base);
+    };
+    return {
+      label: s.label,
+      data:  s.data,
+      backgroundColor: bg,
+      hoverBackgroundColor: perBarColor
+        ? labels.map((_, i) => COLORS[i % COLORS.length])
+        : seriesColor,
+      borderColor: perBarColor ? base : seriesColor,
+      borderWidth: 0,
+      borderRadius: stacked ? 4 : 8,
+      borderSkipped: false,
+      barPercentage: 0.78,
+      categoryPercentage: 0.78,
+      stack: stacked ? "s0" : undefined,
+    };
+  });
+
+  charts[name] = new Chart(canvas, {
+    type: "bar",
+    data: { labels, datasets },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      layout: { padding: { top: 22 } },  // room for value labels
+      plugins:{ legend:{ display: series.length>1 } },
+      scales:{
+        x: { stacked: stacked, ticks: AXIS_TICKX, grid: AXIS_GRIDX,
+             border: { display: false } },
+        y: { stacked: stacked, beginAtZero:true, ticks: AXIS_TICK, grid: AXIS_GRID,
+             border: { display: false },
+             grace: "10%" }
+      }
+    }
+  });
+}
+
+function pieChart(id, labels, values, name) {
+  destroy(name);
+  const palette = labels.map((_,i)=>COLORS[i % COLORS.length]);
+  // Inline plugin: draw the numeric count (and % for slices >=6%) at the
+  // centroid of each slice. Small slices get their number pinned outside
+  // the arc via a leader line so they don't overlap or clip.
+  const sliceLabels = {
+    id: "sliceLabels",
+    afterDatasetsDraw(chart) {
+      const { ctx } = chart;
+      const ds = chart.getDatasetMeta(0);
+      const total = values.reduce((a,b)=>a+(+b||0),0) || 1;
+      const dpr = window.devicePixelRatio || 1;
+      ctx.save();
+      // Crisp text: align to device pixels, use a solid readable font stack
+      ctx.font = '700 13px "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.lineJoin = "round";
+      ctx.miterLimit = 2;
+      ds.data.forEach((arc, i) => {
+        const v = values[i] || 0;
+        if (!v) return;
+        const pct = 100 * v / total;
+        const { x, y, startAngle, endAngle, outerRadius, innerRadius } = arc.getProps(
+          ["x","y","startAngle","endAngle","outerRadius","innerRadius"], true);
+        const mid = (startAngle + endAngle) / 2;
+        if (pct >= 6) {
+          // draw inside the ring band — dark halo outline, white fill on top
+          const r = (outerRadius + innerRadius) / 2;
+          const tx = Math.round(x + Math.cos(mid) * r) + 0.5;
+          const ty = Math.round(y + Math.sin(mid) * r) + 0.5;
+          const txt = `${v} (${pct.toFixed(0)}%)`;
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = "rgba(8,15,32,0.95)";
+          ctx.strokeText(txt, tx, ty);
+          ctx.fillStyle = "#ffffff";
+          ctx.fillText(txt, tx, ty);
+        } else {
+          // leader line outside the arc
+          const rOut = outerRadius + 6;
+          const rTxt = outerRadius + 22;
+          const x1 = x + Math.cos(mid) * outerRadius;
+          const y1 = y + Math.sin(mid) * outerRadius;
+          const x2 = x + Math.cos(mid) * rOut;
+          const y2 = y + Math.sin(mid) * rOut;
+          const xt = Math.round(x + Math.cos(mid) * rTxt) + 0.5;
+          const yt = Math.round(y + Math.sin(mid) * rTxt) + 0.5;
+          ctx.strokeStyle = "rgba(215,222,239,.55)";
+          ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+          ctx.textAlign = xt < x ? "end" : "start";
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = "rgba(8,15,32,0.9)";
+          ctx.strokeText(`${v}`, xt, yt);
+          ctx.fillStyle = "#ffffff";
+          ctx.fillText(`${v}`, xt, yt);
+          ctx.textAlign = "center";
+        }
+      });
+      ctx.restore();
+    }
+  };
+  charts[name] = new Chart(document.getElementById(id), {
+    type: "doughnut",
+    data: { labels, datasets:[{
+      data: values,
+      backgroundColor: palette,
+      hoverBackgroundColor: palette,
+      borderColor: "#121b36",
+      borderWidth: 2,
+      hoverOffset: 8,
+    }] },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      cutout: "55%",
+      layout: { padding: 24 },
+      plugins:{
+        legend:{ position:"right", labels:{ font:{ size:13, weight:"600" }, color:"#ffffff",
+                  boxWidth:14, boxHeight:14, padding:14,
+                  generateLabels(chart) {
+                    const data = chart.data;
+                    const total = (data.datasets[0].data||[]).reduce((a,b)=>a+(+b||0),0) || 1;
+                    return data.labels.map((lbl, i) => {
+                      const v = data.datasets[0].data[i] || 0;
+                      const pct = (100*v/total).toFixed(0);
+                      return {
+                        text: `${lbl}  ${v} (${pct}%)`,
+                        fillStyle: data.datasets[0].backgroundColor[i],
+                        strokeStyle: data.datasets[0].backgroundColor[i],
+                        lineWidth: 0,
+                        fontColor: "#ffffff",
+                        hidden: false, index: i,
+                      };
+                    });
+                  } } },
+        tooltip:{ callbacks:{ label: (ctx)=>{
+          const total = ctx.dataset.data.reduce((a,b)=>a+b,0) || 1;
+          const pct = (100 * ctx.parsed / total).toFixed(1);
+          return ` ${ctx.label}: ${ctx.parsed} (${pct}%)`;
+        }}}
+      }
+    },
+    plugins: [sliceLabels],
+  });
+}
+
+function renderTable(d) {
+  const tb = document.querySelector("#tbl tbody");
+  tb.innerHTML = "";
+  d.engineers.forEach(e => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${anonName(e.engineer)}</td>
+      <td><code style="font-size:12px;">${anonId(e.idsid)||"–"}</code></td>
+      <td>${e.total}</td><td>${fmt(e.net_lines)}</td>
+      <td>${e.avg_lines}</td><td>${e.median_lines}</td>
+      <td>${e.pct_at_or_below}%</td>
+      <td><span class="pill">${e.pattern||"–"}</span></td>`;
+    tr.addEventListener("click", ()=> {
+      selectedEngineer = e.engineer;
+      switchTab("eng");
+    });
+    if (e.engineer === selectedEngineer) tr.classList.add("sel");
+    tb.appendChild(tr);
+  });
+}
+
+// ---------------------------------------------------------------- Team tab
+let teamView = "commits";         // "commits" | "turnins"
+let teamTurnins = null;           // cached /api/team_turnins response
+let teamTurninsInFlight = null;
+
+function renderTeam(d) {
+  const engs = d.engineers;
+  const labels = engs.map(e => anonymize() ? anonName(e.engineer) : e.engineer.split(" ").slice(0,2).join(" "));
+  const projs = Object.keys(d.team_totals_by_project || {});
+  const splitProjects = d.project === "ALL" && projs.length > 1;
+
+  // Restore commits-mode titles
+  document.getElementById("cardTitleBars1").textContent = "Commits per Engineer";
+  document.getElementById("cardTitleBars2").textContent = "Net Lines Changed per Engineer";
+  document.getElementById("cardTitlePie").textContent   = "Commit-Type Mix (Team)";
+  document.getElementById("cardTitleMonth").textContent = "Monthly Commit Distribution (Team)";
+  document.getElementById("leaderTitle").textContent    = "Team Leaderboard";
+  document.getElementById("leaderHint").textContent     = "Click a row to view that engineer in the Engineer Detail tab →";
+  document.getElementById("tblHead").innerHTML = `<tr>
+    <th>Engineer</th><th>IDSID</th><th>Commits</th><th>Net Lines</th>
+    <th>Avg</th><th>Median</th><th>% ≤ Med</th><th>Pattern</th></tr>`;
+
+  if (splitProjects) {
+    const commitsSeries = projs.map(p => ({
+      label: p,
+      color: PROJECT_COLORS[p] || COLORS[0],
+      data: engs.map(e => ((e.per_project||{})[p]||{}).total || 0),
+    }));
+    const linesSeries = projs.map(p => ({
+      label: p,
+      color: PROJECT_COLORS[p] || COLORS[0],
+      data: engs.map(e => ((e.per_project||{})[p]||{}).net_lines || 0),
+    }));
+    barChart("commitsChart", labels, commitsSeries, "commits", { stacked: true });
+    barChart("linesChart",   labels, linesSeries,   "lines",   { stacked: true });
+
+    const monthCommits = projs.map(p => ({
+      label: p,
+      color: PROJECT_COLORS[p] || COLORS[0],
+      data: d.months.map(m => (d.team_monthly_by_project[p]||{})[m] || 0),
+    }));
+    barChart("teamMonthChart", d.months, monthCommits, "teamMonth", { stacked: true });
+  } else {
+    barChart("commitsChart", labels, [{label:"Commits", data:engs.map(e=>e.total)}], "commits", { perBarColor: true });
+    barChart("linesChart",   labels, [{label:"Net Lines", data:engs.map(e=>e.net_lines)}], "lines", { perBarColor: true });
+    barChart("teamMonthChart", d.months,
+             [{label:"Team Commits", data: d.months.map(m=>d.team_monthly[m])}],
+             "teamMonth", { perBarColor: true });
+  }
+
+  const cats = d.categories;
+  pieChart("pieTeam", cats, cats.map(c => d.team_categories[c]||0), "pieTeam");
+
+  renderTable(d);
+}
+
+function renderTeamTurnins(td) {
+  if (!td) return;
+  // Bar charts and monthly charts use RELEASED turnins only. The Status
+  // Mix pie continues to show all statuses (so you can see the release
+  // rate at a glance) but with numeric labels drawn on each slice.
+  const engs = td.engineers.slice().sort((a,b)=>(b.released||0)-(a.released||0));
+  const labels = engs.map(e => anonymize() ? anonName(e.engineer) : e.engineer.split(" ").slice(0,2).join(" "));
+  const projs = Object.keys(td.team_totals_by_project || {});
+  const splitProjects = td.project === "ALL" && projs.length > 1;
+
+  document.getElementById("cardTitleBars1").textContent = "Released Turnins per Engineer";
+  document.getElementById("cardTitleBars2").textContent = "Files Touched per Engineer (released turnins)";
+  document.getElementById("cardTitlePie").textContent   = "Turnin Status Mix (Team)";
+  document.getElementById("cardTitleMonth").textContent = "Monthly Released Turnins (Team)";
+  document.getElementById("leaderTitle").textContent    = "Team Turnins Leaderboard";
+  document.getElementById("leaderHint").textContent     = "Click a row to drill into that engineer's Turnins →";
+
+  if (splitProjects) {
+    const tiSeries = projs.map(p => ({
+      label: p, color: PROJECT_COLORS[p] || COLORS[0],
+      data: engs.map(e => (e.per_project[p]||{}).released || 0),
+    }));
+    const fileSeries = projs.map(p => ({
+      label: p, color: PROJECT_COLORS[p] || COLORS[0],
+      data: engs.map(e => (e.per_project[p]||{}).released_files || 0),
+    }));
+    barChart("commitsChart", labels, tiSeries,   "commits", { stacked: true });
+    barChart("linesChart",   labels, fileSeries, "lines",   { stacked: true });
+    const monthSeries = projs.map(p => ({
+      label: p, color: PROJECT_COLORS[p] || COLORS[0],
+      data: td.months.map(m => (td.team_monthly_released_by_project[p]||{})[m] || 0),
+    }));
+    barChart("teamMonthChart", td.months, monthSeries, "teamMonth", { stacked: true });
+  } else {
+    barChart("commitsChart", labels, [{label:"Released Turnins", data: engs.map(e=>e.released||0)}], "commits", { perBarColor: true });
+    barChart("linesChart",   labels, [{label:"Files (released)", data: engs.map(e=>e.released_files||0)}], "lines",   { perBarColor: true });
+    barChart("teamMonthChart", td.months,
+             [{label:"Team Released Turnins", data: td.months.map(m=>(td.team_monthly_released||{})[m]||0)}],
+             "teamMonth", { perBarColor: true });
+  }
+
+  const stats = Object.keys(td.status_counts || {});
+  pieChart("pieTeam", stats, stats.map(s => td.status_counts[s]||0), "pieTeam");
+
+  // Leaderboard with turnin columns — Released column added, per-project
+  // shows released / total.
+  const statusesUnion = Array.from(new Set(engs.flatMap(e => Object.keys(e.status||{})))).sort();
+  document.getElementById("tblHead").innerHTML = `<tr>
+    <th>Engineer</th><th>IDSID</th><th>Released</th><th>Total</th><th>Files (rel.)</th>
+    <th title="Average time-to-release for released turnins in this window">Avg TTR</th>
+    <th title="Median (p50) time-to-release">p50</th>
+    <th title="90th-percentile time-to-release">p90</th>
+    ${projs.map(p=>`<th>${p} (rel/total)</th>`).join("")}
+    ${statusesUnion.map(s=>`<th>${s}</th>`).join("")}
+  </tr>`;
+  const tb = document.querySelector("#tbl tbody");
+  tb.innerHTML = "";
+  const teamP50 = (td.team_pipe_released||{}).p50;
+  const teamP90 = (td.team_pipe_released||{}).p90;
+  const pipeStyle = (sec) => {
+    if (!sec) return "";
+    if (teamP90 && sec > teamP90) return "color:#fecaca;font-weight:600;";
+    if (teamP50 && sec > teamP50) return "color:#fed7aa;";
+    return "color:#a7f3d0;";
+  };
+  engs.forEach(e => {
+    const p = e.pipe_released || {n:0};
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${esc(anonName(e.engineer))}</td>
+      <td><code style="font-size:12px;">${esc(anonId(e.idsid)||"–")}</code></td>
+      <td><b>${e.released||0}</b></td>
+      <td class="sub">${e.total}</td>
+      <td>${e.released_files||0}</td>
+      <td style="${pipeStyle(p.avg)}">${p.n?fmtDur(p.avg):'<span class="sub">–</span>'}</td>
+      <td style="${pipeStyle(p.p50)}">${p.n?fmtDur(p.p50):'<span class="sub">–</span>'}</td>
+      <td style="${pipeStyle(p.p90)}">${p.n?fmtDur(p.p90):'<span class="sub">–</span>'}</td>
+      ${projs.map(p=>{
+        const pp = e.per_project[p]||{};
+        return `<td>${pp.released||0} <span class="sub">/ ${pp.total||0}</span></td>`;
+      }).join("")}
+      ${statusesUnion.map(s=>`<td>${e.status[s]||0}</td>`).join("")}`;
+    tr.addEventListener("click", ()=>{
+      selectedEngineer = e.engineer;
+      switchTab("ti");
+    });
+    if (e.engineer === selectedEngineer) tr.classList.add("sel");
+    tb.appendChild(tr);
+  });
+}
+
+async function loadTeamTurnins(force = false) {
+  const proj  = document.getElementById("proj").value;
+  const range = document.getElementById("range").value;
+  const year  = document.getElementById("year").value;
+  const key = `${proj}|${range}|${year}`;
+  if (!force && teamTurnins && teamTurnins._key === key) { renderTeamTurnins(teamTurnins); return; }
+  if (teamTurninsInFlight === key) return;
+  teamTurninsInFlight = key;
+  const st = document.getElementById("status");
+  const note = document.getElementById("teamViewNote");
+  note.textContent = force ? "force refetching team turnins (~30s)…"
+                           : "priming team turnins (~30s cold cache)…";
+  st.textContent = force ? "Force refetching team turnins…" : "Loading team turnins…";
+  try {
+    const qs = new URLSearchParams({ project: proj, range, _: Date.now() });
+    if (year) qs.set("year", year);
+    if (force) qs.set("force", "1");
+    const r = await fetch(`/api/team_turnins?${qs.toString()}`, { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    teamTurnins = await r.json();
+    teamTurnins._key = key;
+    renderTeamTurnins(teamTurnins);
+    st.textContent = "Updated " + new Date().toLocaleTimeString();
+    note.textContent = `${teamTurnins.team_totals.turnins} turnins across ${teamTurnins.team_totals.engineers} engineers`;
+  } catch (e) {
+    st.textContent = "Error: " + e.message;
+    note.textContent = "error loading turnins";
+  } finally {
+    teamTurninsInFlight = null;
+  }
+}
+
+function setTeamView(v) {
+  teamView = v;
+  document.querySelectorAll(".view-toggle").forEach(b =>
+    b.classList.toggle("is-active", b.dataset.view === v));
+  if (v === "commits") {
+    document.getElementById("teamViewNote").textContent = "";
+    if (currentData) renderTeam(currentData);
+  } else {
+    loadTeamTurnins();
+  }
+}
+
+// -------------------------------------------------------------- Engineer tab
+function renderEngineerPicker(d) {
+  const sel = document.getElementById("engPicker");
+  const prev = selectedEngineer;
+  sel.innerHTML = "";
+  d.engineers.forEach(e => {
+    const o = document.createElement("option");
+    o.value = e.engineer;
+    o.textContent = `${anonName(e.engineer)}${e.idsid ? " ("+anonId(e.idsid)+")" : ""}  —  ${e.total} commit${e.total===1?"":"s"}`;
+    sel.appendChild(o);
+  });
+  // Default selection: previous if still present, else first with commits, else first
+  const names = d.engineers.map(e=>e.engineer);
+  if (!prev || !names.includes(prev)) {
+    const firstActive = d.engineers.find(e=>e.total>0);
+    selectedEngineer = (firstActive || d.engineers[0] || {}).engineer || null;
+  }
+  if (selectedEngineer) sel.value = selectedEngineer;
+}
+
+function renderEngKpis(eng, d) {
+  const el = document.getElementById("engKpis");
+  if (!eng) { el.innerHTML = ""; return; }
+  const items = [
+    ["Engineer",       anonName(eng.engineer) + (eng.idsid ? `  (${anonId(eng.idsid)})` : "")],
+    ["IDSID / WWID",   (anonId(eng.idsid) || "–") + "  /  " + (anonId(eng.wwid) || "–")],
+    ["Commits",        eng.total.toLocaleString()],
+    ["Net Lines",      fmt(eng.net_lines)],
+    ["Avg / Median",   `${eng.avg_lines} / ${eng.median_lines}`],
+    ["% ≤ Median",     `${eng.pct_at_or_below}%`],
+    ["Pattern",        eng.pattern || "–"],
+  ];
+  el.innerHTML = items.map(([l,v])=>`<div class="kpi"><div class="lbl">${l}</div><div class="val" style="font-size:20px;">${v}</div></div>`).join("");
+  document.getElementById("engBadge").textContent =
+    `Project: ${d.project}   •   ${d.window.label}   •   ${d.window.since} → ${d.window.until}`;
+}
+
+function renderEngineer(d) {
+  const eng = d.engineers.find(e => e.engineer === selectedEngineer);
+  renderEngKpis(eng, d);
+
+  const cats = d.categories;
+  document.getElementById("engMonthTitle").textContent   = "Monthly Commits" + (eng ? " – " + anonName(eng.engineer) : "");
+  document.getElementById("engMonthNetTitle").textContent = "Net Lines per Month" + (eng ? " – " + anonName(eng.engineer) : "");
+  document.getElementById("pieEngTitle").textContent      = "Commit-Type Mix" + (eng ? " – " + anonName(eng.engineer) : "");
+
+  if (!eng) {
+    destroy("engMonth"); destroy("engMonthNet"); destroy("pieEng");
+    renderFiles(null);
+    renderCommits(null);
+    hideDiff();
+    return;
+  }
+
+  const projs = Object.keys(d.team_totals_by_project || {});
+  const splitProjects = d.project === "ALL" && projs.length > 1;
+
+  if (splitProjects) {
+    const commitsSeries = projs.map(p => ({
+      label: p,
+      color: PROJECT_COLORS[p] || COLORS[0],
+      data: d.months.map(m => (((eng.per_project||{})[p]||{}).monthly||{})[m]?.commits || 0),
+    }));
+    const netSeries = projs.map(p => ({
+      label: p,
+      color: PROJECT_COLORS[p] || COLORS[0],
+      data: d.months.map(m => (((eng.per_project||{})[p]||{}).monthly||{})[m]?.net || 0),
+    }));
+    barChart("engMonthChart",    d.months, commitsSeries, "engMonth",    { stacked: true });
+    barChart("engMonthNetChart", d.months, netSeries,     "engMonthNet", { stacked: true });
+  } else {
+    const monthly    = d.months.map(m => (eng.monthly[m] && eng.monthly[m].commits) || 0);
+    const monthlyNet = d.months.map(m => (eng.monthly[m] && eng.monthly[m].net) || 0);
+    barChart("engMonthChart",    d.months, [{label:"Commits",  data: monthly}],    "engMonth",    { perBarColor: true });
+    barChart("engMonthNetChart", d.months, [{label:"Net Lines", data: monthlyNet}], "engMonthNet", { perBarColor: true });
+  }
+
+  pieChart("pieEng", cats, cats.map(c=>eng.categories[c]||0), "pieEng");
+  renderFiles(eng);
+  renderCommits(eng);
+}
+
+function renderFiles(eng) {
+  const title = document.getElementById("filesTitle");
+  const sub   = document.getElementById("filesSub");
+  const tbody = document.querySelector("#filesTbl tbody");
+  tbody.innerHTML = "";
+  hideFileDetail();
+  if (!eng) {
+    title.textContent = "Files Modified";
+    sub.textContent = "(select an engineer)";
+    return;
+  }
+  title.textContent = "Files Modified – " + anonName(eng.engineer);
+  if (!eng.files) {
+    sub.textContent = "server did not return file data — restart dashboard_server.py to pick up the latest version";
+    return;
+  }
+  const total = eng.total || 0;
+  // Support both old (path -> count) and new (path -> {commits, add, del, net, commits_list}) shapes
+  const entries = Object.entries(eng.files).map(([path, v]) => {
+    if (typeof v === "number") return [path, { commits: v, add: 0, del: 0, net: 0, commits_list: [] }];
+    return [path, v];
+  }).sort((a,b)=> b[1].commits - a[1].commits || a[0].localeCompare(b[0]));
+
+  if (!entries.length) {
+    sub.textContent = `no file modifications in ${total} commit${total===1?"":"s"}`;
+    return;
+  }
+  sub.textContent = `${entries.length} unique file${entries.length===1?"":"s"} across ${total} commit${total===1?"":"s"} · click a row for per-commit detail`;
+
+  const filter = (document.getElementById("fileFilter").value || "").toLowerCase();
+  const filtered = filter ? entries.filter(([p]) => p.toLowerCase().includes(filter)) : entries;
+
+  const frag = document.createDocumentFragment();
+  filtered.forEach(([path, s]) => {
+    const pct = total ? (100 * s.commits / total).toFixed(1) : "0.0";
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      `<td style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; word-break:break-all;">${path}</td>
+       <td>${s.commits}</td>
+       <td style="color:#34d399">+${s.add.toLocaleString()}</td>
+       <td style="color:#f87171">-${s.del.toLocaleString()}</td>
+       <td style="color:${s.net>=0?'#34d399':'#f87171'}">${fmt(s.net)}</td>
+       <td>${pct}%</td>`;
+    tr.addEventListener("click", ()=> renderFileDetail(eng, path, s));
+    frag.appendChild(tr);
+  });
+  tbody.appendChild(frag);
+}
+
+function renderFileDetail(eng, path, s) {
+  const section = document.getElementById("fileDetailSection");
+  const title = document.getElementById("fileDetailTitle");
+  const sub   = document.getElementById("fileDetailSub");
+  const tbody = document.querySelector("#fileDetailTbl tbody");
+  title.textContent = "Commits touching " + path;
+  sub.textContent =
+    `${anonName(eng.engineer)} · ${s.commits} commit${s.commits===1?"":"s"} · +${s.add.toLocaleString()} / -${s.del.toLocaleString()} / net ${fmt(s.net)}`;
+  tbody.innerHTML = "";
+  const list = s.commits_list || [];
+  const frag = document.createDocumentFragment();
+  list.forEach(c => {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      `<td style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px;">${c.sha}</td>
+       <td>${c.date}</td>
+       <td>${(c.subject||"").replace(/[<>&]/g, ch => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[ch]))}</td>
+       <td style="color:#34d399">+${c.add.toLocaleString()}</td>
+       <td style="color:#f87171">-${c.del.toLocaleString()}</td>
+       <td style="color:${c.net>=0?'#34d399':'#f87171'}">${fmt(c.net)}</td>`;
+    frag.appendChild(tr);
+  });
+  tbody.appendChild(frag);
+  section.hidden = false;
+  section.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function hideFileDetail() {
+  const section = document.getElementById("fileDetailSection");
+  if (section) section.hidden = true;
+}
+
+// ------------------------------------------------------------- Commits table
+function escHtml(s) {
+  return (s||"").replace(/[<>&"']/g, ch => ({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;","'":"&#39;"}[ch]));
+}
+
+function renderCommits(eng) {
+  const title = document.getElementById("commitsTitle");
+  const sub   = document.getElementById("commitsSub");
+  const tbody = document.querySelector("#commitsTbl tbody");
+  tbody.innerHTML = "";
+  hideDiff();
+  if (!eng) { title.textContent = "Commits"; sub.textContent = "(select an engineer)"; return; }
+  title.textContent = "Commits – " + anonName(eng.engineer);
+  const list = eng.commits || [];
+  if (!list.length) {
+    sub.textContent = "no commits in window";
+    return;
+  }
+  sub.textContent = `${list.length} commit${list.length===1?"":"s"} · click a row to see per-file changes · click a file to view its diff`;
+
+  const filter = (document.getElementById("commitFilter").value || "").toLowerCase();
+  const filtered = filter
+    ? list.filter(c => (c.subject||"").toLowerCase().includes(filter) || c.sha.toLowerCase().includes(filter))
+    : list;
+
+  const frag = document.createDocumentFragment();
+  filtered.forEach((c, idx) => {
+    const rowId = "cmt_" + idx;
+    const tr = document.createElement("tr");
+    tr.dataset.rowId = rowId;
+    tr.innerHTML =
+      `<td style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px;">${c.sha}${c.project?` <span class="pill" style="padding:1px 6px; font-size:11px;">${c.project}</span>`:""}</td>
+       <td>${c.date}</td>
+       <td>${escHtml(c.subject)}</td>
+       <td>${c.files}</td>
+       <td style="color:#34d399">+${c.add.toLocaleString()}</td>
+       <td style="color:#f87171">-${c.del.toLocaleString()}</td>
+       <td style="color:${c.net>=0?'#34d399':'#f87171'}">${fmt(c.net)}</td>`;
+    tr.addEventListener("click", ()=> toggleCommitFiles(tr, c));
+    frag.appendChild(tr);
+  });
+  tbody.appendChild(frag);
+}
+
+function toggleCommitFiles(tr, c) {
+  const next = tr.nextElementSibling;
+  if (next && next.classList && next.classList.contains("commit-files-row")) {
+    next.remove();
+    return;
+  }
+  // Remove any other open expansion first
+  document.querySelectorAll("tr.commit-files-row").forEach(r => r.remove());
+
+  const detail = document.createElement("tr");
+  detail.classList.add("commit-files-row");
+  const td = document.createElement("td");
+  td.colSpan = 7;
+  td.style.background = "rgba(59,130,246,0.06)";
+  td.style.padding = "10px 14px";
+
+  const proj = c.project || "GFC";
+  const rows = (c.file_stats || []).map((f, i) => {
+    const net = f.add - f.del;
+    return `<tr class="file-row" data-idx="${i}">
+      <td style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; word-break:break-all;">${escHtml(f.path)}</td>
+      <td style="color:#34d399">+${f.add.toLocaleString()}</td>
+      <td style="color:#f87171">-${f.del.toLocaleString()}</td>
+      <td style="color:${net>=0?'#34d399':'#f87171'}">${fmt(net)}</td>
+    </tr>`;
+  }).join("");
+
+  td.innerHTML =
+    `<div style="font-size:12px; color:var(--mute); margin-bottom:6px;">
+       ${c.files} file${c.files===1?"":"s"} in commit <code style="font-family: ui-monospace; color:var(--ink);">${c.full_sha||c.sha}</code>
+       · click a file to view its diff
+     </div>
+     <table style="width:100%;">
+       <thead>
+         <tr><th style="width:64%">File</th><th>Added</th><th>Deleted</th><th>Net</th></tr>
+       </thead>
+       <tbody>${rows || `<tr><td colspan="4" class="h-sub">(no file changes recorded)</td></tr>`}</tbody>
+     </table>`;
+  detail.appendChild(td);
+  tr.after(detail);
+
+  // Bind click on each file row → show diff
+  detail.querySelectorAll("tr.file-row").forEach((row) => {
+    const idx = parseInt(row.dataset.idx, 10);
+    const f = c.file_stats[idx];
+    row.style.cursor = "pointer";
+    row.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      showDiff(proj, c.full_sha || c.sha, f.path, c);
+    });
+  });
+}
+
+async function showDiff(project, sha, path, commit, turninId) {
+  const section = document.getElementById("diffSection");
+  const title = document.getElementById("diffTitle");
+  const sub   = document.getElementById("diffSub");
+  const body  = document.getElementById("diffBody");
+  title.textContent = "Diff – " + path;
+  const shaLabel = (sha||"").split(",")[0].slice(0, 12) || "(no sha)";
+  const tiTag = turninId ? ` · turnin ${turninId}` : "";
+  sub.textContent = `[${project}] ${shaLabel}${tiTag}${commit ? " · " + (commit.subject||"") : ""}`;
+  body.textContent = "Loading diff…";
+  section.hidden = false;
+  section.scrollIntoView({ behavior: "smooth", block: "start" });
+  try {
+    const params = new URLSearchParams({ project, shas: sha||"", path });
+    if (turninId) params.set("turnin_id", turninId);
+    const r = await fetch("/api/diff?" + params.toString(), { cache: "no-store" });
+    const text = await r.text();
+    body.innerHTML = colorizeDiff(text);
+  } catch (e) {
+    body.textContent = "Error: " + e.message;
+  }
+}
+
+function colorizeDiff(text) {
+  return escHtml(text).split("\n").map(line => {
+    if (line.startsWith("+++") || line.startsWith("---")) return `<span style="color:#93a3c9">${line}</span>`;
+    if (line.startsWith("+")) return `<span style="color:#34d399">${line}</span>`;
+    if (line.startsWith("-")) return `<span style="color:#f87171">${line}</span>`;
+    if (line.startsWith("@@")) return `<span style="color:#22d3ee">${line}</span>`;
+    if (line.startsWith("diff --git")) return `<span style="color:#a78bfa; font-weight:600">${line}</span>`;
+    return line;
+  }).join("\n");
+}
+
+function hideDiff() {
+  const s = document.getElementById("diffSection");
+  if (s) s.hidden = true;
+}
+
+// ---------------------------------------------------------------- Turnins tab
+let tiData = null;
+let tiInFlight = null;
+
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+function renderTiKpis(td) {
+  const el = document.getElementById("tiKpis");
+  if (!td) { el.innerHTML = ""; return; }
+  const pr = (td.pipe && td.pipe.released)  || {n:0};
+  const pf = (td.pipe && td.pipe.in_flight) || {n:0};
+  const relStr = pr.n
+    ? `${fmtDur(pr.avg)} avg  ·  ${fmtDur(pr.p50)} p50  ·  ${fmtDur(pr.p90)} p90  <span class="sub">(n=${pr.n})</span>`
+    : `<span class="sub">no released TIs</span>`;
+  const flightStr = pf.n
+    ? `${fmtDur(pf.avg)} avg  ·  ${fmtDur(pf.max)} max  <span class="sub">(n=${pf.n})</span>`
+    : `<span class="sub">none in flight</span>`;
+  const items = [
+    ["Engineer",   anonName(td.engineer) + (td.idsid?"  ("+anonId(td.idsid)+")":"")],
+    ["Project",    td.project],
+    ["Window",     td.window.label + "  (" + td.window.since + " → " + td.window.until + ")"],
+    ["Turnins",    Object.entries(td.totals||{}).map(([p,n])=>`${p}: ${n}`).join("   •   ") || "0"],
+    ["Time to Release", relStr],
+    ["In-flight age",   flightStr],
+  ];
+  el.innerHTML = items.map(([l,v])=>`<div class="kpi"><div class="lbl">${l}</div><div class="val" style="font-size:15px;">${v}</div></div>`).join("");
+}
+
+function tiStatusBadge(status) {
+  const s = String(status || "").trim();
+  if (!s) return `<span class="pill">–</span>`;
+  const l = s.toLowerCase();
+  let style = "";
+  if (/releas/.test(l))                        style = "background:#0f4a2c;color:#a7f3d0;border-color:#166534;";
+  else if (/cancel|withdraw/.test(l))          style = "background:#5a3410;color:#fed7aa;border-color:#9a3412;";
+  else if (/reject|fail/.test(l))              style = "background:#5b1a1a;color:#fecaca;border-color:#7f1d1d;";
+  else if (/hold|pending|queue|progress|flight/.test(l))
+                                               style = "background:#1e3a5f;color:#bfdbfe;border-color:#1e40af;";
+  return `<span class="pill" style="${style}">${esc(s)}</span>`;
+}
+
+// Render the HSDs-added cell as clickable pills linking to the HSD tracker.
+function hsdCell(hsds) {
+  const list = (hsds || []).filter(Boolean);
+  if (!list.length) return `<span class="sub">–</span>`;
+  const CAP = 10;
+  const shown = list.slice(0, CAP);
+  const extra = list.length - shown.length;
+  const pills = shown.map(h => {
+    const url = `https://hsdes.intel.com/appstore/article/#/${encodeURIComponent(h)}`;
+    return `<a href="${esc(url)}" target="_blank" rel="noopener" class="pill" style="background:#3b2a5f;color:#ddd6fe;border-color:#5b21b6;text-decoration:none;font-family:monospace;">${esc(h)}</a>`;
+  }).join(" ");
+  const more = extra > 0
+    ? ` <span class="pill" title="${extra} additional HSD${extra===1?"":"s"} not shown" style="background:#1e293b;color:#a2b3d9;border-color:#334155;">+${extra}</span>`
+    : "";
+  return `<div style="display:flex;flex-wrap:wrap;gap:4px;max-width:220px;">${pills}${more}</div>`;
+}
+
+// Format seconds as a compact human duration ("42 min", "5.3 h", "2.1 d").
+function fmtDur(sec) {
+  const s = +sec || 0;
+  if (s <= 0) return "–";
+  if (s < 3600)   return `${Math.round(s/60)} min`;
+  if (s < 86400)  return `${(s/3600).toFixed(1)} h`;
+  return `${(s/86400).toFixed(1)} d`;
+}
+
+// Render a Pipe Age cell. For released/settled TIs, use time-to-release and
+// colorize vs team p50/p90 thresholds; for in-flight TIs, show live age with
+// a blue "in flight" pill (thresholds relative to same benchmarks).
+function pipeCell(t, thresholds) {
+  const inFlight = !!t.in_flight;
+  const now = Math.floor(Date.now() / 1000);
+  let sec = null;
+  if (!inFlight && t.pipe_seconds) sec = +t.pipe_seconds;
+  else if (inFlight && t.turnin_time_epoch) sec = now - +t.turnin_time_epoch;
+  if (!sec || sec <= 0) return `<span class="sub">–</span>`;
+  const p50 = thresholds && thresholds.p50;
+  const p90 = thresholds && thresholds.p90;
+  let bg = "#1e3a5f", fg = "#bfdbfe", bd = "#1e40af"; // default: neutral blue (in-flight)
+  if (!inFlight) {
+    if (p90 && sec > p90)      { bg = "#5b1a1a"; fg = "#fecaca"; bd = "#7f1d1d"; }  // > p90 → red
+    else if (p50 && sec > p50) { bg = "#5a3410"; fg = "#fed7aa"; bd = "#9a3412"; }  // > p50 → amber
+    else                       { bg = "#0f4a2c"; fg = "#a7f3d0"; bd = "#166534"; }  // ≤ p50 → green
+  }
+  const tag = inFlight ? " (in-flight)" : "";
+  return `<span class="pill" title="${inFlight?'current age':'time to release'}${tag}"
+            style="background:${bg};color:${fg};border-color:${bd};">${fmtDur(sec)}${inFlight?" ⏳":""}</span>`;
+}
+
+function crStatusBadge(status, url) {
+  if (!status) return "–";
+  const cls = /pass|approv|complete|released/i.test(status) ? "cr-ok"
+            : /fail|reject/i.test(status) ? "cr-fail" : "cr-neutral";
+  const style = cls === "cr-ok" ? "background:#0f4a2c;color:#a7f3d0;"
+             : cls === "cr-fail" ? "background:#5b1a1a;color:#fecaca;"
+             : "background:#3b3a1f;color:#fde68a;";
+  const inner = `<span class="pill" style="${style}">${esc(status)}</span>`;
+  return url ? `<a href="${esc(url)}" target="_blank" rel="noopener" style="text-decoration:none;">${inner}</a>` : inner;
+}
+
+function projectBadge(p) {
+  const c = (p==="GFC")?"#22d3ee":(p==="JNC")?"#f59e0b":"#a5b4fc";
+  return `<span class="pill" style="background:${c}22;color:${c};border:1px solid ${c}55;">${esc(p)}</span>`;
+}
+
+function tiMatchesOne(t, q) {
+  if (!q) return true;
+  if (String(t.id||"").includes(q)) return true;
+  if ((t.comments||"").toLowerCase().includes(q)) return true;
+  if ((t.status||"").toLowerCase().includes(q)) return true;
+  if ((t.stage||"").toLowerCase().includes(q)) return true;
+  if ((t.cluster||"").toLowerCase().includes(q)) return true;
+  if ((t.project||"").toLowerCase().includes(q)) return true;
+  if ((t.code_review_status||"").toLowerCase().includes(q)) return true;
+  for (const f of (t.files_changed||[])) if (f.toLowerCase().includes(q)) return true;
+  for (const h of (t.hsds_added||[])) if (String(h).includes(q)) return true;
+  for (const c of (t.commits||[])) if ((c.sha||"").startsWith(q) || (c.subject||"").toLowerCase().includes(q)) return true;
+  return false;
+}
+
+// Comma-separated tokens are AND-combined. A leading "-" or "!" on a token
+// negates it (e.g. "released, -pmh" → released AND not pmh).
+function tiMatchesFilter(t, rawQuery) {
+  if (!rawQuery) return true;
+  const tokens = rawQuery.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  if (!tokens.length) return true;
+  for (const tok of tokens) {
+    const negate = tok.startsWith("-") || tok.startsWith("!");
+    const needle = negate ? tok.slice(1).trim() : tok;
+    if (!needle) continue;
+    const hit = tiMatchesOne(t, needle);
+    if (negate ? hit : !hit) return false;
+  }
+  return true;
+}
+
+function renderTiTable() {
+  const tb = document.querySelector("#tiTbl tbody");
+  tb.innerHTML = "";
+  if (!tiData) return;
+  const q = (document.getElementById("tiFilter").value || "").trim();
+  const rows = tiData.turnins.filter(t => tiMatchesFilter(t, q));
+  document.getElementById("tiCount").textContent = `${rows.length} turnin${rows.length===1?"":"s"}`;
+  // Color-coding thresholds: prefer this engineer's own released stats;
+  // fall back to any released pipe if too few. Falsy → neutral (no color).
+  const thresholds = (tiData.pipe && tiData.pipe.released && tiData.pipe.released.n)
+    ? tiData.pipe.released : null;
+  rows.forEach((t, idx) => {
+    const tr = document.createElement("tr");
+    tr.className = "ti-row";
+    tr.innerHTML = `
+      <td><span class="chev" style="cursor:pointer;">▸</span></td>
+      <td><code style="font-size:12px;">TI ${esc(t.id)}</code>
+          ${t.bundle_id?`<div class="sub" style="font-size:12px;">bundle ${esc(t.bundle_id)}</div>`:""}</td>
+      <td>${esc(t.turnin_time)}</td>
+      <td>${projectBadge(t.project)}</td>
+      <td>${tiStatusBadge(t.status)}${t.stage?`<div class="sub" style="font-size:12px;">${esc(t.stage)}</div>`:""}</td>
+      <td style="white-space:pre-wrap; max-width:520px; word-break:break-word; font-size:13px;">${esc(t.comments||"")}</td>
+      <td>${t.n_commits}</td>
+      <td>${(t.files_changed||[]).length}</td>
+      <td>${hsdCell(t.hsds_added)}</td>
+      <td>${pipeCell(t, thresholds)}</td>
+      <td>${crStatusBadge(t.code_review_status, t.code_review_url)}</td>`;
+    const detail = document.createElement("tr");
+    detail.className = "ti-detail";
+    detail.hidden = true;
+    detail.innerHTML = `<td colspan="11" style="background:#0b1327;"></td>`;
+    tr.querySelector(".chev").addEventListener("click", (ev)=>{
+      ev.stopPropagation();
+      detail.hidden = !detail.hidden;
+      tr.querySelector(".chev").textContent = detail.hidden ? "▸" : "▾";
+      if (!detail.hidden && !detail.dataset.filled) {
+        detail.querySelector("td").appendChild(renderTiDetail(t));
+        detail.dataset.filled = "1";
+      }
+    });
+    tb.appendChild(tr);
+    tb.appendChild(detail);
+  });
+}
+
+function renderTiDetail(t) {
+  const wrap = document.createElement("div");
+  wrap.style.padding = "10px 14px";
+  const cmts = (t.comments||"").trim();
+  const commitsHtml = (t.commits||[]).map(c => {
+    const mergeBadge = c.merge ? `<span class="pill" style="background:#3b3a1f;color:#fde68a;">merge</span>` : "";
+    return `<tr>
+      <td><code style="font-size:12px;">${esc(c.sha.slice(0,12))}</code></td>
+      <td>${mergeBadge}</td>
+      <td>${esc(c.subject||"")}</td>
+      <td class="sub" style="font-size:12px;">${esc(c.date||"")}</td>
+    </tr>`;
+  }).join("");
+  const filesHtml = (t.files_changed||[]).map(f => {
+    // Send every candidate sha we have so the backend can pick one that
+    // actually exists in the local repo. Order matters — try bundle_commit
+    // (merged into master) first, then user_commit, then parsed commit shas.
+    const shaList = [];
+    if (t.bundle_commit) shaList.push(t.bundle_commit);
+    if (t.user_commit && !shaList.includes(t.user_commit)) shaList.push(t.user_commit);
+    for (const c of (t.commits||[])) {
+      if (c.sha && !shaList.includes(c.sha)) shaList.push(c.sha);
+    }
+    const shas = shaList.join(",");
+    return `<tr>
+      <td><a href="#" class="ti-file" data-project="${esc(t.project)}" data-shas="${esc(shas)}" data-turnin-id="${esc(t.id||"")}" data-path="${esc(f)}"
+             style="color:#93c5fd; text-decoration:underline;">${esc(f)}</a></td>
+    </tr>`;
+  }).join("");
+  wrap.innerHTML = `
+    ${cmts ? `<div class="sub" style="white-space:pre-wrap; margin-bottom:10px; font-size:13px;"><b>Comment:</b>\n${esc(cmts)}</div>` : ""}
+    <div style="display:grid; grid-template-columns: 1.4fr 1fr; gap:16px;">
+      <div>
+        <div class="sub" style="margin-bottom:4px;"><b>Commits (${(t.commits||[]).length})</b></div>
+        <table style="width:100%; font-size:13px;">
+          <thead><tr><th>SHA</th><th></th><th>Subject</th><th>Date</th></tr></thead>
+          <tbody>${commitsHtml || `<tr><td colspan="4" class="sub">no commits parsed</td></tr>`}</tbody>
+        </table>
+      </div>
+      <div>
+        <div class="sub" style="margin-bottom:4px;"><b>Files (${(t.files_changed||[]).length})</b></div>
+        <table style="width:100%; font-size:13px;">
+          <tbody>${filesHtml || `<tr><td class="sub">no files</td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>`;
+  wrap.querySelectorAll("a.ti-file").forEach(a => {
+    a.addEventListener("click", (ev)=>{
+      ev.preventDefault();
+      showDiff(a.dataset.project, a.dataset.shas, a.dataset.path, null, a.dataset.turninId);
+    });
+  });
+  return wrap;
+}
+
+async function loadTurnins(force = false) {
+  if (!selectedEngineer) { tiData = null; renderTiKpis(null); renderTiTable(); return; }
+  const proj  = document.getElementById("proj").value;
+  const range = document.getElementById("range").value;
+  const year  = document.getElementById("year").value;
+  const st = document.getElementById("status");
+  const key = `${selectedEngineer}|${proj}|${range}|${year}`;
+  if (tiInFlight === key) return;
+  tiInFlight = key;
+  st.textContent = force ? "Force refetching turnins…"
+                         : "Loading turnins (may take ~15s for env source)…";
+  try {
+    const qs = new URLSearchParams({ engineer: selectedEngineer, project: proj, range, _: Date.now() });
+    if (year) qs.set("year", year);
+    if (force) qs.set("force", "1");
+    const r = await fetch(`/api/turnins?${qs.toString()}`, { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    tiData = await r.json();
+    renderTiKpis(tiData);
+    renderTiTable();
+    st.textContent = "Updated " + new Date().toLocaleTimeString();
+  } catch (e) {
+    st.textContent = "Error: " + e.message;
+  } finally {
+    tiInFlight = null;
+  }
+}
+
+// ---------------------------------------------------------------- Tab wiring
+// -------------------- Engineer Summary tab --------------------
+let summaryData = null;
+let summaryInFlight = null;
+
+async function loadSummaries(force = false) {
+  const proj  = document.getElementById("proj").value;
+  const range = document.getElementById("range").value;
+  const year  = document.getElementById("year").value;
+  const key = `${proj}|${range}|${year}`;
+  if (!force && summaryData && summaryData._key === key) { renderSummaries(); return; }
+  if (summaryInFlight === key && !force) return;
+  summaryInFlight = key;
+  const list = document.getElementById("summaryList");
+  list.innerHTML = `<div class="sub" style="padding:14px;">${force?"Force refetching":"Loading"} summaries (may take ~30s on cold cache)…</div>`;
+  try {
+    const qs = new URLSearchParams({ project: proj, range, _: Date.now() });
+    if (year)  qs.set("year", year);
+    if (force) qs.set("force", "1");
+    const r = await fetch(`/api/engineer_summaries?${qs.toString()}`, { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    summaryData = await r.json();
+    summaryData._key = key;
+    renderSummaries();
+  } catch (e) {
+    list.innerHTML = `<div class="sub" style="padding:14px;color:#fecaca;">Error: ${esc(e.message)}</div>`;
+  } finally {
+    summaryInFlight = null;
+  }
+}
+
+function renderSummaries() {
+  if (!summaryData) return;
+  const list = document.getElementById("summaryList");
+  const q = ((document.getElementById("summaryFilter")||{}).value || "").toLowerCase();
+  const engs = (summaryData.engineers || []).slice()
+    .sort((a,b) => (b.totals.turnins||0) - (a.totals.turnins||0));
+  const shown = engs.filter(e => {
+    if (!q) return true;
+    const hay = (anonName(e.engineer) + " " + anonId(e.idsid||"") + " " + (e.engineer||"")).toLowerCase();
+    return hay.includes(q);
+  });
+  if (!shown.length) { list.innerHTML = `<div class="sub" style="padding:14px;">No engineers match.</div>`; return; }
+  list.innerHTML = shown.map(e => renderSummaryCard(e)).join("");
+}
+
+function renderSummaryCard(e) {
+  const t = e.totals || {};
+  const projStr = Object.entries(t.by_project||{})
+    .filter(([_,n])=>n>0)
+    .map(([p,n])=>`${p} ${n}`).join(" · ");
+  const hsdLine = t.hsds_filed
+    ? ` · ${t.hsds_filed} unique HSD${t.hsds_filed===1?"":"s"} filed across ${t.hsd_tis} TI${t.hsd_tis===1?"":"s"}`
+    : "";
+  const flightLine = t.in_flight ? ` · ${t.in_flight} in-flight` : "";
+  const cancelLine = t.cancelled ? ` · ${t.cancelled} cancelled` : "";
+  const header = `<b>${t.turnins} turnins</b> (${t.released} released${cancelLine}${flightLine})` +
+                 (projStr ? ` across ${projStr}` : "") + hsdLine;
+  // Focus-area section per RTL unit
+  const units = (e.unit_sections || []).filter(s => s.ti_count > 0);
+  const unitBlocks = units.map(s => {
+    const acts = (s.activities || []).map(a => `${a.name} (${a.count})`).join(" · ");
+    const ids = (s.ti_ids || []);
+    const chip = i => `<a href="#" class="summary-ti" data-eng="${esc(e.engineer)}" data-ti="${esc(i)}">TI ${esc(i)}</a>`;
+    const idHtml = ids.length
+      ? `<div class="summary-ti-list">${ids.map(chip).join(" ")}</div>`
+      : "";
+    return `<div class="summary-unit">
+      <div class="summary-unit-hd"><b>${esc(s.unit)}</b> <span class="sub">— ${s.ti_count} turnin${s.ti_count===1?"":"s"}</span></div>
+      ${acts ? `<div class="sub" style="margin:3px 0 4px;">${esc(acts)}</div>` : ""}
+      ${idHtml}
+    </div>`;
+  }).join("");
+  const filesBlock = (e.top_files||[]).length
+    ? `<div class="summary-files">
+         <div class="sub" style="margin-bottom:4px;"><b>Top files by TI touch count</b></div>
+         <ol style="margin:0; padding-left:20px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px;">
+           ${e.top_files.map(f => `<li><span style="color:#93c5fd;">${f.count}×</span> ${esc(f.path)}</li>`).join("")}
+         </ol>
+       </div>`
+    : "";
+  return `<div class="summary-card">
+    <div class="summary-head">
+      <div>
+        <div class="summary-name">${esc(anonName(e.engineer))}</div>
+        <div class="sub"><code style="font-size:12px;">${esc(anonId(e.idsid)||"–")}</code></div>
+      </div>
+      <div class="summary-header-text">${header}</div>
+    </div>
+    <div class="summary-body">
+      <div class="summary-units">${unitBlocks || `<div class="sub">No unit-classified turnins in this window.</div>`}</div>
+      ${filesBlock}
+    </div>
+  </div>`;
+}
+
+
+function switchTab(name) {
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("is-active", b.dataset.tab === name));
+  document.querySelectorAll(".tab-panel").forEach(p => p.hidden = p.dataset.panel !== name);
+  if (name === "eng"  && currentData) { syncEngPicker(); renderEngineer(currentData); }
+  if (name === "team" && currentData) renderTeam(currentData);
+  if (name === "ti") { syncTiPicker(); syncEngPicker(); loadTurnins(); }
+  if (name === "summary") loadSummaries();
+}
+
+async function load(force = false) {
+  const proj  = document.getElementById("proj").value;
+  const range = document.getElementById("range").value;
+  const year  = document.getElementById("year").value;
+  const st = document.getElementById("status");
+  st.textContent = force ? "Force refetching…" : "Loading…";
+  try {
+    const qs = new URLSearchParams({ project: proj, range: range, _: Date.now() });
+    if (year) qs.set("year", year);
+    if (force) qs.set("force", "1");
+    const r = await fetch(`/api/data?${qs.toString()}`, { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    currentData = await r.json();
+    anonMap = buildAnonMap((currentData.engineers || []).map(e => e.engineer));
+    renderKPIs(currentData);
+    renderEngineerPicker(currentData);
+    populateTiPicker();
+    renderTeam(currentData);
+    renderEngineer(currentData);
+    st.textContent = "Updated " + new Date().toLocaleTimeString();
+  } catch (e) {
+    st.textContent = "Error: " + e.message;
+  }
+}
+
+function invalidateTeamTurnins() { teamTurnins = null; summaryData = null; }
+document.getElementById("proj").addEventListener("change", ()=>{ invalidateTeamTurnins(); load(); if (isActiveTab("ti")) loadTurnins(); if (teamView==="turnins") loadTeamTurnins(); });
+document.getElementById("range").addEventListener("change", ()=>{ invalidateTeamTurnins(); load(); if (isActiveTab("ti")) loadTurnins(); if (teamView==="turnins") loadTeamTurnins(); });
+document.getElementById("year").addEventListener("change", ()=>{ invalidateTeamTurnins(); load(); if (isActiveTab("ti")) loadTurnins(); if (teamView==="turnins") loadTeamTurnins(); });
+document.getElementById("refresh").addEventListener("click", ()=>{ invalidateTeamTurnins(); load(); if (isActiveTab("ti")) loadTurnins(); if (teamView==="turnins") loadTeamTurnins(); });
+document.getElementById("forceRefresh").addEventListener("click", ()=>{
+  // Bypass all disk caches on the server (report, team_turnins, per-user turnininfo)
+  invalidateTeamTurnins();
+  tiData = null;
+  window.__forceNext = true;
+  load(true).then(()=>{
+    if (teamView === "turnins") loadTeamTurnins(true);
+    if (isActiveTab("ti")) loadTurnins(true);
+    window.__forceNext = false;
+  });
+});
+document.getElementById("anonTheme").addEventListener("change", (ev)=>{
+  anonTheme = ev.target.value;
+  applyThemeClass();
+  if (currentData) {
+    anonMap = buildAnonMap((currentData.engineers || []).map(e => e.engineer));
+    renderEngineerPicker(currentData);
+    populateTiPicker();
+    renderTeam(currentData);
+    renderEngineer(currentData);
+  }
+  if (teamTurnins && teamView === "turnins") renderTeamTurnins(teamTurnins);
+  if (tiData) { renderTiKpis(tiData); renderTiTable(); }
+  if (summaryData) renderSummaries();
+});
+document.getElementById("summaryFilter").addEventListener("input", renderSummaries);
+document.getElementById("summaryReload").addEventListener("click", ()=> loadSummaries(true));
+document.getElementById("summaryList").addEventListener("click", (ev)=>{
+  const a = ev.target.closest("a.summary-ti");
+  if (!a) return;
+  ev.preventDefault();
+  selectedEngineer = a.dataset.eng;
+  switchTab("ti");
+  // Prefill the TI filter box with the selected TI id after data loads
+  setTimeout(()=>{
+    const box = document.getElementById("tiFilter");
+    if (box) { box.value = a.dataset.ti; renderTiTable(); }
+  }, 300);
+});
+document.getElementById("fileFilter").addEventListener("input", ()=>{
+  if (!currentData) return;
+  renderFiles(currentData.engineers.find(e => e.engineer === selectedEngineer));
+});
+document.getElementById("engPicker").addEventListener("change", (ev)=>{
+  selectedEngineer = ev.target.value;
+  syncTiPicker();
+  if (currentData) renderEngineer(currentData);
+  if (isActiveTab("ti")) loadTurnins();
+});
+document.getElementById("tiEngPicker").addEventListener("change", (ev)=>{
+  selectedEngineer = ev.target.value;
+  syncEngPicker();
+  loadTurnins();
+});
+document.getElementById("tiReload").addEventListener("click", ()=>{
+  // Force refresh: drop last-loaded key so loadTurnins refetches
+  tiData = null;
+  loadTurnins();
+});
+document.getElementById("tiFilter").addEventListener("input", renderTiTable);
+document.querySelectorAll(".view-toggle").forEach(b => {
+  b.addEventListener("click", ()=> setTeamView(b.dataset.view));
+});
+function isActiveTab(name) {
+  const b = document.querySelector(".tab.is-active:not(.view-toggle)");
+  return b && b.dataset.tab === name;
+}
+function syncTiPicker() {
+  const sel = document.getElementById("tiEngPicker");
+  if (sel && selectedEngineer) sel.value = selectedEngineer;
+}
+function syncEngPicker() {
+  const sel = document.getElementById("engPicker");
+  if (sel && selectedEngineer) sel.value = selectedEngineer;
+}
+function populateTiPicker() {
+  if (!currentData) return;
+  const sel = document.getElementById("tiEngPicker");
+  const prev = selectedEngineer;
+  sel.innerHTML = "";
+  currentData.engineers.forEach(e => {
+    const o = document.createElement("option");
+    o.value = e.engineer;
+    o.textContent = `${anonName(e.engineer)}${e.idsid ? " ("+anonId(e.idsid)+")" : ""}`;
+    sel.appendChild(o);
+  });
+  if (prev) sel.value = prev;
+}
+document.getElementById("fileDetailClose").addEventListener("click", hideFileDetail);
+document.getElementById("diffClose").addEventListener("click", hideDiff);
+document.getElementById("commitFilter").addEventListener("input", ()=>{
+  if (!currentData) return;
+  renderCommits(currentData.engineers.find(e => e.engineer === selectedEngineer));
+});
+document.querySelectorAll(".tab[data-tab]").forEach(btn => {
+  btn.addEventListener("click", ()=> switchTab(btn.dataset.tab));
+});
+window.addEventListener("load", ()=> {
+  const y = document.getElementById("year");
+  if (!y.value) y.value = new Date().getFullYear();
+  // Apply the initial anonymize theme (default Marvel) so the color scheme
+  // is in place before the first render.
+  applyThemeClass();
+  load();
+});
+</script>
+</body>
+</html>
