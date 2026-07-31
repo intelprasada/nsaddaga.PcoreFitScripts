@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# bin/codelens – entry-point wrapper for the CodeLens core/fe code browser.
+# Serves an IDE-like web UI: source on the left (Monaco), and a live context
+# pane on the right showing who changed the visible lines (git blame + IDSID),
+# which turnins introduced them, and which HSD ids those commits reference.
+#
+# Repos are auto-discovered the way setGFC / setJNCfit resolve them; override
+# with JNC_REPO / GFC_REPO / CODELENS_REPO. See tools/codelens/README.md.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+exec python3 "${REPO_ROOT}/tools/codelens/codelens_server.py" "$@"

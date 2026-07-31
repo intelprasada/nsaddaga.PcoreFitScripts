@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CodeLens — core/fe browser</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#30363d;
+    --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --accent2:#3fb950;
+    --hsd:#a371f7; --turnin:#d29922; --sel:#1f6feb33;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--fg);
+    font-family:'Segoe UI',system-ui,-apple-system,sans-serif;font-size:13px;
+    display:flex;flex-direction:column;overflow:hidden}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .mono{font-family:'Cascadia Code',Consolas,'Courier New',monospace}
+
+  /* top bar */
+  #top{display:flex;align-items:center;gap:12px;padding:6px 12px;
+    background:var(--panel);border-bottom:1px solid var(--border);flex:0 0 auto}
+  #top .brand{font-weight:700;color:var(--accent);letter-spacing:.3px}
+  #top .brand small{color:var(--muted);font-weight:400;margin-left:6px}
+  #top .path{color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap}
+  #top .path b{color:var(--fg)}
+  select,input,button{background:var(--panel2);color:var(--fg);
+    border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px}
+  button{cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  label.ctl{color:var(--muted);display:flex;align-items:center;gap:5px}
+  input#paneSize{width:64px}
+
+  /* main grid */
+  #main{flex:1 1 auto;display:grid;
+    grid-template-columns:260px 1fr 360px;min-height:0}
+  .col{min-width:0;min-height:0;display:flex;flex-direction:column;
+    background:var(--panel);overflow:hidden}
+  #tree{border-right:1px solid var(--border)}
+  #ctx{border-left:1px solid var(--border)}
+  .col h3{margin:0;padding:8px 12px;font-size:11px;text-transform:uppercase;
+    letter-spacing:.6px;color:var(--muted);border-bottom:1px solid var(--border);
+    background:var(--panel2);flex:0 0 auto;display:flex;justify-content:space-between}
+  .scroll{overflow:auto;flex:1 1 auto}
+
+  /* file tree */
+  #treeRoot{padding:4px 0}
+  .node{padding:2px 8px 2px 0;white-space:nowrap;cursor:pointer;user-select:none;
+    display:flex;align-items:center;gap:4px}
+  .node:hover{background:#ffffff0d}
+  .node.file.active{background:var(--sel)}
+  .node .tw{width:14px;text-align:center;color:var(--muted);flex:0 0 auto}
+  .node .ic{width:14px;flex:0 0 auto;text-align:center}
+  .node .nm{overflow:hidden;text-overflow:ellipsis}
+  .node.dir .nm{color:#e3b341}
+  .kids{display:none}
+  .kids.open{display:block}
+
+  /* editor */
+  #editorWrap{flex:1 1 auto;position:relative}
+  #editor{position:absolute;inset:0}
+  #loading{position:absolute;inset:0;display:flex;align-items:center;
+    justify-content:center;color:var(--muted);background:var(--bg);z-index:5}
+  .blame-bar{width:4px !important;margin-left:2px}
+
+  /* context pane */
+  #ctxBody{padding:10px 12px}
+  .sec{margin-bottom:16px}
+  .sec .hd{font-size:11px;text-transform:uppercase;letter-spacing:.5px;
+    color:var(--muted);margin-bottom:6px;display:flex;justify-content:space-between}
+  .rng{color:var(--fg)}
+  .pill{display:inline-block;padding:2px 8px;border-radius:11px;font-size:11px;
+    border:1px solid var(--border);margin:0 4px 4px 0;background:var(--panel2)}
+  .pill.hsd{background:#3b2a5f;border-color:#5b21b6;color:#ddd6fe}
+  .pill.turnin{background:#3a2f12;border-color:#7a5c17;color:#fbd57e}
+  .author{display:flex;align-items:center;gap:8px;padding:4px 0}
+  .dot{width:10px;height:10px;border-radius:50%;flex:0 0 auto}
+  .author .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .author .id{color:var(--muted)}
+  .author .ct{color:var(--muted);font-variant-numeric:tabular-nums}
+  .commit{border:1px solid var(--border);border-radius:6px;padding:7px 9px;
+    margin-bottom:7px;background:var(--panel2)}
+  .commit .row1{display:flex;gap:6px;align-items:center;margin-bottom:3px}
+  .commit .sha{color:var(--accent);font-size:11px}
+  .commit .lc{margin-left:auto;color:var(--muted);font-size:11px}
+  .commit .sm{color:var(--fg);font-size:12px;margin-bottom:4px;
+    word-break:break-word}
+  .commit .meta{color:var(--muted);font-size:11px}
+  .empty{color:var(--muted);font-style:italic}
+  #status{flex:0 0 auto;padding:3px 12px;background:var(--panel2);
+    border-top:1px solid var(--border);color:var(--muted);font-size:11px;
+    display:flex;gap:16px}
+  #status .err{color:#f85149}
+</style>
+</head>
+<body>
+  <div id="top">
+    <div class="brand">CodeLens<small>core/fe</small></div>
+    <select id="repoSel" title="Repository"></select>
+    <div class="path" id="filePath">Select a file…</div>
+    <label class="ctl" title="How many lines the right pane summarizes, anchored at the top of the viewport">
+      pane <input id="paneSize" value="auto" size="4" />
+    </label>
+    <button id="refreshBtn" title="Re-fetch context (bypass cache)">⟳</button>
+  </div>
+
+  <div id="main">
+    <div class="col" id="tree">
+      <h3>Files <span id="repoHead" class="mono"></span></h3>
+      <div class="scroll"><div id="treeRoot"></div></div>
+    </div>
+
+    <div class="col" id="center">
+      <div id="editorWrap">
+        <div id="loading">Loading Monaco…</div>
+        <div id="editor"></div>
+      </div>
+    </div>
+
+    <div class="col" id="ctx">
+      <h3>Context <span id="ctxRange" class="rng"></span></h3>
+      <div class="scroll"><div id="ctxBody">
+        <div class="empty">Open a file to see who changed the visible lines,
+          which turnins introduced them, and referenced HSDs.</div>
+      </div></div>
+    </div>
+  </div>
+
+  <div id="status">
+    <span id="stRepo"></span>
+    <span id="stRange"></span>
+    <span id="stMsg"></span>
+  </div>
+
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s??"").replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let editor=null, monacoReady=false, curRepo=null, curPath=null, curLang="plaintext";
+let blameByLine={}, decorations=[], ctxTimer=null, curTotalLines=0;
+
+/* ---- author color (stable hash -> HSL) ---- */
+function authColor(key){
+  let h=0; const s=String(key||"?");
+  for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))>>>0;
+  return `hsl(${h%360} 65% 60%)`;
+}
+
+/* ---- API ---- */
+async function api(path){
+  const r=await fetch(path);
+  if(!r.ok){ let j={}; try{j=await r.json()}catch(e){}; throw new Error(j.error||r.statusText); }
+  return r.json();
+}
+function repoQ(){ return `repo=${encodeURIComponent(curRepo)}`; }
+
+/* ---- repos ---- */
+async function loadRepos(){
+  const d=await api('/api/repos');
+  const sel=$('#repoSel'); sel.innerHTML="";
+  d.repos.forEach(r=>{
+    const o=document.createElement('option');
+    o.value=r.key; o.textContent=`${r.key}${r.ok?"":" (unavailable)"}`;
+    o.disabled=!r.ok; sel.appendChild(o);
+  });
+  curRepo=d.default; sel.value=curRepo;
+  const active=d.repos.find(r=>r.key===curRepo);
+  $('#repoHead').textContent=active&&active.head?("@"+active.head):"";
+  $('#stRepo').textContent=active?`${active.key}: ${active.root} (base ${active.base||"."})`:"";
+  sel.onchange=async()=>{ curRepo=sel.value; clearEditor(); await loadTree(); 
+    const a=(await api('/api/repos')).repos.find(r=>r.key===curRepo);
+    $('#repoHead').textContent=a&&a.head?("@"+a.head):"";
+    $('#stRepo').textContent=a?`${a.key}: ${a.root} (base ${a.base||"."})`:""; };
+}
+
+/* ---- file tree (lazy) ---- */
+async function loadTree(){
+  const root=$('#treeRoot'); root.innerHTML='<div class="node"><span class="nm">loading…</span></div>';
+  try{
+    const d=await api(`/api/tree?${repoQ()}&path=`);
+    root.innerHTML=""; root.appendChild(renderLevel(d.entries));
+  }catch(e){ root.innerHTML=`<div class="node"><span class="nm err">${esc(e.message)}</span></div>`; }
+}
+function renderLevel(entries){
+  const frag=document.createDocumentFragment();
+  entries.forEach(en=>{
+    const node=document.createElement('div');
+    node.className='node '+en.type;
+    if(en.type==='dir'){
+      node.innerHTML=`<span class="tw">▸</span><span class="ic">📁</span><span class="nm">${esc(en.name)}</span>`;
+      const kids=document.createElement('div'); kids.className='kids';
+      let loaded=false;
+      node.onclick=async(ev)=>{ ev.stopPropagation();
+        const open=kids.classList.toggle('open');
+        node.querySelector('.tw').textContent=open?'▾':'▸';
+        if(open&&!loaded){ loaded=true;
+          kids.innerHTML='<div class="node" style="padding-left:18px"><span class="nm">…</span></div>';
+          try{ const d=await api(`/api/tree?${repoQ()}&path=${encodeURIComponent(en.path)}`);
+            kids.innerHTML=""; kids.appendChild(renderLevel(d.entries));
+          }catch(e){ kids.innerHTML=`<div class="node"><span class="nm err">${esc(e.message)}</span></div>`; }
+        }
+      };
+      const wrap=document.createElement('div'); wrap.appendChild(node); wrap.appendChild(kids);
+      // indent children
+      kids.style.paddingLeft='14px';
+      frag.appendChild(wrap);
+    }else{
+      node.innerHTML=`<span class="tw"></span><span class="ic">📄</span><span class="nm" title="${esc(en.path)}">${esc(en.name)}</span>`;
+      node.onclick=(ev)=>{ ev.stopPropagation(); openFile(en.path, node); };
+      frag.appendChild(node);
+    }
+  });
+  return frag;
+}
+
+/* ---- open file ---- */
+async function openFile(path, node){
+  if(!monacoReady) return;
+  document.querySelectorAll('.node.file.active').forEach(n=>n.classList.remove('active'));
+  if(node) node.classList.add('active');
+  curPath=path; $('#filePath').innerHTML=`<b>${esc(curRepo)}</b> / core/fe / ${esc(path)}`;
+  setMsg("loading file…");
+  try{
+    const d=await api(`/api/file?${repoQ()}&path=${encodeURIComponent(path)}`);
+    if(d.error){ setMsg(d.error,true); return; }
+    curLang=d.lang||"plaintext"; curTotalLines=d.lines||1;
+    const model=monaco.editor.createModel(d.content, curLang);
+    const old=editor.getModel(); editor.setModel(model); if(old) old.dispose();
+    editor.revealLine(1); editor.setPosition({lineNumber:1,column:1});
+    blameByLine={}; decorations=editor.deltaDecorations(decorations,[]);
+    setMsg(d.truncated?"file truncated (large)":"");
+    refreshContext(true);
+  }catch(e){ setMsg(e.message,true); }
+}
+function clearEditor(){
+  curPath=null; $('#filePath').textContent="Select a file…";
+  if(editor){ const m=editor.getModel(); editor.setModel(monaco.editor.createModel("","plaintext")); if(m)m.dispose(); }
+  $('#ctxBody').innerHTML='<div class="empty">Open a file…</div>'; $('#ctxRange').textContent="";
+}
+
+/* ---- visible range (honors user pane-size override) ---- */
+function visibleRange(){
+  const ranges=editor.getVisibleRanges();
+  let top=1;
+  if(ranges&&ranges.length){ top=ranges[0].startLineNumber; }
+  const ps=$('#paneSize').value.trim().toLowerCase();
+  if(ps==="auto"||ps===""){
+    const bottom = ranges&&ranges.length ? ranges[ranges.length-1].endLineNumber : top;
+    return [top, bottom];
+  }
+  const n=Math.max(1, parseInt(ps,10)||40);
+  return [top, Math.min(curTotalLines, top+n-1)];
+}
+
+/* ---- blame gutter + context (debounced) ---- */
+function scheduleRefresh(){ clearTimeout(ctxTimer); ctxTimer=setTimeout(()=>refreshContext(false),250); }
+async function refreshContext(force){
+  if(!curPath) return;
+  const [start,end]=visibleRange();
+  $('#ctxRange').textContent=`lines ${start}–${end}`;
+  $('#stRange').textContent=`visible ${start}–${end} (${end-start+1} lines)`;
+  try{
+    const [bl,ctx]=await Promise.all([
+      api(`/api/blame?${repoQ()}&path=${encodeURIComponent(curPath)}&start=${start}&end=${end}`),
+      api(`/api/context?${repoQ()}&path=${encodeURIComponent(curPath)}&start=${start}&end=${end}${force?"&force=1":""}`)
+    ]);
+    if(!bl.error) applyBlame(bl);
+    if(ctx.error){ setMsg(ctx.error,true); } else { renderContext(ctx); setMsg(""); }
+  }catch(e){ setMsg(e.message,true); }
+}
+
+const _blameStyle=document.createElement('style'); document.head.appendChild(_blameStyle);
+const _blameClasses={};   // color -> css class name, injected on demand
+function blameClass(key){
+  const color=authColor(key);
+  if(!_blameClasses[color]){
+    const cls='blame-a-'+Object.keys(_blameClasses).length;
+    _blameClasses[color]=cls;
+    _blameStyle.sheet.insertRule(`.${cls}{background:${color} !important}`, _blameStyle.sheet.cssRules.length);
+  }
+  return _blameClasses[color];
+}
+function applyBlame(bl){
+  const decos=[];
+  bl.lines.forEach(l=>{
+    blameByLine[l.line]=l;
+    const when=l.time?new Date(l.time*1000).toISOString().slice(0,10):"";
+    const author=(l.author||"").replace(/^(.*),\s*(.*)$/,"$2 $1");
+    const hover=`**${esc(author)}** · ${when}\n\n${esc(l.summary||"")}\n\n\`${l.short}\``;
+    decos.push({
+      range:new monaco.Range(l.line,1,l.line,1),
+      options:{ isWholeLine:false,
+        linesDecorationsClassName:'blame-bar '+blameClass(l.author),
+        overviewRuler:{color:authColor(l.author),position:monaco.editor.OverviewRulerLane.Left},
+        hoverMessage:{value:hover},
+      }
+    });
+  });
+  decorations=editor.deltaDecorations(decorations,decos);
+}
+
+/* ---- render right pane ---- */
+function renderContext(c){
+  const hsdLink=h=>`<a class="pill hsd mono" target="_blank" rel="noopener" href="https://hsdes.intel.com/appstore/article/#/${encodeURIComponent(h)}">${esc(h)}</a>`;
+  const tiPill=t=>`<span class="pill turnin mono" title="turnin ${esc(t)}">TI ${esc(t)}</span>`;
+  let html="";
+
+  html+=`<div class="sec"><div class="hd"><span>Authors of visible lines</span><span>${c.authors.length}</span></div>`;
+  if(!c.authors.length){ html+=`<div class="empty">no blame data</div>`; }
+  c.authors.forEach(a=>{
+    html+=`<div class="author"><span class="dot" style="background:${authColor(a.raw)}"></span>`+
+      `<span class="nm" title="${esc(a.mail)}">${esc(a.name)}</span>`+
+      `<span class="id mono">${a.idsid?esc(a.idsid):"—"}</span>`+
+      `<span class="ct">${a.lines}L</span></div>`;
+  });
+  html+=`</div>`;
+
+  html+=`<div class="sec"><div class="hd"><span>Turnins</span><span>${c.turnins.length}</span></div>`;
+  html+= c.turnins.length ? c.turnins.map(tiPill).join("") : `<div class="empty">none detected</div>`;
+  html+=`</div>`;
+
+  html+=`<div class="sec"><div class="hd"><span>HSDs referenced</span><span>${c.hsds.length}</span></div>`;
+  html+= c.hsds.length ? c.hsds.map(hsdLink).join("") : `<div class="empty">none referenced</div>`;
+  html+=`</div>`;
+
+  html+=`<div class="sec"><div class="hd"><span>Commits</span><span>${c.commits.length}</span></div>`;
+  if(!c.commits.length) html+=`<div class="empty">no commits</div>`;
+  c.commits.forEach(cm=>{
+    const when=cm.time?new Date(cm.time*1000).toISOString().slice(0,10):"";
+    html+=`<div class="commit"><div class="row1"><span class="sha mono">${esc(cm.short)}</span>`+
+      `<span class="lc">${cm.lines}L</span></div>`+
+      `<div class="sm">${esc(cm.summary)}</div>`+
+      `<div class="meta">${esc(cm.author)}${cm.idsid?` · <span class="mono">${esc(cm.idsid)}</span>`:""} · ${when}`+
+      (cm.turnins&&cm.turnins.length?` · ${cm.turnins.map(tiPill).join("")}`:"")+
+      (cm.hsds&&cm.hsds.length?` · ${cm.hsds.map(hsdLink).join("")}`:"")+
+      `</div></div>`;
+  });
+  html+=`</div>`;
+  $('#ctxBody').innerHTML=html;
+}
+
+function setMsg(m,err){ const el=$('#stMsg'); el.textContent=m||""; el.className=err?"err":""; }
+
+/* ---- SystemVerilog Monarch language ---- */
+function registerSV(){
+  monaco.languages.register({id:'systemverilog'});
+  monaco.languages.setMonarchTokensProvider('systemverilog',{
+    defaultToken:'',
+    keywords:['module','endmodule','begin','end','if','else','case','endcase',
+      'casex','casez','default','for','while','repeat','forever','assign','always',
+      'always_comb','always_ff','always_latch','initial','function','endfunction',
+      'task','endtask','generate','endgenerate','genvar','parameter','localparam',
+      'input','output','inout','wire','reg','logic','bit','byte','integer','int',
+      'typedef','struct','union','enum','packed','signed','unsigned','posedge',
+      'negedge','or','and','not','xor','package','endpackage','import','export',
+      'interface','endinterface','modport','class','endclass','virtual','extends',
+      'this','super','new','return','break','continue','automatic','static','const',
+      'unique','priority','wait','fork','join','join_any','join_none','assert',
+      'property','endproperty','sequence','endsequence','covergroup','endgroup',
+      'clocking','endclocking','randcase','define','ifdef','ifndef','endif','else',
+      'include','timescale','begin','disable','force','release'],
+    typeKeywords:['logic','reg','wire','bit','int','integer','byte','shortint',
+      'longint','real','time','string','void','tri','wand','wor'],
+    operators:['=','==','!=','===','!==','<','>','<=','>=','&&','||','!','&','|',
+      '^','~','+','-','*','/','%','<<','>>','?',':','++','--','+=','-=','<=','->'],
+    symbols:/[=><!~?:&|+\-*\/\^%]+/,
+    tokenizer:{
+      root:[
+        [/`[a-zA-Z_]\w*/,'keyword.directive'],
+        [/\$[a-zA-Z_]\w*/,'predefined'],
+        [/[a-zA-Z_]\w*/,{cases:{'@keywords':'keyword','@typeKeywords':'type','@default':'identifier'}}],
+        [/\d*'[sS]?[bBoOdDhH][0-9a-fA-FxXzZ_]+/,'number.hex'],
+        [/\d[\d_]*\.\d[\d_]*/,'number.float'],
+        [/\d[\d_]*/,'number'],
+        {include:'@whitespace'},
+        [/[{}()\[\]]/,'@brackets'],
+        [/@symbols/,{cases:{'@operators':'operator','@default':''}}],
+        [/"/,{token:'string.quote',next:'@string'}],
+      ],
+      whitespace:[
+        [/[ \t\r\n]+/,''],
+        [/\/\*/,'comment','@comment'],
+        [/\/\/.*$/,'comment'],
+      ],
+      comment:[
+        [/[^\/*]+/,'comment'],
+        [/\*\//,'comment','@pop'],
+        [/[\/*]/,'comment'],
+      ],
+      string:[
+        [/[^\\"]+/,'string'],
+        [/\\./,'string.escape'],
+        [/"/,{token:'string.quote',next:'@pop'}],
+      ],
+    }
+  });
+}
+
+/* ---- Specman 'e' (IEEE 1647) Monarch language ---- */
+function registerSpecman(){
+  monaco.languages.register({id:'specman'});
+  monaco.languages.setLanguageConfiguration('specman',{
+    comments:{lineComment:'--',blockComment:['/*','*/']},
+    brackets:[['{','}'],['[',']'],['(',')']],
+  });
+  monaco.languages.setMonarchTokensProvider('specman',{
+    defaultToken:'',
+    keywords:['struct','unit','extend','type','subtype','when','like','is','also',
+      'only','undefined','field','method','event','on','expect','assume','cover',
+      'keep','soft','constraint','gen','do','using','that','matching','if','then',
+      'else','for','from','to','each','in','while','repeat','until','break',
+      'continue','return','case','default','select','and','or','not','nand','nor',
+      'xor','within','sync','wait','cycle','delay','change','fall','rise',
+      'eventually','detach','start','emit','forever','item','cross','transition',
+      'ranges','range','ignore','illegal','radix','package','import','define',
+      'private','protected','all','of','list','key','var','new','copy','as_a',
+      'try','check','print','dut_error','dut_errorf','out','outf','message',
+      'messagef','error','warning','add','add0','pop','pop0','push','push0','top',
+      'top0','insert','delete','clear','size','is_empty','get_enclosing_unit',
+      'verilog','vhdl','hdl_path','agent','simulate','stop_run','quit','tcm',
+      'inline','run','post_generate','pre_generate','init','finalize','first',
+      'kind','set_config','value','choose','instance','global','before'],
+    types:['bit','byte','int','uint','bool','string','real','time','nibble','bits',
+      'bytes','list','MVL'],
+    constants:['TRUE','FALSE','NULL','UNDEF','MAX_INT','MIN_INT'],
+    predefined:['me','it','index','sys','result','prev'],
+    operators:['=','==','!=','<','>','<=','>=','&&','||','!','&','|','^','~','+','-',
+      '*','/','%','=>','->','+=','-=','*=','/=','?',':'],
+    symbols:/[=><!~?:&|+\-*\/\^%@]+/,
+    tokenizer:{
+      root:[
+        [/<'/,'metatag'],
+        [/'>/,'metatag'],
+        [/\/\/\/.*$/,'comment.doc'],
+        [/\/\/.*$/,'comment'],
+        [/--.*$/,'comment'],
+        [/\/\*/,'comment','@comment'],
+        [/[!%](?=[A-Za-z_])/,'keyword'],
+        [/@[a-zA-Z_]\w*/,'type.identifier'],
+        [/[a-zA-Z_]\w*/,{cases:{'@keywords':'keyword','@types':'type',
+          '@constants':'constant','@predefined':'variable.predefined',
+          '@default':'identifier'}}],
+        [/0[xX][0-9a-fA-F_]+/,'number.hex'],
+        [/0[bB][01_]+/,'number.binary'],
+        [/\d*'[sS]?[bBoOdDhH][0-9a-fA-FxXzZ_]+/,'number.hex'],
+        [/\d[\d_]*\.\d[\d_]*/,'number.float'],
+        [/\d[\d_]*/,'number'],
+        [/[ \t\r\n]+/,''],
+        [/[{}()\[\]]/,'@brackets'],
+        [/@symbols/,{cases:{'@operators':'operator','@default':''}}],
+        [/"/,{token:'string.quote',next:'@string'}],
+      ],
+      comment:[
+        [/[^\/*]+/,'comment'],
+        [/\*\//,'comment','@pop'],
+        [/[\/*]/,'comment'],
+      ],
+      string:[
+        [/[^\\"]+/,'string'],
+        [/\\./,'string.escape'],
+        [/"/,{token:'string.quote',next:'@pop'}],
+      ],
+    }
+  });
+}
+
+/* ---- boot Monaco ---- */
+require.config({paths:{vs:'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs'}});
+require(['vs/editor/editor.main'],function(){
+  registerSV();
+  registerSpecman();
+  editor=monaco.editor.create($('#editor'),{
+    value:"", language:"plaintext", theme:"vs-dark",
+    readOnly:true, automaticLayout:true, glyphMargin:true,
+    lineNumbersMinChars:5, minimap:{enabled:true}, fontSize:12,
+    scrollBeyondLastLine:false, renderLineHighlight:"all",
+  });
+  monacoReady=true; $('#loading').style.display="none";
+  editor.onDidScrollChange(scheduleRefresh);
+  editor.onDidLayoutChange(scheduleRefresh);
+});
+
+/* ---- controls ---- */
+$('#paneSize').addEventListener('change',()=>refreshContext(false));
+$('#paneSize').addEventListener('keydown',e=>{ if(e.key==='Enter') refreshContext(false); });
+$('#refreshBtn').addEventListener('click',()=>refreshContext(true));
+
+/* ---- init ---- */
+(async()=>{ try{ await loadRepos(); await loadTree(); }catch(e){ setMsg(e.message,true); } })();
+</script>
+</body>
+</html>
