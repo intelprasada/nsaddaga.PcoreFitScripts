@@ -1,0 +1,8 @@
+Python 3.9+  (stdlib only — no external packages required)
+
+# Runtime notes
+#   * The backend is pure Python standard library (http.server, subprocess).
+#   * The browser UI loads the Monaco editor from the jsdelivr CDN
+#     (https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0), so the machine
+#     viewing the page needs outbound HTTPS (the Intel proxy is fine).
+#   * `git` and, for IDSID resolution, the `phonebook` CLI are expected on PATH.

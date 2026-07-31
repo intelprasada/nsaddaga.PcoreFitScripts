@@ -26,3 +26,7 @@ Thumbs.db
 # Release artifacts
 release/*.tar.gz
 release/*.zip
+
+# codelens runtime state
+tools/codelens/.cache/
+tools/codelens/.idsid_cache.json
