@@ -1373,8 +1373,39 @@ async function loadDrafts(){
     renderQueue(d.drafts||[]);
   }catch(e){logline('drafts error: '+e.message,'err');}
 }
+function _captureEditState(){
+  // Preserve the in-flight edit across renderQueue() re-renders (the 4s
+  // loadDrafts poll otherwise wipes the DOM and silently drops what the
+  // user was typing). Returns null if nothing is being edited.
+  const row=document.querySelector('#queue .qi.editing');
+  if(!row)return null;
+  const ta=row.querySelector('.qedit textarea');
+  return {
+    id:row.dataset.id,
+    value:ta?ta.value:'',
+    selStart:ta?ta.selectionStart:0,
+    selEnd:ta?ta.selectionEnd:0,
+    hadFocus:ta&&document.activeElement===ta,
+  };
+}
+function _restoreEditState(state){
+  if(!state)return;
+  const row=document.querySelector(`#queue .qi[data-id="${state.id}"]`);
+  if(!row)return; // draft was consumed/deleted; nothing to restore
+  row.classList.add('editing');
+  const ta=row.querySelector('.qedit textarea');
+  if(!ta)return;
+  ta.value=state.value;
+  const rows=Math.max(2,Math.min(10,(state.value.match(/\\n/g)||[]).length+2));
+  ta.rows=rows;
+  if(state.hadFocus){
+    ta.focus();
+    try{ta.setSelectionRange(state.selStart,state.selEnd);}catch(e){}
+  }
+}
 function renderQueue(items){
   const el=$('#queue');
+  const editState=_captureEditState();
   if(!items.length){el.innerHTML='<div class="empty">No queued items. Type above and \u201cAdd to queue\u201d \u2014 works even while the session is busy.</div>';return;}
   el.innerHTML='';
   items.forEach((it,i)=>{
@@ -1411,6 +1442,7 @@ function renderQueue(items){
     };
     el.appendChild(d);
   });
+  _restoreEditState(editState);
 }
 function beginEdit(row,text){
   const el=$('#queue');
