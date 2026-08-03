@@ -181,6 +181,28 @@ def capture_pane_lines(
     return True, out[-n:]
 
 
+def pane_display_info(target: str) -> dict[str, int | bool]:
+    """Return the tmux viewport/history state used to explain mirror limits."""
+    r = subprocess.run(
+        [
+            "tmux", "display-message", "-p", "-t", target,
+            "#{pane_height}\t#{history_size}\t#{alternate_on}",
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    if r.returncode != 0:
+        return {"pane_height": 0, "history_size": 0, "alternate_on": False}
+    try:
+        height, history, alternate = r.stdout.strip().split("\t")
+        return {
+            "pane_height": int(height),
+            "history_size": int(history),
+            "alternate_on": alternate == "1",
+        }
+    except (TypeError, ValueError):
+        return {"pane_height": 0, "history_size": 0, "alternate_on": False}
+
+
 def list_sessions() -> list[dict]:
     """One entry per tmux *session* (the unit the nav bar and draft queues are
     keyed on): {name, windows, command, status, panes}. `command` is the active
@@ -626,6 +648,10 @@ ALLOWED_KEYS = {
     "Enter": "Enter",
     "Up": "Up",
     "Down": "Down",
+    "PageUp": "PageUp",
+    "PageDown": "PageDown",
+    "Home": "Home",
+    "End": "End",
 }
 
 
@@ -856,8 +882,8 @@ main{flex:1;display:flex;flex-direction:column;gap:10px;padding:14px;min-width:0
 .pill.ready{background:#12331f;color:#3fb950;border-color:#238636}
 .pill.busy{background:#3a2f12;color:#e3b341;border-color:#7a5c17}
 .pill.gone{background:#3a1414;color:#f85149;border-color:#7a1717}
-#msg{width:100%;min-height:26vh;font-size:19px;line-height:1.4;padding:13px;
- border-radius:10px;border:1px solid #30363d;background:#0b0f14;color:#e6edf3;resize:vertical}
+#msg{width:100%;height:var(--msg-h,26vh);min-height:100px;font-size:19px;line-height:1.4;padding:13px;
+ border-radius:10px;border:1px solid #30363d;background:#0b0f14;color:#e6edf3;resize:none;box-sizing:border-box}
 .row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
 button{font-size:15px;padding:10px 16px;border-radius:9px;border:1px solid #238636;
  background:#238636;color:#fff;cursor:pointer;font-weight:600}
@@ -887,8 +913,12 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
 .empty{color:#8b949e;font-style:italic;font-size:13px}
 #paneWrap{border:1px solid #30363d;border-radius:10px;background:#06090f;
  display:flex;flex-direction:column;min-height:0;flex:0 0 auto}
-#compose{display:flex;flex-direction:column;gap:10px;height:var(--compose-h,auto);
- min-height:120px;overflow:auto;flex:0 0 auto}
+#compose{display:flex;flex-direction:column;gap:10px;min-height:0;flex:0 0 auto}
+#gutterPrompt{display:flex;align-items:center;justify-content:center;margin:-5px 0 0}
+#gutterPrompt::after{z-index:0}
+#gutterPrompt span{position:relative;z-index:1;padding:0 8px;background:#0d1117;color:#8b949e;
+ font-size:10px;line-height:16px;border:1px solid #30363d;border-radius:8px;pointer-events:none}
+#gutterPrompt:hover span,#gutterPrompt.dragging span{color:#58a6ff;border-color:#58a6ff}
 #paneHead{display:flex;align-items:center;gap:8px;justify-content:space-between;padding:7px 10px;
  border-bottom:1px solid #30363d;color:#8b949e;font-size:12px;flex:0 0 auto;
  border-radius:10px 10px 0 0;background:#06090f}
@@ -1043,7 +1073,7 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
  #wrap{flex-direction:column}
  #nav{width:100%;max-height:38vh;border-right:0;border-bottom:1px solid #30363d}
  main{padding:12px}
- #msg{min-height:22vh;font-size:18px}
+ #msg{min-height:100px;font-size:18px}
  button{padding:12px 18px;font-size:16px}
  button.mini{padding:8px 12px;font-size:14px}
  .qi .qa{gap:6px}
@@ -1147,6 +1177,9 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
       <button id="attachCmd" title="Copy this command to attach to the tmux session from any terminal">\u29C9 Copy attach command <code></code></button>
     </div>
     <textarea id="msg" placeholder="Click here, press Win+H, and speak\u2026 Enter sends now; or Add to queue while the session is busy."></textarea>
+    <div id="gutterPrompt" class="gutter gutter-h" title="Drag to resize prompt (double-click to reset)">
+      <span>\u2195 drag to resize prompt</span>
+    </div>
     <div class="row">
       <button id="sendNow">Send now \u2192</button>
       <button class="sec" id="addQ">+ Add to queue</button>
@@ -1181,10 +1214,13 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
           <option>14</option><option>16</option><option>18</option><option>20</option>
         </select> px
       </label>
+      <button class="sec mini" id="paneTop" title="Jump to the oldest Copilot timeline content">Top</button>
+      <button class="sec mini" id="paneOlder" title="Scroll Copilot's timeline one page older">Older</button>
+      <button class="sec mini" id="paneNewer" title="Scroll Copilot's timeline one page newer">Newer</button>
+      <button class="sec mini" id="paneLive" title="Return Copilot's timeline to the live bottom">Live</button>
       <span class="hint" id="paneMeta">terminal mirror polls every 1.5s</span>
     </div>
     </div>
-    <div id="gutterCompose" class="gutter gutter-h" title="Drag to resize compose area (double-click to reset)"></div>
     <div id="paneWrap">
       <div id="paneHead"><b>Terminal mirror</b><span class="hint">read-only tmux capture-pane</span></div>
       <pre id="pane"></pre>
@@ -1319,8 +1355,25 @@ async function loadPane(){
     }else{
       pre.scrollTop=prevTop;
     }
-    $('#paneMeta').textContent='showing '+(d.lines||[]).length+' lines from '+d.target+(nearBottom?'':' \\u00b7 scroll-lock (scroll down to follow)');
+    const altNote=d.alternate_on&&d.history_size===0
+      ?' \\u00b7 Copilot timeline: scroll past an edge or use Older/Newer'
+      :'';
+    $('#paneMeta').textContent='showing '+(d.lines||[]).length+' lines from '+d.target+
+      (nearBottom?'':' \\u00b7 browser scroll-lock')+altNote;
   }catch(e){$('#paneMeta').textContent='mirror error: '+e.message;}
+}
+
+let paneTimelineBusy=false;
+async function scrollPaneTimeline(key){
+  if(!sel||paneTimelineBusy)return;
+  paneTimelineBusy=true;
+  try{
+    const d=await api('/api/key',{target:sel,key});
+    if(!d.ok)logline('timeline scroll failed: '+d.error,'err');
+    await new Promise(resolve=>setTimeout(resolve,120));
+    await loadPane();
+  }catch(e){logline('timeline scroll error: '+e.message,'err');}
+  finally{paneTimelineBusy=false;}
 }
 
 async function api(path,body){
@@ -1618,6 +1671,18 @@ $('#paneFont').value=String(paneFont);
 $('#paneFont').onchange=()=>{paneFont=parseInt($('#paneFont').value,10)||12;
   localStorage.setItem('vaakPaneFont',String(paneFont));applyPaneFont();};
 applyPaneFont();
+$('#paneTop').onclick=()=>scrollPaneTimeline('Home');
+$('#paneOlder').onclick=()=>scrollPaneTimeline('PageUp');
+$('#paneNewer').onclick=()=>scrollPaneTimeline('PageDown');
+$('#paneLive').onclick=()=>scrollPaneTimeline('End');
+$('#pane').addEventListener('wheel',e=>{
+  const pre=$('#pane');
+  if(e.deltaY<0&&pre.scrollTop<=0){
+    e.preventDefault();scrollPaneTimeline('PageUp');
+  }else if(e.deltaY>0&&pre.scrollTop+pre.clientHeight>=pre.scrollHeight-1){
+    e.preventDefault();scrollPaneTimeline('PageDown');
+  }
+},{passive:false});
 /* ---- Draggable pane resizing ---- */
 (function initResizers(){
   const defs={
@@ -1626,7 +1691,7 @@ applyPaneFont();
               min:80,max:window.innerHeight-260,horiz:false},
     'log-h':{key:'vaakLogH',def:Math.round(window.innerHeight*0.16),
               min:60,max:window.innerHeight-260,horiz:false},
-    'compose-h':{key:'vaakComposeH',def:null,min:120,max:window.innerHeight-200,horiz:false,optional:true},
+    'msg-h':{key:'vaakMsgH',def:null,min:100,max:window.innerHeight-180,horiz:false,optional:true},
   };
   const root=document.documentElement;
   function apply(name,px){
@@ -1658,9 +1723,9 @@ applyPaneFont();
       const start=(axis==='x')?e.clientX:e.clientY;
       let cur=parseInt(getComputedStyle(root).getPropertyValue('--'+name),10);
       if(isNaN(cur)){
-        // No CSS var yet (e.g. compose-h defaults to auto); seed from
+        // No CSS var yet (the prompt defaults to 26vh); seed from
         // the actual element size so drags feel continuous.
-        const targetSel=(name==='compose-h')?'#compose':null;
+        const targetSel=(name==='msg-h')?'#msg':null;
         const el=targetSel?document.querySelector(targetSel):null;
         cur=el?el.getBoundingClientRect().height:defs[name].def;
       }
@@ -1684,11 +1749,12 @@ applyPaneFont();
   drag($('#gutterV'),'nav-w','x');
   drag($('#gutterPane'),'pane-h','y');
   drag($('#gutterLog'),'log-h','y');
-  drag($('#gutterCompose'),'compose-h','y');
+  drag($('#gutterPrompt'),'msg-h','y');
+  localStorage.removeItem('vaakComposeH');
   window.addEventListener('resize',()=>{
     Object.keys(defs).forEach(name=>{
       const s=defs[name];
-      s.max=(name==='nav-w')?600:window.innerHeight-(name==='compose-h'?200:260);
+      s.max=(name==='nav-w')?600:window.innerHeight-(name==='msg-h'?180:260);
       const cur=parseInt(getComputedStyle(root).getPropertyValue('--'+name),10);
       if(!isNaN(cur)&&cur>s.max)apply(name,s.max);
     });
@@ -2053,7 +2119,11 @@ class Handler(BaseHTTPRequestHandler):
             target = (q.get("target", [TARGET])[0]) or TARGET
             ok, data = capture_pane_lines(target, q.get("lines", [None])[0])
             if ok:
-                self._json({"target": target, "lines": data})
+                self._json({
+                    "target": target,
+                    "lines": data,
+                    **pane_display_info(target),
+                })
             else:
                 self._json({"target": target, "lines": [], "error": data}, 404)
         elif p == "/api/drafts":

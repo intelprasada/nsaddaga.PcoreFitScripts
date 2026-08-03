@@ -715,22 +715,46 @@ def test_page_save_edit_closes_edit_box():
     assert rm > 0 and rq > 0 and rm < rq, "must clear .editing before renderQueue"
 
 
-def test_page_has_compose_resize_gutter():
-    """Compose area (status bar + msg textarea + controls) above the
-    terminal mirror should be draggable via #gutterCompose, driven by
-    the --compose-h CSS custom property, persisted in localStorage."""
+def test_page_has_visible_prompt_resize_gutter():
+    """The prompt textarea has an obvious labeled drag handle immediately
+    below it, driven by --msg-h and persisted in localStorage."""
     p = D.PAGE
-    assert 'id="compose"' in p
-    assert 'id="gutterCompose"' in p
-    assert '--compose-h' in p or 'compose-h' in p
-    assert 'vaakComposeH' in p
-    # Gutter must appear AFTER #compose and BEFORE #paneWrap in DOM order.
-    ic = p.find('id="compose"')
-    ig = p.find('id="gutterCompose"')
-    ip = p.find('id="paneWrap"')
-    assert 0 < ic < ig < ip
-    # Drag handler must be wired.
-    assert "drag($('#gutterCompose'),'compose-h','y')" in p
+    im = p.find('id="msg"')
+    ig = p.find('id="gutterPrompt"')
+    assert 0 < im < ig
+    assert "\u2195 drag to resize prompt" in p
+    assert "--msg-h" in p or "msg-h" in p
+    assert "vaakMsgH" in p
+    assert "drag($('#gutterPrompt'),'msg-h','y')" in p
+
+
+def test_page_can_navigate_copilot_alt_screen_timeline():
+    p = D.PAGE
+    for element_id in ("paneTop", "paneOlder", "paneNewer", "paneLive"):
+        assert f'id="{element_id}"' in p
+    for key in ("Home", "PageUp", "PageDown", "End"):
+        assert key in D.ALLOWED_KEYS
+        assert f"scrollPaneTimeline('{key}')" in p
+    assert "addEventListener('wheel'" in p
+    assert "d.alternate_on&&d.history_size===0" in p
+
+
+@pytest.mark.skipif(not _HAS_TMUX, reason="tmux not installed")
+def test_pane_display_info_reports_viewport_state():
+    sess = "vaak_info_%s" % uuid.uuid4().hex[:8]
+    subprocess.run(["tmux", "new", "-d", "-s", sess, "-y", "31"], check=True)
+    try:
+        info = D.pane_display_info(sess)
+        expected = subprocess.run(
+            ["tmux", "display-message", "-p", "-t", sess, "#{pane_height}"],
+            capture_output=True, text=True, check=True,
+        )
+        assert info["pane_height"] == int(expected.stdout.strip())
+        assert info["pane_height"] > 0
+        assert info["history_size"] >= 0
+        assert isinstance(info["alternate_on"], bool)
+    finally:
+        subprocess.run(["tmux", "kill-session", "-t", sess], check=False)
 
 
 def test_page_console_log_persistent():
