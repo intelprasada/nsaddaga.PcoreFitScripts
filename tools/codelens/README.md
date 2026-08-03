@@ -33,7 +33,7 @@ Switch between the configured repos with the selector in the top bar.
 |------|----------|
 | **Left — file tree** | Lazy directory tree rooted at `core/fe`. Click a file to open it. |
 | **Center — editor** | Monaco, read-only, SystemVerilog-aware highlighting. A colored bar in the line gutter encodes the last author of each line (matching the author dots on the right); hover a line for author · date · commit summary · sha. |
-| **Right — context** | Recomputed for the **visible line range** as you scroll: <ul><li>**Authors of visible lines** — display name, resolved IDSID, and how many visible lines each touched.</li><li>**Turnins** — the `user_turnin<N>` that introduced those lines. **Click a TI** to open its drill-down lens (see below).</li><li>**HSDs referenced** — article ids parsed from the introducing commits, linked to hsdes.intel.com.</li><li>**Commits** — per-commit breakdown (sha, summary, author, turnin, HSDs, line count). **Click a sha** to open its commit lens.</li></ul> |
+| **Right — three tabs** | The right pane has three views (keyboard `1`/`2`/`3`): <ul><li>**Context** *(1)* — the range-scoped view above.</li><li>**TI Scope** *(2)* — every turnin that ever touched this file, with #commits touching this file, +/−, authors, merge date and subject. Sortable, filterable, click a TI pill to drill into the TI lens.</li><li>**Commit Scope** *(3)* — every commit that ever touched this file (rename history followed), with introducing TI(s), per-file +/−, author, subject. Sortable, filterable, click a sha to open the commit lens.</li></ul> The TI Scope list is **derived** from the Commit Scope list — the TI set is exactly the union of the per-commit `turnins`, guaranteeing round-trip consistency between the two views (no phantom TIs, no orphan commits). |
 
 ### Pane size (number of lines)
 
@@ -107,6 +107,8 @@ The UI is a thin client over these JSON endpoints (handy for scripting):
 | `GET /api/file?repo=&path=` | File content + language + line count. |
 | `GET /api/blame?repo=&path=&start=&end=` | Per-line blame for a range. |
 | `GET /api/context?repo=&path=&start=&end=[&force=1]` | Aggregated authors / turnins / HSDs / commits for a range. |
+| `GET /api/file/tis?repo=&path=[&follow=0][&force=1]` | **TI Scope**: every turnin that ever touched the file — derived from the per-commit turnin list so `⋃ commit.turnins == TIScope` (round-trip). |
+| `GET /api/file/commits?repo=&path=[&follow=0][&force=1]` | **Commit Scope**: every commit that ever touched the file (rename-following by default), each with introducing TI(s), per-file +/−, and merge context. |
 | `GET /api/ti?repo=&id=<turnin>[&force=1]` | **TI lens**: introducing merge, commits, files-changed (+/−), HSDs, authors for one turnin. |
 | `GET /api/commit?repo=&sha=<sha>[&force=1]` | **Commit lens**: full metadata + message, files-changed (+/−), turnin/HSD/merge for one commit. |
 | `GET /api/health` | Liveness + repo status. |

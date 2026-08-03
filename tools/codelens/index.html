@@ -102,6 +102,49 @@
   .commit .sha.clink{cursor:pointer}
   .commit .sha.clink:hover{text-decoration:underline}
 
+  /* right-pane tabs (Context · TI Scope · Commit Scope) */
+  #ctxTabs{display:flex;gap:0;padding:0 8px;background:var(--panel2);
+    border-bottom:1px solid var(--border);flex:0 0 auto}
+  #ctxTabs .tab{padding:8px 12px;font-size:11px;text-transform:uppercase;
+    letter-spacing:.6px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;
+    display:flex;align-items:center;gap:6px}
+  #ctxTabs .tab .kb{font-size:9px;padding:1px 5px;border-radius:3px;background:#0d1117;
+    border:1px solid var(--border);color:var(--muted);font-family:monospace;letter-spacing:0}
+  #ctxTabs .tab .ct{font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;
+    background:#0d1117;padding:1px 6px;border-radius:9px;border:1px solid var(--border);letter-spacing:0}
+  #ctxTabs .tab:hover{color:var(--fg)}
+  #ctxTabs .tab.active{color:var(--fg);border-bottom-color:var(--accent)}
+  .tabpane{display:none}
+  .tabpane.active{display:block}
+  #ctxHead{display:flex;justify-content:space-between;align-items:center;
+    padding:8px 12px;gap:6px;border-bottom:1px solid var(--border);
+    background:var(--panel);flex:0 0 auto;font-size:11px}
+  #ctxHead .lbl{text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+  #ctxHead .rng{color:var(--fg);margin-left:6px}
+  #ctxHead .sp{flex:1}
+  .fscope-toolbar{display:flex;gap:6px;align-items:center;padding:6px 10px 8px;
+    position:sticky;top:0;background:var(--panel);z-index:2;border-bottom:1px solid #ffffff0d}
+  .fscope-toolbar input{flex:1;font-size:12px;padding:3px 8px}
+  .fscope-toolbar .cnt{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;
+    white-space:nowrap}
+  table.st{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
+  table.st th{position:sticky;top:34px;background:var(--panel);z-index:1;
+    text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.5px;
+    color:var(--muted);padding:5px 6px;border-bottom:1px solid var(--border);
+    cursor:pointer;user-select:none;font-weight:600}
+  table.st th.sortable::after{content:" ↕";opacity:.35;font-size:9px}
+  table.st th.sort-asc::after{content:" ▲";opacity:.9;color:var(--accent)}
+  table.st th.sort-desc::after{content:" ▼";opacity:.9;color:var(--accent)}
+  table.st td{padding:5px 6px;border-bottom:1px solid #ffffff0a;vertical-align:top;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  table.st tr:hover td{background:#ffffff08}
+  table.st .num{font-variant-numeric:tabular-nums;text-align:right}
+  table.st .subj{white-space:normal;overflow:hidden;text-overflow:ellipsis;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  table.st .tipills{display:flex;gap:3px;flex-wrap:wrap}
+  table.st .pill{margin:0;padding:1px 6px;font-size:10px}
+  .empty-tab{padding:24px 16px;color:var(--muted);text-align:center;font-style:italic}
+
   /* ---- lens overlay (TI / commit drill-down) ---- */
   #lensOv{position:fixed;inset:0;z-index:50;display:none;
     background:rgba(1,4,9,.64);backdrop-filter:blur(3px);
@@ -194,11 +237,34 @@
     </div>
 
     <div class="col" id="ctx">
-      <h3>Context <span id="ctxRange" class="rng"></span></h3>
-      <div class="scroll"><div id="ctxBody">
-        <div class="empty">Open a file to see who changed the visible lines,
-          which turnins introduced them, and referenced HSDs.</div>
-      </div></div>
+      <div id="ctxHead">
+        <span class="lbl">Right pane</span>
+        <span id="ctxRangeHead" class="rng"></span>
+        <span class="sp"></span>
+        <span class="lbl" id="ctxPath" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%"></span>
+      </div>
+      <div id="ctxTabs">
+        <div class="tab active" data-tab="context" title="Context for the visible line range (1)">
+          Context <span class="kb">1</span></div>
+        <div class="tab" data-tab="ti" title="All TIs that ever touched this file (2)">
+          TI Scope <span class="ct" id="tabCntTi">–</span> <span class="kb">2</span></div>
+        <div class="tab" data-tab="commit" title="All commits that ever touched this file (3)">
+          Commit Scope <span class="ct" id="tabCntCm">–</span> <span class="kb">3</span></div>
+      </div>
+      <div class="scroll">
+        <div id="paneContext" class="tabpane active">
+          <div id="ctxBody" style="padding:10px 12px">
+            <div class="empty">Open a file to see who changed the visible lines,
+              which turnins introduced them, and referenced HSDs.</div>
+          </div>
+        </div>
+        <div id="paneTi" class="tabpane"><div id="tiScopeBody">
+          <div class="empty-tab">Open a file to see all TIs that touched it.</div>
+        </div></div>
+        <div id="paneCommit" class="tabpane"><div id="cmScopeBody">
+          <div class="empty-tab">Open a file to see all commits that touched it.</div>
+        </div></div>
+      </div>
     </div>
   </div>
 
@@ -307,13 +373,21 @@ async function openFile(path, node){
     editor.revealLine(1); editor.setPosition({lineNumber:1,column:1});
     blameByLine={}; decorations=editor.deltaDecorations(decorations,[]);
     setMsg(d.truncated?"file truncated (large)":"");
+    $('#ctxPath').textContent=path;
+    fileScopeCache={ti:null,cm:null,path:path};
+    $('#tabCntTi').textContent="…"; $('#tabCntCm').textContent="…";
+    // Kick off file-scope fetches in parallel; the active tab renders when data lands.
+    loadFileScope(path);
     refreshContext(true);
   }catch(e){ setMsg(e.message,true); }
 }
 function clearEditor(){
   curPath=null; $('#filePath').textContent="Select a file…";
   if(editor){ const m=editor.getModel(); editor.setModel(monaco.editor.createModel("","plaintext")); if(m)m.dispose(); }
-  $('#ctxBody').innerHTML='<div class="empty">Open a file…</div>'; $('#ctxRange').textContent="";
+  $('#ctxBody').innerHTML='<div class="empty">Open a file…</div>'; $('#ctxRangeHead').textContent="";
+  $('#tiScopeBody').innerHTML='<div class="empty-tab">Open a file to see all TIs that touched it.</div>';
+  $('#cmScopeBody').innerHTML='<div class="empty-tab">Open a file to see all commits that touched it.</div>';
+  $('#tabCntTi').textContent="–"; $('#tabCntCm').textContent="–"; $('#ctxPath').textContent="";
 }
 
 /* ---- visible range (honors user pane-size override) ---- */
@@ -335,7 +409,7 @@ function scheduleRefresh(){ clearTimeout(ctxTimer); ctxTimer=setTimeout(()=>refr
 async function refreshContext(force){
   if(!curPath) return;
   const [start,end]=visibleRange();
-  $('#ctxRange').textContent=`lines ${start}–${end}`;
+  $('#ctxRangeHead').textContent=`lines ${start}–${end}`;
   $('#stRange').textContent=`visible ${start}–${end} (${end-start+1} lines)`;
   try{
     const [bl,ctx]=await Promise.all([
@@ -551,6 +625,201 @@ function commitLensHtml(d){
   h+=filesTable(d.files);
   return h;
 }
+
+/* =====================================================================
+   File-scope tabs — TI Scope + Commit Scope. Both are file-centric (not
+   range) and share the same source of truth as the lens/context views so
+   round-trip invariants hold: TI list is derived from the commit list.
+   ===================================================================== */
+let fileScopeCache={ti:null,cm:null,path:null};
+let curTab="context";
+const sortState={ti:{col:"merge_time",dir:-1}, commit:{col:"time",dir:-1}};
+
+async function loadFileScope(path){
+  try{
+    const [cm,ti]=await Promise.all([
+      api(`/api/file/commits?${repoQ()}&path=${encodeURIComponent(path)}`),
+      api(`/api/file/tis?${repoQ()}&path=${encodeURIComponent(path)}`),
+    ]);
+    if(path!==curPath) return;  // navigated away
+    fileScopeCache={ti,cm,path};
+    if(cm.error){ $('#tabCntCm').textContent="!"; $('#cmScopeBody').innerHTML=`<div class="empty-tab">${esc(cm.error)}</div>`; }
+    else{ $('#tabCntCm').textContent=cm.n_commits; if(curTab==='commit') renderCommitScope(); else renderCommitScope(); }
+    if(ti.error){ $('#tabCntTi').textContent="!"; $('#tiScopeBody').innerHTML=`<div class="empty-tab">${esc(ti.error)}</div>`; }
+    else{ $('#tabCntTi').textContent=ti.n_tis; if(curTab==='ti') renderTiScope(); else renderTiScope(); }
+  }catch(e){ setMsg(e.message,true); }
+}
+
+function switchTab(name){
+  curTab=name;
+  document.querySelectorAll('#ctxTabs .tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===name));
+  ['context','ti','commit'].forEach(k=>{
+    const el=$('#pane'+k[0].toUpperCase()+k.slice(1));
+    if(el) el.classList.toggle('active',k===name);
+  });
+  if(name==='ti' && fileScopeCache.ti) renderTiScope();
+  if(name==='commit' && fileScopeCache.cm) renderCommitScope();
+}
+
+document.querySelectorAll('#ctxTabs .tab').forEach(t=>t.addEventListener('click',()=>switchTab(t.dataset.tab)));
+document.addEventListener('keydown',e=>{
+  if(e.target && (e.target.tagName==='INPUT'||e.target.tagName==='SELECT'||e.target.tagName==='TEXTAREA')) return;
+  if($('#lensOv')&&$('#lensOv').classList.contains('open')) return;
+  if(e.key==='1') switchTab('context');
+  else if(e.key==='2') switchTab('ti');
+  else if(e.key==='3') switchTab('commit');
+});
+
+function tiPillLbl(t){ return `<span class="pill turnin mono ti-link" data-ti="${esc(t)}" title="open TI ${esc(t)}">TI ${esc(t)}</span>`; }
+function sortRows(rows, col, dir){
+  return rows.slice().sort((a,b)=>{
+    let va=a[col], vb=b[col];
+    if(va==null) va=""; if(vb==null) vb="";
+    if(typeof va==='number' || typeof vb==='number'){ return (va-vb)*dir; }
+    return String(va).localeCompare(String(vb))*dir;
+  });
+}
+
+function renderTiScope(){
+  const d=fileScopeCache.ti; if(!d) return;
+  const filter=($('#tiFilter')?.value||"").trim().toLowerCase();
+  let rows=(d.tis||[]).map(t=>({
+    id:t.id,
+    merge_short:(t.merge||"").slice(0,12),
+    merge:t.merge||"",
+    merge_time:t.merge_time||0,
+    merge_summary:t.merge_summary||"",
+    n_commits:t.n_commits||0,
+    add:t.add||0, del:t.del||0,
+    authors:(t.authors||[]).map(a=>a.name).join(", "),
+  }));
+  if(filter){
+    rows=rows.filter(r=>
+      String(r.id).includes(filter)||
+      r.merge_short.toLowerCase().includes(filter)||
+      r.merge_summary.toLowerCase().includes(filter)||
+      r.authors.toLowerCase().includes(filter)
+    );
+  }
+  const {col,dir}=sortState.ti;
+  rows=sortRows(rows,col,dir);
+  const cols=[
+    {k:"id", label:"TI", cls:"num", w:"70px"},
+    {k:"merge_time", label:"Merged", cls:"num", w:"90px"},
+    {k:"n_commits", label:"# commits", cls:"num", w:"78px"},
+    {k:"add", label:"+add", cls:"num add", w:"60px"},
+    {k:"del", label:"−del", cls:"num del", w:"60px"},
+    {k:"authors", label:"Authors", cls:"", w:"120px"},
+    {k:"merge_summary", label:"Merge subject", cls:"subj", w:""},
+  ];
+  const th=cols.map(c=>{
+    const cur=col===c.k?(dir<0?'sort-desc':'sort-asc'):'sortable';
+    return `<th class="${cur} ${c.cls}" data-col="${c.k}" ${c.w?`style="width:${c.w}"`:""}>${esc(c.label)}</th>`;
+  }).join("");
+  const body = rows.length ? rows.map(r=>`<tr>
+    <td class="num">${tiPillLbl(r.id)}</td>
+    <td class="num sub">${dstr(r.merge_time)||"—"}</td>
+    <td class="num">${r.n_commits}</td>
+    <td class="num add">+${nfmt(r.add)}</td>
+    <td class="num del">−${nfmt(r.del)}</td>
+    <td class="sub" title="${esc(r.authors)}">${esc(r.authors)}</td>
+    <td class="subj sub" title="${esc(r.merge_summary)}">${esc(r.merge_summary||"—")}</td>
+  </tr>`).join("") : `<tr><td colspan="${cols.length}" class="empty-tab">no TIs found${filter?" matching filter":""}</td></tr>`;
+  $('#tiScopeBody').innerHTML =
+    `<div class="fscope-toolbar">
+       <input id="tiFilter" placeholder="filter by TI, author, subject…" value="${esc(filter)}" />
+       <span class="cnt">${rows.length}/${d.n_tis||0} TIs · ${d.n_commits||0} commits${d.truncated?" (truncated)":""}</span>
+     </div>
+     <table class="st"><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>`;
+  const fEl=$('#tiFilter');
+  if(fEl){
+    fEl.addEventListener('input',()=>{ const s=fEl.selectionStart; renderTiScope(); const n=$('#tiFilter'); if(n){ n.focus(); try{ n.setSelectionRange(s,s); }catch(_){} } });
+  }
+  $('#tiScopeBody').querySelectorAll('th[data-col]').forEach(h=>{
+    h.addEventListener('click',()=>{
+      const c=h.dataset.col;
+      sortState.ti.dir = sortState.ti.col===c ? -sortState.ti.dir : (c==="id"||c==="merge_summary"||c==="authors"?1:-1);
+      sortState.ti.col=c; renderTiScope();
+    });
+  });
+}
+
+function renderCommitScope(){
+  const d=fileScopeCache.cm; if(!d) return;
+  const filter=($('#cmFilter')?.value||"").trim().toLowerCase();
+  let rows=(d.commits||[]).map(c=>({
+    sha:c.sha, short:c.short, author:c.author, idsid:c.idsid||"",
+    time:c.time||0, summary:c.summary||"",
+    add:c.add||0, del:c.del||0, binary:!!c.binary,
+    turnins:c.turnins||[], merge:c.merge||"", merge_summary:c.merge_summary||"",
+  }));
+  if(filter){
+    rows=rows.filter(r=>
+      r.short.toLowerCase().includes(filter)||
+      r.author.toLowerCase().includes(filter)||
+      r.idsid.toLowerCase().includes(filter)||
+      r.summary.toLowerCase().includes(filter)||
+      r.turnins.some(t=>String(t).includes(filter))
+    );
+  }
+  const {col,dir}=sortState.commit;
+  rows=sortRows(rows,col,dir);
+  const cols=[
+    {k:"short", label:"SHA", w:"90px"},
+    {k:"time", label:"Date", w:"88px"},
+    {k:"author", label:"Author", w:"140px"},
+    {k:"turnins", label:"Turnin(s)", w:"110px"},
+    {k:"add", label:"+add", w:"56px"},
+    {k:"del", label:"−del", w:"56px"},
+    {k:"summary", label:"Subject", w:""},
+  ];
+  const th=cols.map(c=>{
+    const cur=col===c.k?(dir<0?'sort-desc':'sort-asc'):'sortable';
+    return `<th class="${cur}" data-col="${c.k}" ${c.w?`style="width:${c.w}"`:""}>${esc(c.label)}</th>`;
+  }).join("");
+  const body = rows.length ? rows.map(r=>{
+    const pills = r.turnins.length
+      ? r.turnins.map(tiPillLbl).join("")
+      : (r.merge ? `<span class="clink mono sub" data-sha="${esc(r.merge)}" title="${esc(r.merge_summary)}">via ${esc(r.merge.slice(0,7))}</span>` : `<span class="sub">—</span>`);
+    return `<tr>
+      <td><span class="clink mono" data-sha="${esc(r.sha)}">${esc(r.short)}</span></td>
+      <td class="num sub">${dstr(r.time)||"—"}</td>
+      <td class="sub" title="${esc(r.author)}${r.idsid?" · "+esc(r.idsid):""}">${esc(r.author)}</td>
+      <td class="tipills">${pills}</td>
+      <td class="num add">${r.binary?"":"+"+nfmt(r.add)}</td>
+      <td class="num del">${r.binary?"bin":"−"+nfmt(r.del)}</td>
+      <td class="subj" title="${esc(r.summary)}">${esc(r.summary)}</td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="${cols.length}" class="empty-tab">no commits${filter?" matching filter":""}</td></tr>`;
+  $('#cmScopeBody').innerHTML =
+    `<div class="fscope-toolbar">
+       <input id="cmFilter" placeholder="filter by sha, author, TI, subject…" value="${esc(filter)}" />
+       <span class="cnt">${rows.length}/${d.n_commits||0} commits${d.truncated?" (truncated at "+d.n_commits+")":""}</span>
+     </div>
+     <table class="st"><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>`;
+  const fEl=$('#cmFilter');
+  if(fEl){
+    fEl.addEventListener('input',()=>{ const s=fEl.selectionStart; renderCommitScope(); const n=$('#cmFilter'); if(n){ n.focus(); try{ n.setSelectionRange(s,s); }catch(_){} } });
+  }
+  $('#cmScopeBody').querySelectorAll('th[data-col]').forEach(h=>{
+    h.addEventListener('click',()=>{
+      const c=h.dataset.col;
+      sortState.commit.dir = sortState.commit.col===c ? -sortState.commit.dir : (c==="short"||c==="author"||c==="summary"?1:-1);
+      sortState.commit.col=c; renderCommitScope();
+    });
+  });
+}
+
+/* Delegated clicks from the file-scope tabs — TI pills open TI lens, sha
+   opens commit lens (same handlers used by the context pane). */
+['#tiScopeBody','#cmScopeBody'].forEach(sel=>{
+  const el=$(sel);
+  if(!el) return;
+  el.addEventListener('click',e=>{
+    const ti=e.target.closest('.ti-link'); if(ti){ openLens('ti',ti.dataset.ti); return; }
+    const cl=e.target.closest('.clink'); if(cl&&cl.dataset.sha){ openLens('commit',cl.dataset.sha); return; }
+  });
+});
 
 /* open the lens from clicks in the right context pane (event-delegated) */
 $('#ctxBody').addEventListener('click',e=>{

@@ -488,30 +488,45 @@ def enrich_commit(repo: RepoInfo, sha: str) -> dict:
                 if t not in info["turnins"]:
                     info["turnins"].append(t)
     # Introducing merge → the OLDEST merge on the ancestry path from this
-    # commit up to HEAD: the gatekeeper merge that first brought the commit
-    # into the model (user_turnin<N> / integrate_bundle<N> / ...).
+    # commit up to HEAD that identifies a turnin/bundle in its subject.
     #
-    # BEWARE: `git log -n1 --reverse` is a footgun — the count is applied
-    # *before* the reverse, so it yields the NEWEST merge on the path (≈ HEAD,
-    # i.e. the latest turnin) instead of the oldest. That made every line in
-    # every file resolve to the most recent turnin. Enumerate the ancestry-path
-    # merges and take the first after reversing (the true introducing merge).
+    # Two footguns:
+    #   1. `git log -n1 --reverse` applies the count *before* the reverse, so
+    #      it returns the NEWEST merge on the path (≈ HEAD, i.e. the latest
+    #      turnin) instead of the oldest. Enumerate and take first-after-
+    #      reverse.
+    #   2. Many repos have periodic "update from latest" merges (e.g.
+    #      `Merge /p/hdk/.../fit-jnc-a0-master-latest`) with no turnin id at
+    #      all. Those merges *do* carry the commit but they aren't its
+    #      turnin. Prefer the oldest ancestry-path merge whose subject
+    #      matches _TURNIN_RE; only fall back to the very oldest merge if no
+    #      match exists at all (so introducing-merge is never empty for a
+    #      commit that has ancestry merges).
     mrg = subprocess.run(
         ["git", "-C", repo.root, "--no-pager", "log", "--merges",
          "--ancestry-path", "--reverse",
          "--format=%H%x00%s", f"{sha}..HEAD"],
         capture_output=True, text=True, timeout=60, check=False)
     if mrg.returncode == 0 and mrg.stdout:
-        first = next((ln for ln in mrg.stdout.splitlines() if ln), "")
-        if first:
-            msha, _, msubj = first.partition("\x00")
-            info["merge"] = msha[:12]
-            info["merge_summary"] = msubj
-            for m in _TURNIN_RE.finditer(msubj):
+        lines = [ln for ln in mrg.stdout.splitlines() if ln]
+        pick = ""
+        pick_subj = ""
+        for ln in lines:
+            msha, _, msubj = ln.partition("\x00")
+            if _TURNIN_RE.search(msubj):
+                pick, pick_subj = msha, msubj
+                break
+        if not pick and lines:
+            msha, _, msubj = lines[0].partition("\x00")
+            pick, pick_subj = msha, msubj
+        if pick:
+            info["merge"] = pick[:12]
+            info["merge_summary"] = pick_subj
+            for m in _TURNIN_RE.finditer(pick_subj):
                 t = m.group(1)
                 if t not in info["turnins"]:
                     info["turnins"].append(t)
-            for h in _extract_hsds(msubj):
+            for h in _extract_hsds(pick_subj):
                 if h not in info["hsds"]:
                     info["hsds"].append(h)
     _cache_write("commit", ck, info)
@@ -793,6 +808,146 @@ def build_commit(repo: RepoInfo, sha: str, force: bool = False) -> dict:
 
 
 # --------------------------------------------------------------------------
+# File-scope views — "TI Scope" and "Commit Scope" tabs. These answer the
+# whole-file questions ("who / which TI has ever touched this file?") that the
+# range-scoped Context tab can't. To keep the two round-trip-consistent, the
+# TI list is *derived from* the commit list — never queried separately.
+# --------------------------------------------------------------------------
+_FILE_LIMIT = 2000  # cap history walk per file
+
+
+def _file_numstat(repo: RepoInfo, sha: str, rel: str) -> tuple[int, int, bool]:
+    """+add / -del the given commit made to the given file. numstat's line is
+    `add\\tdel\\tpath`; both are '-' for binary changes."""
+    r = repo._git("show", "--no-color", "--numstat", "--format=", sha,
+                  "--follow", "--", rel, timeout=45)
+    if r.returncode != 0:
+        return (0, 0, False)
+    for line in (r.stdout or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        a, d = parts[0], parts[1]
+        binary = a == "-"
+        return (0 if binary else int(a or 0),
+                0 if binary else int(d or 0),
+                binary)
+    return (0, 0, False)
+
+
+def list_file_commits(repo: RepoInfo, rel: str, follow: bool = True,
+                      include_merges: bool = False) -> list[str]:
+    """SHA list of commits that touched `rel`, newest → oldest.
+
+    Uses `--follow` so rename history is picked up (matches user expectations
+    and TeamHub). `--no-merges` by default so per-commit line counts are real
+    edits, not merge summaries."""
+    args = ["log", "--format=%H"]
+    if follow:
+        args.append("--follow")
+    if not include_merges:
+        args.append("--no-merges")
+    args += [f"-n", str(_FILE_LIMIT), "--", repo.to_git_path(rel)]
+    r = repo._git(*args, timeout=60)
+    if r.returncode != 0:
+        return []
+    return [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+
+
+def build_file_commits(repo: RepoInfo, rel: str, follow: bool = True,
+                       force: bool = False) -> dict:
+    """Commit Scope payload: every commit that touched this file, each with
+    the introducing TI(s) via enrich_commit (same code path as everywhere
+    else, so per-commit `turnins` is consistent with lens/context views)."""
+    git_path = repo.to_git_path(rel)
+    shas = list_file_commits(repo, rel, follow=follow)
+    commits: list[dict] = []
+    authors_seen: dict[str, str] = {}
+    for sha in shas:
+        if force:
+            _cache_path("commit", f"{repo.key}_{sha}").unlink(missing_ok=True)
+        info = dict(enrich_commit(repo, sha))
+        add, dele, binary = _file_numstat(repo, sha, git_path)
+        info["add"] = add
+        info["del"] = dele
+        info["binary"] = binary
+        commits.append(info)
+        authors_seen.setdefault(info["author"], info.get("mail", ""))
+    idmap = resolve_identities(list(authors_seen.items()))
+    for c in commits:
+        c["idsid"] = idmap.get(c["author"], {}).get("idsid", "")
+        c["author"] = _normalize_name(c["author"])
+    return {
+        "path": rel, "repo": repo.key, "head": repo.head,
+        "follow": follow, "n_commits": len(commits),
+        "truncated": len(commits) >= _FILE_LIMIT,
+        "commits": commits,
+    }
+
+
+def build_file_tis(repo: RepoInfo, rel: str, follow: bool = True,
+                   force: bool = False) -> dict:
+    """TI Scope payload: every TI that ever touched this file.
+
+    Derived — not queried — from the commit list, so:
+      * every TI shown has at least one commit in Commit Scope mapping to it,
+      * every commit's turnins[] appears in this list,
+      * no phantom TIs from unrelated merges (round-trip invariant C1/D3/G3).
+    """
+    cs = build_file_commits(repo, rel, follow=follow, force=force)
+    if cs.get("error"):
+        return cs
+    bucket: dict[str, dict] = {}
+    for c in cs["commits"]:
+        for tid in c.get("turnins") or []:
+            b = bucket.get(tid)
+            if b is None:
+                b = bucket[tid] = {
+                    "id": tid, "merge": c.get("merge", ""),
+                    "merge_summary": c.get("merge_summary", ""),
+                    "n_commits": 0, "add": 0, "del": 0,
+                    "first_time": c.get("time", 0),
+                    "last_time": c.get("time", 0),
+                    "authors": {},
+                    "commits": [],
+                }
+            b["n_commits"] += 1
+            b["add"] += int(c.get("add") or 0)
+            b["del"] += int(c.get("del") or 0)
+            t = int(c.get("time") or 0)
+            if t:
+                b["first_time"] = min(b["first_time"] or t, t)
+                b["last_time"] = max(b["last_time"], t)
+            b["authors"][c["author"]] = b["authors"].get(c["author"], 0) + 1
+            b["commits"].append(c["short"])
+    # Enrich each TI bucket with the true merge time from the merge sha —
+    # what the user thinks of as "when this TI shipped".
+    for tid, b in bucket.items():
+        if b["merge"]:
+            r = repo._git("show", "-s", "--format=%at%x00%s", b["merge"],
+                          timeout=15)
+            if r.returncode == 0 and r.stdout:
+                at, _, subj = r.stdout.partition("\x00")
+                b["merge_time"] = int(at.strip() or 0)
+                b["merge_summary"] = b["merge_summary"] or subj.strip()
+            else:
+                b["merge_time"] = b["last_time"]
+        else:
+            b["merge_time"] = b["last_time"]
+        b["authors"] = [
+            {"name": n, "commits": k}
+            for n, k in sorted(b["authors"].items(), key=lambda x: -x[1])
+        ]
+    tis = sorted(bucket.values(), key=lambda x: -x.get("merge_time", 0))
+    return {
+        "path": rel, "repo": repo.key, "head": repo.head,
+        "follow": follow, "n_tis": len(tis),
+        "n_commits": cs["n_commits"], "truncated": cs.get("truncated", False),
+        "tis": tis,
+    }
+
+
+# --------------------------------------------------------------------------
 # HTTP server
 # --------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
@@ -875,6 +1030,18 @@ class Handler(BaseHTTPRequestHandler):
                 return
             force = q.get("force", ["0"])[0] in ("1", "true")
             self._json(build_commit(repo, sha, force=force))
+            return
+        if path in ("/api/file/tis", "/api/file/commits"):
+            rel = q.get("path", [""])[0]
+            if not rel:
+                self._json({"error": "missing path"}, 400)
+                return
+            follow = q.get("follow", ["1"])[0] not in ("0", "false")
+            force = q.get("force", ["0"])[0] in ("1", "true")
+            if path == "/api/file/tis":
+                self._json(build_file_tis(repo, rel, follow=follow, force=force))
+            else:
+                self._json(build_file_commits(repo, rel, follow=follow, force=force))
             return
         if path in ("/api/blame", "/api/context"):
             rel = q.get("path", [""])[0]
