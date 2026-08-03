@@ -127,6 +127,7 @@ all configuration is via environment variables:
 | `VAAK_TOKEN` | random per start | Shared secret embedded in the URL and required on every send. Set it for a durable link. |
 | `VAAK_HOST` | `0.0.0.0` | Bind address (0.0.0.0 so a laptop browser can reach this host by IP). |
 | `VAAK_DRAFTS` | `~/.vaak/drafts.json` | Where per-session draft queues persist. |
+| `VAAK_AUTOFLUSH_PATH` | `~/.vaak/autoflush.json` | Where per-session **Auto-send when ready** enablement persists so a Vaak restart preserves your toggles. |
 | `VAAK_BUSY_RE` | Copilot-CLI footer regex | Regex marking a pane as *busy* when found in its tail. Override for other CLIs. |
 | `VAAK_STATUS_TAIL` | `8` | How many trailing non-blank pane lines to scan for the busy marker. |
 | `VAAK_PANE_LINES` | `1000` | Default number of lines exposed by `/api/pane` and shown in the terminal mirror (requests are capped at 5000). |

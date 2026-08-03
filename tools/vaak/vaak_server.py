@@ -79,6 +79,9 @@ PANE_LINES_DEFAULT = max(1, min(PANE_LINES_MAX, PANE_LINES_DEFAULT))
 # Where per-session drafts persist (keyed by tmux session name).
 DRAFTS_PATH = Path(os.environ.get("VAAK_DRAFTS",
                                   str(Path.home() / ".vaak" / "drafts.json")))
+# Where per-session auto-flush enablement persists (list of session names).
+AUTOFLUSH_PATH = Path(os.environ.get("VAAK_AUTOFLUSH_PATH",
+                                     str(Path.home() / ".vaak" / "autoflush.json")))
 # Seconds between auto-flush poller ticks.
 AUTOFLUSH_INTERVAL = float(os.environ.get("VAAK_AUTOFLUSH_INTERVAL", "2.0"))
 # Grace delay after a session goes ready before auto-sending the next draft.
@@ -209,6 +212,39 @@ def list_sessions() -> list[dict]:
 # a Vaak restart and re-associate with the same session.
 _drafts_lock = threading.RLock()
 _autoflush: set[str] = set()   # session names with auto-flush enabled
+
+
+def _load_autoflush() -> set[str]:
+    """Load the persisted auto-flush set from disk. Best-effort — a missing or
+    malformed file just yields an empty set."""
+    try:
+        with AUTOFLUSH_PATH.open(encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return {str(x) for x in data if isinstance(x, str) and x}
+        if isinstance(data, dict) and isinstance(data.get("sessions"), list):
+            return {str(x) for x in data["sessions"] if isinstance(x, str) and x}
+    except (OSError, json.JSONDecodeError):
+        pass
+    return set()
+
+
+def _save_autoflush() -> None:
+    """Atomically persist the current auto-flush set. Held under _drafts_lock
+    (the same lock used for the drafts store) by callers that mutate the set."""
+    try:
+        AUTOFLUSH_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = AUTOFLUSH_PATH.with_suffix(".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(sorted(_autoflush), f, indent=2)
+        tmp.replace(AUTOFLUSH_PATH)
+    except OSError:
+        pass
+
+
+# Restore the auto-flush enablement from disk so a Vaak restart doesn't clear
+# the user's "Auto-send when ready" toggles.
+_autoflush.update(_load_autoflush())
 
 
 def _load_drafts() -> dict:
@@ -549,6 +585,9 @@ def kill_session(name: str) -> tuple[bool, str]:
             if n in data:
                 del data[n]
                 _save_drafts(data)
+            if n in _autoflush:
+                _autoflush.discard(n)
+                _save_autoflush()
     except Exception:
         pass
     return True, n
@@ -633,7 +672,9 @@ def _autoflush_loop() -> None:
         for sess in list(_autoflush):
             st = sessions.get(sess)
             if st is None:                      # session gone
-                _autoflush.discard(sess)
+                with _drafts_lock:
+                    _autoflush.discard(sess)
+                    _save_autoflush()
                 last_status.pop(sess, None)
                 continue
             prev = last_status.get(sess)
@@ -1663,10 +1704,12 @@ class Handler(BaseHTTPRequestHandler):
             if not session:
                 self._json({"ok": False, "error": "session required"}, 400)
                 return
-            if on:
-                _autoflush.add(session)
-            else:
-                _autoflush.discard(session)
+            with _drafts_lock:
+                if on:
+                    _autoflush.add(session)
+                else:
+                    _autoflush.discard(session)
+                _save_autoflush()
             self._json({"ok": True, "session": session, "autoflush": on})
         else:
             self._json({"error": "not found"}, 404)
@@ -1679,6 +1722,7 @@ def main():
     print("Vaak bridge ready.")
     print(f"  tmux target : {TARGET}  ({tgt_status})")
     print(f"  drafts file : {DRAFTS_PATH}")
+    print(f"  autoflush   : {AUTOFLUSH_PATH} (persisted across restarts)")
     print(f"  open in browser (laptop): {url}")
     print(f"  local: http://localhost:{PORT}/?token={TOKEN}")
     start_autoflush()
