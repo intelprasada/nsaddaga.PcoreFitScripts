@@ -124,6 +124,7 @@ The UI is a thin client over these JSON endpoints (handy for scripting):
 | `GET /api/repos/validate?path=` | Dry-run the MODEL_ROOT validation; returns `{ok, error, root, cluster, stepping, branch, label}`. |
 | `POST /api/repos/custom` `{path}` | Register a MODEL_ROOT workarea; persisted to disk. Returns the new repo's key + resolved info. |
 | `DELETE /api/repos/custom?key=` | Remove a previously registered workarea (its key comes from the `/api/repos` list — must start with `CUSTOM`). |
+| `GET /api/repos/bases?repo=[&path=]` | List subdirectories to help pick a browse base. With `path=`, drills into that subdirectory. |
 | `GET /api/tree?repo=&path=` | One directory level under `core/fe`. |
 | `GET /api/file?repo=&path=` | File content + language + line count. |
 | `GET /api/blame?repo=&path=&start=&end=` | Per-line blame for a range. |
@@ -134,8 +135,11 @@ The UI is a thin client over these JSON endpoints (handy for scripting):
 | `GET /api/commit?repo=&sha=<sha>[&force=1]` | **Commit lens**: full metadata + message, files-changed (+/−), turnin/HSD/merge for one commit. |
 | `GET /api/health` | Liveness + repo status. |
 
-Paths in the API are relative to `core/fe`; path traversal outside the base is
-rejected.
+Paths in the API are relative to the current base; path traversal outside the
+base is rejected. **The base is per-request**: every endpoint accepts an
+optional `base=<repo-relative-path>` query param that overrides the
+server-detected default (`core/fe`). Passing `base=` (empty) means "browse
+from the repo toplevel". This is what the header's **base** input drives.
 
 ## Scope & roadmap
 

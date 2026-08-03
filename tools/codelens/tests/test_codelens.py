@@ -321,3 +321,33 @@ def test_validate_model_root_ok(tmp_path):
     v = C.validate_model_root(str(tmp_path))
     assert v["ok"] and v["cluster"] == "fit" and v["stepping"] == "jnc-a0"
     assert v["label"].startswith("fit-jnc-a0-")
+
+
+# --- RepoInfo.with_base ----------------------------------------------------
+def test_with_base_switches_and_validates(tmp_path):
+    import subprocess as sp
+    sp.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "core").mkdir()
+    (tmp_path / "core" / "fe").mkdir()
+    (tmp_path / "core" / "fe" / "cte").mkdir()
+    (tmp_path / "rtl").mkdir()
+    r = C.RepoInfo("K", str(tmp_path))
+    # default base auto-detected to "core/fe"
+    assert r.ok and r.base == "core/fe"
+    r2 = r.with_base("core/fe/cte")
+    assert r2.base == "core/fe/cte" and r2.root == r.root
+    # Original unchanged (shallow copy).
+    assert r.base == "core/fe"
+    # Sibling roots also work.
+    assert r.with_base("rtl").base == "rtl"
+    # Empty means the toplevel.
+    assert r.with_base("").base == ""
+    # No-op when equal.
+    assert r.with_base("core/fe") is r
+    # Nonexistent path rejected.
+    import pytest as _pt
+    with _pt.raises(ValueError, match="does not exist"):
+        r.with_base("does/not/exist")
+    # Traversal rejected.
+    with _pt.raises(ValueError, match="escapes"):
+        r.with_base("../outside")
