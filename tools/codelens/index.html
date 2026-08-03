@@ -757,6 +757,8 @@ function renderTiScope(){
     merge:t.merge||"",
     merge_time:t.merge_time||0,
     merge_summary:t.merge_summary||"",
+    summary:t.summary||t.merge_summary||"",
+    subjects:t.subjects||[],
     n_commits:t.n_commits||0,
     add:t.add||0, del:t.del||0,
     authors:(t.authors||[]).map(a=>a.name).join(", "),
@@ -766,6 +768,7 @@ function renderTiScope(){
       String(r.id).includes(filter)||
       r.merge_short.toLowerCase().includes(filter)||
       r.merge_summary.toLowerCase().includes(filter)||
+      r.summary.toLowerCase().includes(filter)||
       r.authors.toLowerCase().includes(filter)
     );
   }
@@ -778,7 +781,7 @@ function renderTiScope(){
     {k:"add", label:"+add", cls:"num add", w:"60px"},
     {k:"del", label:"−del", cls:"num del", w:"60px"},
     {k:"authors", label:"Authors", cls:"", w:"120px"},
-    {k:"merge_summary", label:"Merge subject", cls:"subj", w:""},
+    {k:"summary", label:"What changed", cls:"subj", w:""},
   ];
   const th=cols.map(c=>{
     const cur=col===c.k?(dir<0?'sort-desc':'sort-asc'):'sortable';
@@ -791,7 +794,7 @@ function renderTiScope(){
     <td class="num add">+${nfmt(r.add)}</td>
     <td class="num del">−${nfmt(r.del)}</td>
     <td class="sub" title="${esc(r.authors)}">${esc(r.authors)}</td>
-    <td class="subj sub" title="${esc(r.merge_summary)}">${esc(r.merge_summary||"—")}</td>
+    <td class="subj sub" title="${esc(r.subjects.length?r.subjects.join('\n'):r.merge_summary)}">${esc(r.summary||"—")}</td>
   </tr>`).join("") : `<tr><td colspan="${cols.length}" class="empty-tab">no TIs found${filter?" matching filter":""}</td></tr>`;
   $('#tiScopeBody').innerHTML =
     `<div class="fscope-toolbar">
@@ -806,7 +809,7 @@ function renderTiScope(){
   $('#tiScopeBody').querySelectorAll('th[data-col]').forEach(h=>{
     h.addEventListener('click',()=>{
       const c=h.dataset.col;
-      sortState.ti.dir = sortState.ti.col===c ? -sortState.ti.dir : (c==="id"||c==="merge_summary"||c==="authors"?1:-1);
+      sortState.ti.dir = sortState.ti.col===c ? -sortState.ti.dir : (c==="id"||c==="summary"||c==="merge_summary"||c==="authors"?1:-1);
       sortState.ti.col=c; renderTiScope();
     });
   });

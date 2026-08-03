@@ -969,6 +969,8 @@ def build_file_tis(repo: RepoInfo, rel: str, follow: bool = True,
                     "last_time": c.get("time", 0),
                     "authors": {},
                     "commits": [],
+                    "subjects": [],   # non-merge commit subjects, dedup order
+                    "_seen_subjects": set(),
                 }
             b["n_commits"] += 1
             b["add"] += int(c.get("add") or 0)
@@ -979,8 +981,15 @@ def build_file_tis(repo: RepoInfo, rel: str, follow: bool = True,
                 b["last_time"] = max(b["last_time"], t)
             b["authors"][c["author"]] = b["authors"].get(c["author"], 0) + 1
             b["commits"].append(c["short"])
+            subj = (c.get("summary") or "").strip()
+            key = subj.lower()
+            if subj and key not in b["_seen_subjects"]:
+                b["_seen_subjects"].add(key)
+                b["subjects"].append(subj)
     # Enrich each TI bucket with the true merge time from the merge sha —
-    # what the user thinks of as "when this TI shipped".
+    # what the user thinks of as "when this TI shipped" — and build a
+    # consolidated summary from the non-merge commits (much more useful than
+    # the boilerplate `Merge branch 'master' of …/user_turnin4787` string).
     for tid, b in bucket.items():
         if b["merge"]:
             r = repo._git("show", "-s", "--format=%at%x00%s", b["merge"],
@@ -997,6 +1006,10 @@ def build_file_tis(repo: RepoInfo, rel: str, follow: bool = True,
             {"name": n, "commits": k}
             for n, k in sorted(b["authors"].items(), key=lambda x: -x[1])
         ]
+        # a compact one-line rollup: first N subjects joined with " · "; UI can
+        # additionally show the full list on hover.
+        b["summary"] = " · ".join(b["subjects"][:5]) if b["subjects"] else b.get("merge_summary", "")
+        b.pop("_seen_subjects", None)
     tis = sorted(bucket.values(), key=lambda x: -x.get("merge_time", 0))
     return {
         "path": rel, "repo": repo.key, "head": repo.head,
