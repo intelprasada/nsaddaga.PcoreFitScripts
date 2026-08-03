@@ -697,3 +697,19 @@ def test_page_preserves_edit_state_across_render():
     body = D.PAGE[idx:end]
     assert "_captureEditState()" in body
     assert "_restoreEditState(" in body
+
+
+def test_page_save_edit_closes_edit_box():
+    """Regression: on save (or Enter), saveEdit must clear the .editing
+    class BEFORE renderQueue re-runs, otherwise the capture/restore
+    machinery introduced for the poll-wipe fix will silently reopen the
+    edit box on the very next re-render."""
+    idx = D.PAGE.find("async function saveEdit(")
+    assert idx > 0
+    end = D.PAGE.find("async function sendNow(", idx)
+    assert end > idx
+    body = D.PAGE[idx:end]
+    # editing class dropped BEFORE renderQueue
+    rm = body.find("row.classList.remove('editing')")
+    rq = body.find("renderQueue(")
+    assert rm > 0 and rq > 0 and rm < rq, "must clear .editing before renderQueue"
