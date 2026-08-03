@@ -682,3 +682,18 @@ def test_page_has_attach_command_ui():
     assert 'id="attachCmd"' in D.PAGE
     assert 'class="attach"' in D.PAGE
     assert 'Copy attach command' in D.PAGE
+
+
+def test_page_preserves_edit_state_across_render():
+    """Regression: renderQueue used to blow away the in-flight edit box on
+    every 4s loadDrafts poll. The fix captures & restores editing state."""
+    assert "_captureEditState" in D.PAGE
+    assert "_restoreEditState" in D.PAGE
+    # Must be wired into renderQueue, not just defined.
+    idx = D.PAGE.find("function renderQueue(")
+    assert idx > 0
+    end = D.PAGE.find("function beginEdit(", idx)
+    assert end > idx
+    body = D.PAGE[idx:end]
+    assert "_captureEditState()" in body
+    assert "_restoreEditState(" in body
