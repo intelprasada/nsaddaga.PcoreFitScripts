@@ -34,3 +34,5 @@ tools/vaak/.vaak/
 # teamhub runtime state
 tools/teamhub/.cache/
 tools/teamhub/.idsid_cache.json
+tools/codelens/.cache/
+tools/codelens/.idsid_cache.json

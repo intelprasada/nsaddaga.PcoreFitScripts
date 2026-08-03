@@ -570,6 +570,219 @@ def build_context(repo: RepoInfo, rel: str, start: int, end: int,
 
 
 # --------------------------------------------------------------------------
+# TI lens + Commit lens — per-turnin and per-commit drill-downs. Both are
+# derived live from git (fast, always available) and cached immutably: a
+# settled turnin's introducing merge and a commit's diff never change.
+# --------------------------------------------------------------------------
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git's canonical empty tree
+_INCOMING_TI_RE = re.compile(r"incoming/[^/]+/(user_turnin\d+)")
+
+
+def _ti_token_re(tid: str) -> re.Pattern:
+    """Match the turnin id as a whole number (not 4787 inside 47870)."""
+    return re.compile(rf"(?<!\d){re.escape(str(tid))}(?!\d)")
+
+
+def _short(sha: str) -> str:
+    return sha[:12]
+
+
+def resolve_turnin_merge(repo: RepoInfo, tid: str) -> str:
+    """Map a turnin id to the merge commit that introduced it into the model.
+
+    Turnin merges read like `Merge branch 'master' of …/user_turnin4787`; some
+    are also tagged `*_turnin<id>`. Returns the full merge sha or ""."""
+    tok = _ti_token_re(tid)
+    r = repo._git("log", "--merges", "-E",
+                  f"--grep=turnin[ _]?{tid}([^0-9]|$)",
+                  "--format=%H%x00%s", "-n", "40", timeout=45)
+    if r.returncode == 0:
+        for line in r.stdout.splitlines():
+            sha, _, subj = line.partition("\x00")
+            if tok.search(subj):
+                return sha
+    rt = repo._git("tag", "--list", f"*turnin{tid}", timeout=20)
+    if rt.returncode == 0:
+        for tag in rt.stdout.split():
+            if tok.search(tag):
+                rp = repo._git("rev-list", "-n", "1", tag, timeout=20)
+                if rp.returncode == 0 and rp.stdout.strip():
+                    return rp.stdout.strip()
+    return ""
+
+
+def _diff_files(repo: RepoInfo, base: str, target: str, timeout: int = 90) -> list[dict]:
+    """List files changed between base..target with +/- line counts.
+
+    numstat supplies adds/dels ('-' for binary); name-status supplies the change
+    letter. Rename detection is intentionally off so the two line up by path."""
+    files: list[dict] = []
+    idx: dict[str, dict] = {}
+    r = repo._git("diff", "--numstat", "--no-color", base, target, timeout=timeout)
+    for line in (r.stdout or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        a, d, path = parts[0], parts[1], "\t".join(parts[2:])
+        rec = {"path": path, "add": 0 if a == "-" else int(a or 0),
+               "del": 0 if d == "-" else int(d or 0),
+               "binary": a == "-", "status": "M"}
+        idx[path] = rec
+        files.append(rec)
+    r2 = repo._git("diff", "--name-status", "--no-color", base, target, timeout=timeout)
+    for line in (r2.stdout or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        status, path = parts[0][:1], parts[-1]
+        if path in idx:
+            idx[path]["status"] = status
+        else:
+            rec = {"path": path, "add": 0, "del": 0, "binary": False, "status": status}
+            idx[path] = rec
+            files.append(rec)
+    files.sort(key=lambda f: (-(f["add"] + f["del"]), f["path"]))
+    return files
+
+
+def _files_stat(files: list[dict]) -> dict:
+    return {"files": len(files),
+            "add": sum(f["add"] for f in files),
+            "del": sum(f["del"] for f in files)}
+
+
+def build_ti(repo: RepoInfo, tid: str, force: bool = False) -> dict:
+    """TI lens payload: the introducing merge, the commits it brought in, the
+    files it changed, referenced HSDs and contributing authors — the TeamHub
+    turnin drill-down for a single turnin, derived from git."""
+    ck = f"{repo.key}_{tid}"
+    if not force:
+        cached = _cache_read("ti", ck)
+        if cached is not None:
+            return cached
+
+    merge = resolve_turnin_merge(repo, tid)
+    if not merge:
+        return {"error": "turnin not found in this repo's history",
+                "id": tid, "repo": repo.key, "head": repo.head}
+
+    meta = repo._git("show", "-s",
+                     "--format=%H%x00%an%x00%ae%x00%at%x00%s%x00%b%x00%P", merge)
+    msha, m_author, m_mail, m_subj, m_body = merge, "", "", "", ""
+    m_time, parents = 0, []
+    if meta.returncode == 0 and meta.stdout:
+        p = meta.stdout.split("\x00")
+        if len(p) >= 7:
+            msha, m_author, m_mail, at, m_subj, m_body, par = p[:7]
+            m_time = int(at or 0)
+            parents = par.split()
+
+    mi = _INCOMING_TI_RE.search(m_subj)
+    incoming = mi.group(1) if mi else ""
+
+    commits: list[dict] = []
+    hsd_text = f"{m_subj}\n{m_body}"
+    if len(parents) >= 2:
+        rc = repo._git("log", f"{merge}^1..{merge}^2",
+                       "--format=%H%x00%an%x00%at%x00%s%x00%P", "-n", "500")
+        for line in (rc.stdout or "").splitlines():
+            f = line.split("\x00")
+            if len(f) < 5:
+                continue
+            sha_, an_, at_, subj_, par_ = f[:5]
+            commits.append({"sha": sha_, "short": _short(sha_), "author": an_,
+                            "time": int(at_ or 0), "summary": subj_,
+                            "merge": len(par_.split()) > 1})
+            hsd_text += f"\n{subj_}"
+    hsds = _extract_hsds(hsd_text)
+
+    base = f"{merge}^1" if parents else EMPTY_TREE
+    files = _diff_files(repo, base, merge)
+
+    authors_seen: dict[str, str] = {}
+    for c in commits:
+        authors_seen.setdefault(c["author"], "")
+    authors_seen.setdefault(m_author, m_mail)
+    idmap = resolve_identities(list(authors_seen.items()))
+    authors = []
+    for name, mail in authors_seen.items():
+        ident = idmap.get(name, {})
+        authors.append({"name": _normalize_name(name), "raw": name,
+                        "idsid": ident.get("idsid", ""),
+                        "commits": sum(1 for c in commits
+                                       if c["author"] == name and not c["merge"])})
+    authors.sort(key=lambda a: -a["commits"])
+    for c in commits:
+        c["idsid"] = idmap.get(c["author"], {}).get("idsid", "")
+        c["author"] = _normalize_name(c["author"])
+
+    tag = ""
+    rtag = repo._git("tag", "--points-at", merge, timeout=20)
+    if rtag.returncode == 0:
+        for t in rtag.stdout.split():
+            if _ti_token_re(tid).search(t):
+                tag = t
+                break
+
+    payload = {
+        "id": tid, "repo": repo.key, "head": repo.head,
+        "incoming": incoming, "tag": tag,
+        "status": "In model" if tag else "Merged",
+        "merge": {"sha": msha, "short": _short(msha),
+                  "author": _normalize_name(m_author),
+                  "idsid": idmap.get(m_author, {}).get("idsid", ""),
+                  "time": m_time, "summary": m_subj},
+        "n_commits": sum(1 for c in commits if not c["merge"]),
+        "commits": commits,
+        "files": files,
+        "stat": _files_stat(files),
+        "hsds": hsds,
+        "authors": authors,
+    }
+    _cache_write("ti", ck, payload)
+    return payload
+
+
+def build_commit(repo: RepoInfo, sha: str, force: bool = False) -> dict:
+    """Commit lens payload: full metadata + message, the files it changed with
+    per-file +/- counts, and the turnin/HSD/merge it maps to."""
+    rp = repo._git("rev-parse", "--verify", f"{sha}^{{commit}}", timeout=20)
+    if rp.returncode != 0 or not rp.stdout.strip():
+        return {"error": "commit not found", "sha": sha, "repo": repo.key,
+                "head": repo.head}
+    full = rp.stdout.strip()
+    ck = f"{repo.key}_{full}"
+    if not force:
+        cached = _cache_read("commitfull", ck)
+        if cached is not None:
+            return cached
+
+    info = enrich_commit(repo, full)
+    rb = repo._git("show", "-s", "--format=%b", full, timeout=30)
+    body = rb.stdout.rstrip("\n") if rb.returncode == 0 else ""
+
+    rpar = repo._git("rev-list", "--parents", "-n", "1", full, timeout=20)
+    parents = rpar.stdout.split()[1:] if rpar.returncode == 0 and rpar.stdout else []
+    base = parents[0] if parents else EMPTY_TREE
+    files = _diff_files(repo, base, full)
+
+    idmap = resolve_identities([(info["author"], info.get("mail", ""))])
+    payload = {
+        "sha": full, "short": _short(full), "repo": repo.key, "head": repo.head,
+        "author": _normalize_name(info["author"]), "raw_author": info["author"],
+        "idsid": idmap.get(info["author"], {}).get("idsid", ""),
+        "mail": info.get("mail", ""), "time": info.get("time", 0),
+        "summary": info.get("summary", ""), "body": body,
+        "is_merge": len(parents) > 1, "parents": [_short(p) for p in parents],
+        "turnins": info.get("turnins", []), "hsds": info.get("hsds", []),
+        "merge": info.get("merge", ""), "merge_summary": info.get("merge_summary", ""),
+        "files": files, "stat": _files_stat(files),
+    }
+    _cache_write("commitfull", ck, payload)
+    return payload
+
+
+# --------------------------------------------------------------------------
 # HTTP server
 # --------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
@@ -636,6 +849,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "missing path"}, 400)
                 return
             self._json(read_file(repo, rel))
+            return
+        if path == "/api/ti":
+            tid = (q.get("id", [""])[0] or "").strip()
+            if not tid.isdigit():
+                self._json({"error": "bad turnin id"}, 400)
+                return
+            force = q.get("force", ["0"])[0] in ("1", "true")
+            self._json(build_ti(repo, tid, force=force))
+            return
+        if path == "/api/commit":
+            sha = (q.get("sha", [""])[0] or "").strip()
+            if not re.match(r"^[0-9a-fA-F]{4,40}$", sha):
+                self._json({"error": "bad sha"}, 400)
+                return
+            force = q.get("force", ["0"])[0] in ("1", "true")
+            self._json(build_commit(repo, sha, force=force))
             return
         if path in ("/api/blame", "/api/context"):
             rel = q.get("path", [""])[0]
