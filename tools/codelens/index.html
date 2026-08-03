@@ -217,6 +217,17 @@
   .chip{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;
     background:var(--panel2);border:1px solid var(--border);margin:0 5px 5px 0}
   .chip .id{color:var(--muted);margin-left:5px}
+  /* inline diff view (clicked from Files-changed table) */
+  .diffbox{border:1px solid var(--border);border-radius:6px;background:#0b1120;
+    font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.45;
+    overflow:auto;max-height:none}
+  .dl{padding:0 8px;white-space:pre;min-height:1.45em}
+  .dl.meta{color:#8b949e;background:#111827}
+  .dl.head{color:#c9d1d9;background:#0f172a;font-weight:600}
+  .dl.hunk{color:#a5b4fc;background:#151f37}
+  .dl.add{color:#7ee2a8;background:#0f2016}
+  .dl.del{color:#ff9a94;background:#2b1416}
+  .dl.ctx{color:#c9d1d9}
 </style>
 </head>
 <body>
@@ -520,11 +531,12 @@ function fbar(add,del){
   return `<span class="fbar" style="width:${g}px;background:#3fb950"></span>`+
          `<span class="fbar" style="width:${r}px;background:#f85149;margin-left:1px"></span>`;
 }
-function filesTable(files){
+function filesTable(files, sha){
   if(!files||!files.length) return `<div class="lens-empty">no files</div>`;
+  const shaAttr = sha?` data-sha="${esc(sha)}"`:"";
   const rows=files.map(f=>`<tr>
     <td><span class="stt ${esc(f.status||'M')}">${esc(f.status||'M')}</span></td>
-    <td><span class="flink" data-path="${esc(f.path)}" title="open ${esc(f.path)}">${esc(f.path)}</span></td>
+    <td><span class="flink" data-path="${esc(f.path)}"${shaAttr} title="view diff for ${esc(f.path)}">${esc(f.path)}</span></td>
     <td class="num">${f.binary?'<span class="sub">binary</span>':
       `<span class="add">+${f.add}</span> <span class="del">-${f.del}</span> ${fbar(f.add,f.del)}`}</td>
   </tr>`).join("");
@@ -560,7 +572,12 @@ function closeLens(){ const ov=$('#lensOv'); if(ov) ov.classList.remove('open');
 function onLensClick(e){
   const ti=e.target.closest('.ti-link'); if(ti){ pushLens('ti',ti.dataset.ti); return; }
   const cl=e.target.closest('.clink'); if(cl&&cl.dataset.sha){ pushLens('commit',cl.dataset.sha); return; }
-  const fl=e.target.closest('.flink'); if(fl&&fl.dataset.path){ openFileFromLens(fl.dataset.path); return; }
+  const fl=e.target.closest('.flink');
+  if(fl&&fl.dataset.path){
+    if(fl.dataset.sha){ pushLens('diff',{sha:fl.dataset.sha, path:fl.dataset.path}); }
+    else { openFileFromLens(fl.dataset.path); }
+    return;
+  }
 }
 function onCrumbClick(e){
   const c=e.target.closest('.crumb'); if(!c) return;
@@ -579,11 +596,20 @@ async function renderLensTop(){
   const ov=$('#lensOv'); ov.classList.add('open');
   const top=lensStack[lensStack.length-1];
   const nav=ov.querySelector('.lens-nav'), bd=ov.querySelector('.lens-bd');
-  ov.querySelector('.lens-hd .ic').textContent = top.kind==='ti'?'🔀':'◆';
-  ov.querySelector('.lens-hd .ti').innerHTML = top.kind==='ti'
-    ? `TI ${esc(top.key)}` : `commit <span class="mono">${esc(String(top.key).slice(0,12))}</span>`;
+  const icon = top.kind==='ti'?'🔀':top.kind==='diff'?'±':'◆';
+  ov.querySelector('.lens-hd .ic').textContent = icon;
+  const hdrHtml = top.kind==='ti'
+    ? `TI ${esc(top.key)}`
+    : top.kind==='diff'
+      ? `diff <span class="mono">${esc(String(top.key.sha).slice(0,12))}</span> <span class="sub">·</span> <span class="mono">${esc(basename(top.key.path))}</span>`
+      : `commit <span class="mono">${esc(String(top.key).slice(0,12))}</span>`;
+  ov.querySelector('.lens-hd .ti').innerHTML = hdrHtml;
   nav.innerHTML = lensStack.map((s,i)=>{
-    const label = s.kind==='ti'?`TI ${esc(s.key)}`:`commit ${esc(String(s.key).slice(0,12))}`;
+    const label = s.kind==='ti'
+      ? `TI ${esc(s.key)}`
+      : s.kind==='diff'
+        ? `diff ${esc(String(s.key.sha).slice(0,7))}:${esc(basename(s.key.path))}`
+        : `commit ${esc(String(s.key).slice(0,12))}`;
     const last = i===lensStack.length-1;
     return `<span class="${last?'cur':'crumb'}" data-i="${i}">${label}</span>`+(last?'':' <span class="sep">›</span> ');
   }).join("");
@@ -592,6 +618,9 @@ async function renderLensTop(){
     if(top.kind==='ti'){
       const d=await api(`/api/ti?${repoQ()}&id=${encodeURIComponent(top.key)}`);
       bd.innerHTML = d.error?`<div class="lens-empty">${esc(d.error)} — turnin ${esc(top.key)}</div>`:tiLensHtml(d);
+    }else if(top.kind==='diff'){
+      const d=await api(`/api/diff?${repoQ()}&sha=${encodeURIComponent(top.key.sha)}&path=${encodeURIComponent(top.key.path)}`);
+      bd.innerHTML = d.error?`<div class="lens-empty">${esc(d.error)}</div>`:diffLensHtml(d);
     }else{
       const d=await api(`/api/commit?${repoQ()}&sha=${encodeURIComponent(top.key)}`);
       bd.innerHTML = d.error?`<div class="lens-empty">${esc(d.error)}</div>`:commitLensHtml(d);
@@ -599,6 +628,7 @@ async function renderLensTop(){
   }catch(e){ bd.innerHTML=`<div class="lens-empty">${esc(e.message)}</div>`; }
   bd.scrollTop=0;
 }
+function basename(p){ const i=String(p||"").lastIndexOf('/'); return i<0?String(p||""):p.slice(i+1); }
 function tiLensHtml(d){
   const m=d.merge||{}, st=d.stat||{files:0,add:0,del:0};
   let h=`<div class="lens-meta">`;
@@ -616,7 +646,7 @@ function tiLensHtml(d){
   h+=`<h4>HSDs <span class="sub">${(d.hsds||[]).length}</span></h4>`+
      ((d.hsds||[]).length?d.hsds.map(hsdLinkL).join(""):`<span class="lens-empty">none referenced</span>`);
   h+=`<h4>Commits <span class="sub">${(d.commits||[]).length}</span></h4>`+commitsTable(d.commits);
-  h+=`<h4>Files changed <span class="sub">${(d.files||[]).length}</span></h4>`+filesTable(d.files);
+  h+=`<h4>Files changed <span class="sub">${(d.files||[]).length}</span></h4>`+filesTable(d.files, m.sha);
   return h;
 }
 function commitLensHtml(d){
@@ -633,7 +663,34 @@ function commitLensHtml(d){
   if((d.hsds||[]).length) h+=`<h4>HSDs</h4>`+d.hsds.map(hsdLinkL).join("");
   h+=`<h4>Files changed <span class="sub">${st.files}</span></h4>`;
   h+=`<div class="lens-stat"><span class="add">+${nfmt(st.add)}</span><span class="del">-${nfmt(st.del)}</span></div>`;
-  h+=filesTable(d.files);
+  h+=filesTable(d.files, d.sha);
+  return h;
+}
+
+function diffLensHtml(d){
+  if(d.empty){
+    return `<div class="lens-meta"><div><div class="k">File</div><div class="v mono">${esc(d.path)}</div></div>`+
+      `<div><div class="k">Commit</div><div class="v mono">${esc(d.short)}${d.is_merge?' <span class="badge merge">merge</span>':''}</div></div></div>`+
+      `<div class="lens-empty">no textual diff — file may be unchanged in this commit or the change is renamed/binary</div>`;
+  }
+  // render the patch line-by-line so we can color-code and preserve alignment.
+  const lines=(d.diff||"").split("\n");
+  const rows=lines.map(ln=>{
+    let cls="ctx";
+    if(ln.startsWith("diff --git")||ln.startsWith("index ")||ln.startsWith("new file")||ln.startsWith("deleted file")||ln.startsWith("similarity")||ln.startsWith("rename ")) cls="meta";
+    else if(ln.startsWith("+++")||ln.startsWith("---")) cls="head";
+    else if(ln.startsWith("@@")) cls="hunk";
+    else if(ln.startsWith("+")) cls="add";
+    else if(ln.startsWith("-")) cls="del";
+    return `<div class="dl ${cls}">${esc(ln)||"&nbsp;"}</div>`;
+  }).join("");
+  let h=`<div class="lens-meta">`;
+  h+=`<div><div class="k">File</div><div class="v mono" style="word-break:break-all">${esc(d.path)}</div></div>`;
+  h+=`<div><div class="k">Commit</div><div class="v mono"><span class="clink" data-sha="${esc(d.sha)}">${esc(d.short)}</span>${d.is_merge?' <span class="badge merge">merge</span>':''}</div></div>`;
+  if(d.parents&&d.parents.length) h+=`<div><div class="k">Base</div><div class="v mono">${d.parents.map(esc).join(' ')}${d.is_merge?' <span class="sub">(first-parent)</span>':''}</div></div>`;
+  h+=`<div><div class="k">Changes</div><div class="v"><span class="add">+${nfmt(d.add||0)}</span> <span class="del">−${nfmt(d.del||0)}</span>${d.binary?' <span class="sub">binary</span>':''}${d.truncated?' <span class="sub">(truncated)</span>':''}</div></div>`;
+  h+=`</div>`;
+  h+=`<div class="diffbox">${rows}</div>`;
   return h;
 }
 
@@ -700,6 +757,8 @@ function renderTiScope(){
     merge:t.merge||"",
     merge_time:t.merge_time||0,
     merge_summary:t.merge_summary||"",
+    summary:t.summary||t.merge_summary||"",
+    subjects:t.subjects||[],
     n_commits:t.n_commits||0,
     add:t.add||0, del:t.del||0,
     authors:(t.authors||[]).map(a=>a.name).join(", "),
@@ -709,6 +768,7 @@ function renderTiScope(){
       String(r.id).includes(filter)||
       r.merge_short.toLowerCase().includes(filter)||
       r.merge_summary.toLowerCase().includes(filter)||
+      r.summary.toLowerCase().includes(filter)||
       r.authors.toLowerCase().includes(filter)
     );
   }
@@ -721,7 +781,7 @@ function renderTiScope(){
     {k:"add", label:"+add", cls:"num add", w:"60px"},
     {k:"del", label:"−del", cls:"num del", w:"60px"},
     {k:"authors", label:"Authors", cls:"", w:"120px"},
-    {k:"merge_summary", label:"Merge subject", cls:"subj", w:""},
+    {k:"summary", label:"What changed", cls:"subj", w:""},
   ];
   const th=cols.map(c=>{
     const cur=col===c.k?(dir<0?'sort-desc':'sort-asc'):'sortable';
@@ -734,7 +794,7 @@ function renderTiScope(){
     <td class="num add">+${nfmt(r.add)}</td>
     <td class="num del">−${nfmt(r.del)}</td>
     <td class="sub" title="${esc(r.authors)}">${esc(r.authors)}</td>
-    <td class="subj sub" title="${esc(r.merge_summary)}">${esc(r.merge_summary||"—")}</td>
+    <td class="subj sub" title="${esc(r.subjects.length?r.subjects.join('\n'):r.merge_summary)}">${esc(r.summary||"—")}</td>
   </tr>`).join("") : `<tr><td colspan="${cols.length}" class="empty-tab">no TIs found${filter?" matching filter":""}</td></tr>`;
   $('#tiScopeBody').innerHTML =
     `<div class="fscope-toolbar">
@@ -749,7 +809,7 @@ function renderTiScope(){
   $('#tiScopeBody').querySelectorAll('th[data-col]').forEach(h=>{
     h.addEventListener('click',()=>{
       const c=h.dataset.col;
-      sortState.ti.dir = sortState.ti.col===c ? -sortState.ti.dir : (c==="id"||c==="merge_summary"||c==="authors"?1:-1);
+      sortState.ti.dir = sortState.ti.col===c ? -sortState.ti.dir : (c==="id"||c==="summary"||c==="merge_summary"||c==="authors"?1:-1);
       sortState.ti.col=c; renderTiScope();
     });
   });

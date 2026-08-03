@@ -187,15 +187,15 @@ def test_build_file_tis_derives_from_commits(monkeypatch):
     fake_commits = {
         "n_commits": 3, "commits": [
             {"sha": "a"*40, "short": "a"*12, "author": "X", "time": 100,
-             "summary": "s1", "turnins": ["4787"], "hsds": [],
+             "summary": "fix CTE hazard", "turnins": ["4787"], "hsds": [],
              "merge": "m1"*6, "merge_summary": "Merge user_turnin4787",
              "add": 5, "del": 2, "binary": False},
             {"sha": "b"*40, "short": "b"*12, "author": "Y", "time": 200,
-             "summary": "s2", "turnins": ["4787", "78"], "hsds": [],
+             "summary": "add coverage bin", "turnins": ["4787", "78"], "hsds": [],
              "merge": "m1"*6, "merge_summary": "Merge user_turnin4787",
              "add": 1, "del": 0, "binary": False},
             {"sha": "c"*40, "short": "c"*12, "author": "X", "time": 50,
-             "summary": "s3", "turnins": [],  # <- no TI → must not contribute
+             "summary": "noop", "turnins": [],  # <- no TI → must not contribute
              "hsds": [], "merge": "",  "merge_summary": "",
              "add": 3, "del": 3, "binary": False},
         ],
@@ -226,6 +226,12 @@ def test_build_file_tis_derives_from_commits(monkeypatch):
     assert by_id["4787"]["add"] == 6                 # +5 +1
     assert by_id["4787"]["del"] == 2
     assert d["n_commits"] == 3
+    # Consolidated summary is built from non-merge commit subjects, not the
+    # merge boilerplate — and dedupes across commits.
+    assert set(by_id["4787"]["subjects"]) == {"fix CTE hazard", "add coverage bin"}
+    assert "fix CTE hazard" in by_id["4787"]["summary"]
+    assert "add coverage bin" in by_id["4787"]["summary"]
+    assert "Merge" not in by_id["4787"]["summary"]
 
 
 def test_build_file_tis_empty_commits(monkeypatch):
