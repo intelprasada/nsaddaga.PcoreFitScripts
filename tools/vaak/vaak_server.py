@@ -740,6 +740,16 @@ header .sub{color:#8b949e;font-size:12px}
  opacity:0;transition:opacity .12s,color .12s,border-color .12s}
 .sess:hover .kill,.sess.active .kill{opacity:1}
 .sess .kill:hover{color:#f85149;border-color:#f85149;background:#f851491a}
+.sess .attach{flex:0 0 auto;background:transparent;border:1px solid transparent;color:#8b949e;
+ border-radius:6px;padding:0 6px;font-size:13px;line-height:20px;cursor:pointer;font-weight:600;
+ opacity:0;transition:opacity .12s,color .12s,border-color .12s}
+.sess:hover .attach,.sess.active .attach{opacity:1}
+.sess .attach:hover{color:#58a6ff;border-color:#58a6ff;background:#58a6ff1a}
+.stbar #attachCmd{display:none;background:transparent;border:1px solid #30363d;color:#c9d1d9;
+ border-radius:6px;padding:2px 10px;font-size:12px;cursor:pointer;font-family:inherit}
+.stbar #attachCmd:hover{border-color:#58a6ff;color:#58a6ff;background:#58a6ff14}
+.stbar #attachCmd code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:#8b949e;margin-left:6px}
+.stbar #attachCmd:hover code{color:#79c0ff}
 main{flex:1;display:flex;flex-direction:column;gap:10px;padding:14px;min-width:0;overflow:auto}
 .stbar{display:flex;align-items:center;gap:8px;font-size:14px}
 .stbar .pill{font-size:12px;padding:2px 9px;border-radius:11px;border:1px solid #30363d}
@@ -969,6 +979,7 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
       <b id="selName">no session</b>
       <span class="pill" id="selStatus">\u2014</span>
       <span class="hint" id="selCmd"></span>
+      <button id="attachCmd" title="Copy this command to attach to the tmux session from any terminal">\u29C9 Copy attach command <code></code></button>
     </div>
     <textarea id="msg" placeholder="Click here, press Win+H, and speak\u2026 Enter sends now; or Add to queue while the session is busy."></textarea>
     <div class="row">
@@ -1149,11 +1160,19 @@ function renderNav(){
       `<span class="dot ${s.status}"></span>`+
       `<span class="nm">${esc(s.name)} <span class="cmd">${esc(s.command)}</span></span>`+
       `<span class="badge ${s.drafts?'':'zero'}">${s.drafts}</span>`+
+      `<button class="attach" title="Copy: tmux attach -t ${esc(s.name)}" aria-label="Copy tmux attach command for ${esc(s.name)}">\u29C9</button>`+
       `<button class="kill" title="Kill this tmux session (tmux kill-session)" aria-label="Kill session ${esc(s.name)}">\u2715</button>`;
     const bx=d.querySelector('.bx');
     bx.onclick=(e)=>{e.stopPropagation();
       if(bx.checked)bcast.add(s.name); else bcast.delete(s.name); updateBcastBtn();};
     const kb=d.querySelector('.kill');
+    const ab=d.querySelector('.attach');
+    ab.onclick=async(e)=>{e.stopPropagation();
+      const cmd='tmux attach -t '+s.name;
+      if(await copyText(cmd))toast('Copied: '+cmd);
+      else toast('Copy failed \u2014 select from log','err');
+      logline('attach cmd: '+cmd,'ok');
+    };
     kb.onclick=async(e)=>{
       e.stopPropagation();
       const n=s.name;
@@ -1165,7 +1184,7 @@ function renderNav(){
         const r=await api('/api/kill_session',{session:n});
         if(r&&r.ok){toast(`Killed session ${n}`);logline('killed session '+n,'ok');
           bcast.delete(n);
-          if(sel===n){sel='';$('#selName').textContent='no session';$('#selStatus').textContent='\u2014';$('#selStatus').className='pill';$('#selCmd').textContent='';$('#pane').textContent='';$('#queue').innerHTML='';}
+          if(sel===n){sel='';$('#selName').textContent='no session';$('#selStatus').textContent='\u2014';$('#selStatus').className='pill';$('#selCmd').textContent='';$('#attachCmd').style.display='none';$('#pane').textContent='';$('#queue').innerHTML='';}
           loadSessions();
         } else {toast(`Kill failed: ${r&&r.error||'unknown'}`,'err');}
       }catch(err){toast('Kill error: '+err.message,'err');}
@@ -1180,6 +1199,9 @@ function renderStatus(s){
   const p=$('#selStatus');p.textContent=s.status;p.className='pill '+s.status;
   $('#selCmd').textContent=s.command?('['+s.command+']'):'';
   $('#autoflush').checked=!!s.autoflush;
+  const ac=$('#attachCmd');
+  if(s.name){ac.style.display='inline-flex';ac.querySelector('code').textContent='tmux attach -t '+s.name;}
+  else{ac.style.display='none';}
 }
 
 async function loadDrafts(){
@@ -1346,6 +1368,13 @@ $('#bcastAll').onclick=()=>selectBcast('all');
 $('#bcastReady').onclick=()=>selectBcast('ready');
 $('#bcastNone').onclick=()=>{bcast.clear();renderNav();};
 $('#togglePane').onclick=()=>{paneVisible=!paneVisible;updatePaneVisibility();};
+$('#attachCmd').onclick=async()=>{
+  if(!sel)return;
+  const cmd='tmux attach -t '+sel;
+  if(await copyText(cmd))toast('Copied: '+cmd);
+  else toast('Copy failed \u2014 select from log','err');
+  logline('attach cmd: '+cmd,'ok');
+};
 $('#paneLines').value=String(paneLines);
 $('#paneLines').onchange=()=>{paneLines=parseInt($('#paneLines').value,10)||1000;
   localStorage.setItem('vaakPaneLines',String(paneLines));loadPane();};
