@@ -255,3 +255,34 @@ def test_broadcast_send_to_multiple_sessions():
 
 def test_broadcast_send_empty_targets():
     assert D.broadcast_send([], "echo hi", submit=True) == []
+
+
+def test_send_key_rejects_unknown():
+    ok, msg = D.send_key("whatever", "rm -rf /")
+    assert ok is False and "not allowed" in msg
+
+
+@pytest.mark.skipif(not _HAS_TMUX, reason="tmux not installed")
+def test_send_key_ctrl_c_interrupts():
+    sess = "vaak_key_%s" % uuid.uuid4().hex[:8]
+    subprocess.run(["tmux", "new", "-d", "-s", sess], check=True)
+    try:
+        # Block the shell on a long sleep, then Ctrl-C it. If the interrupt
+        # works, the prompt is freed and a follow-up echo prints within our
+        # short window; if it didn't, the echo would queue behind the 60s sleep.
+        subprocess.run(["tmux", "send-keys", "-t", sess, "-l", "--", "sleep 60"],
+                       check=True)
+        subprocess.run(["tmux", "send-keys", "-t", sess, "Enter"], check=True)
+        time.sleep(0.8)
+        ok, tk = D.send_key(sess, "C-c")
+        assert ok is True and tk == "C-c"
+        time.sleep(0.5)
+        marker = "VAAK_INT_%s" % uuid.uuid4().hex[:6]
+        D.inject(sess, "echo %s" % marker, submit=True)
+        time.sleep(0.8)
+        cap = subprocess.run(["tmux", "capture-pane", "-p", "-t", sess],
+                             capture_output=True, text=True, check=True)
+        # The marker's OUTPUT line (bare marker) proves the prompt was freed.
+        assert any(ln.strip() == marker for ln in cap.stdout.splitlines())
+    finally:
+        subprocess.run(["tmux", "kill-session", "-t", sess], check=False)

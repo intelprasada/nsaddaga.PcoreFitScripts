@@ -106,6 +106,7 @@ survive a Vaak restart and re-associate with the same session.
 | **Session nav / Rescan** | Left bar; click a session to target it. Status dot = busy/ready; badge = queued drafts. Auto-rescans every ~2.5s. |
 | **Enter = send now** | Enter sends the box to the selected session immediately (Shift+Enter inserts a newline). |
 | **Submit in CLI** | Off = only type the text into the CLI, don't press Enter — lets you stitch several dictations into one prompt, then submit manually. |
+| **^C / Esc** | Send a real Ctrl-C (interrupt) or Escape key press to the selected session — e.g. to cancel a running command or stop the CLI's current action. |
 | **Keep focus** | Refocus the box after sending so you can immediately dictate again. |
 | **Alert when ready** | Flash title + beep + toast when a watched session changes busy → ready. Persisted in this browser. |
 | **Show/Hide terminal mirror** | Toggle the read-only selected-pane mirror. Persisted in this browser. |
@@ -147,6 +148,7 @@ Everything below returns JSON.
 | `GET /api/pane?target=&lines=` | Last captured tmux pane lines as `{target, lines}`. `lines` defaults to `VAAK_PANE_LINES` and is capped at 5000. |
 | `GET /api/drafts?session=` | Queued drafts for a session + its autoflush flag. |
 | `GET /api/info` | Default target, its resolved pane id, and all tmux panes as `[{id,label}]`. |
+| `POST /api/key` | Body `{token, target?, key}` — sends a real control key press (allowlist: `C-c`, `Escape`, `C-d`, `C-u`, `Enter`, `Up`, `Down`). Unlike `/api/send`, the key is interpreted, not typed literally. |
 | `POST /api/broadcast` | Body `{token, text, targets:[names], submit?}` — sends `text` to every target; returns per-target results. |
 | `POST /api/send` | `{token, text, target?, submit?}` — types `text` into `target` now. |
 | `POST /api/drafts/add` | `{token, session, text}` — enqueue a draft. |
@@ -169,6 +171,38 @@ curl -s -XPOST "http://localhost:8781/api/drafts/add" \
 `bin/vaak` is wired into `utils/aliases.csh`, so after the standard core-tools
 setup you can simply run `vaak` from any shell. Set a stable `VAAK_TOKEN` in your
 `~/.aliases` to keep the URL constant across restarts.
+
+## Permanent tokens (agent-session reference)
+
+When you restart Vaak without an explicit `VAAK_TOKEN`, a fresh random token is
+generated on every launch, which invalidates the browser tab you had open (every
+send returns `{"error":"invalid token"}`). To make the URL durable, each user
+pins a permanent token via `VAAK_TOKEN`. This table is the canonical reference
+for AI-agent sessions (Copilot CLI, etc.) so a future session can restart Vaak
+without breaking the user's bookmarked tab.
+
+| User (idsid) | Permanent token | Bookmark URL (localhost, port 8781) |
+|--------------|-----------------|-------------------------------------|
+| `nsaddaga`   | `vaak-nsaddaga-7h2k` | `http://localhost:8781/?token=vaak-nsaddaga-7h2k` |
+
+**How to (re)start Vaak with the user's permanent token:**
+
+```tcsh
+# tcsh
+setenv VAAK_TOKEN vaak-nsaddaga-7h2k
+bin/vaak                           # or: bin/vaak --port 8781
+```
+
+```bash
+# bash / when backgrounding
+kill $(pgrep -f 'vaak_server.py') 2>/dev/null; sleep 1
+VAAK_TOKEN=vaak-nsaddaga-7h2k nohup python3 vaak_server.py --port 8781 \
+  > /tmp/vaak.log 2>&1 &
+```
+
+The token is a shared secret — treat the URL like a password. Anyone with the
+URL can inject into the user's tmux sessions, so do not paste it into commit
+messages, PRs, chat logs outside this repo, or anywhere public.
 
 ## Security & behavior notes
 
