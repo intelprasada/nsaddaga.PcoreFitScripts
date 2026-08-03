@@ -980,7 +980,9 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
 #mgCard .mg-alts{margin-top:16px}
 #mgCard .mg-alts .h{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:#94a3b8;margin-bottom:8px;font-weight:600}
 #mgCard .mg-chips{display:flex;gap:8px;flex-wrap:wrap}
-#mgCard .mg-chip{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;padding:5px 10px;border-radius:8px;background:#1b2230;border:1px solid #2a3446;color:#cbd5e1}
+#mgCard .mg-chip{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;padding:5px 10px;border-radius:8px;background:#1b2230;border:1px solid #2a3446;color:#cbd5e1;cursor:pointer;transition:border-color .12s,color .12s,background .12s;font-weight:600}
+#mgCard .mg-chip:hover,#mgCard .mg-chip:focus{border-color:#58a6ff;color:#79c0ff;background:#0d1b30;outline:none}
+#mgCard .mg-chip:active{transform:translateY(1px)}
 #mgCard .mg-cmd{margin-top:auto;padding-top:18px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;position:relative;z-index:1}
 #mgCard .mg-cmdbox{font-family:ui-monospace,Consolas,monospace;font-size:14px;background:#0a0d13;border:1px solid #2a3446;border-radius:9px;padding:9px 12px;color:#a5d6ff;flex:1;min-width:200px}
 #mgCard .mg-copy{background:#1b2230;border:1px solid #2a3446;color:#e6edf3;border-radius:9px;padding:9px 14px;font-weight:600;cursor:pointer;transition:border-color .15s,background .15s}
@@ -1739,6 +1741,24 @@ function mgSvg(id){return '<svg viewBox="0 0 24 24" width="20" height="20" fill=
     [...rail.children].forEach((tile,idx)=>{tile.setAttribute('aria-checked',idx===i?'true':'false');tile.tabIndex=idx===i?0:-1;});
     mgRender(d);if(focus)mgFocus(i);
   }
+  // Map a model id to the MG_DATA task index where it is the primary
+  // recommendation, if any. Used to make "Also good" chips jump to that task.
+  const MG_PRIMARY_IDX=Object.fromEntries(MG_DATA.map((d,i)=>[d.mid,i]));
+  // Fallback prettifier for a model id that isn't a primary of any task.
+  function mgPrettyName(mid){
+    return mid.split('-').map(w=>w?w[0].toUpperCase()+w.slice(1):w).join(' ');
+  }
+  // Swap the recommendation to a specific model id. If that id is a primary
+  // of some task, pivot the whole picker to that task (selects the rail tile
+  // too). Otherwise keep the current task heading and just retarget the
+  // model badge / /model command / Launch button to the chosen id.
+  function mgApplyMid(currentTask,mid){
+    const primaryIdx=MG_PRIMARY_IDX[mid];
+    if(primaryIdx!=null){mgSelect(primaryIdx,true);return;}
+    mgRender(Object.assign({},currentTask,{
+      mid,model:mgPrettyName(mid),
+    }));
+  }
   function mgRender(d){
     $('#mgRTask').textContent='Recommended for: '+d.task;
     $('#mgRIcon').innerHTML=mgSvg(d.id);$('#mgRModel').textContent=d.model;
@@ -1747,7 +1767,14 @@ function mgSvg(id){return '<svg viewBox="0 0 24 24" width="20" height="20" fill=
       `<span class="mg-badge eff"><span class="k">effort</span> ${d.effort}</span>`+
       `<span class="mg-badge ctx"><span class="k">context</span> ${d.ctx}</span>`;
     $('#mgRWhy').innerHTML=d.why;
-    $('#mgRAlts').innerHTML=d.alts.map(a=>`<span class="mg-chip">${a}</span>`).join('');
+    $('#mgRAlts').innerHTML=d.alts.map(a=>{
+      const known=MG_PRIMARY_IDX[a]!=null;
+      const hint=known?'Switch to this model (jumps to its task)':'Use this model instead \u2014 keeps the current task, retargets /model and Launch';
+      return `<button type="button" class="mg-chip" data-mid="${a}" title="${hint}" aria-label="Use ${a} instead">${a}</button>`;
+    }).join('');
+    [...document.querySelectorAll('#mgRAlts .mg-chip')].forEach(chip=>{
+      chip.onclick=()=>mgApplyMid(d,chip.dataset.mid);
+    });
     const cmd='/model '+d.mid;$('#mgRCmd').textContent=cmd;
     const cp=$('#mgCopyBtn');cp.classList.remove('done');cp.textContent='Copy';
     cp.onclick=()=>mgCopy(cmd,cp);
