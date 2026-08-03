@@ -39,6 +39,14 @@ def test_turnin_regex_variants():
     assert ids == {"4787", "22027", "16331"}
 
 
+def test_turnin_regex_two_digit_bundle():
+    # early integrate_bundle / user_turnin ids are only 2 digits and must
+    # still be picked up (regression: they were dropped by a \d{3,7} bound).
+    ids = {m.group(1) for m in C._TURNIN_RE.finditer(
+        "Merge branch 'master' of .../core/integrate_bundle78 user_turnin42")}
+    assert ids == {"78", "42"}
+
+
 # --- name / idsid helpers ---------------------------------------------------
 @pytest.mark.parametrize("raw,expected", [
     ("Mostovicz, Tsvi", "Tsvi Mostovicz"),
@@ -168,3 +176,95 @@ def test_diff_files_parses_and_sorts_by_churn():
     assert (b["add"], b["del"], b["status"]) == (0, 5, "D")
     img = next(f for f in files if f["path"].endswith(".png"))
     assert img["binary"] is True and img["add"] == 0 and img["status"] == "A"
+
+
+# --- fidelity: file-scope TI list is DERIVED from commit list ---------------
+def test_build_file_tis_derives_from_commits(monkeypatch):
+    """C1/D3 round-trip: the TI list must be exactly the union of per-commit
+    turnins, so a TI can never appear that no commit maps to (and vice versa).
+    We stub build_file_commits with hand-crafted commits and check the
+    aggregation."""
+    fake_commits = {
+        "n_commits": 3, "commits": [
+            {"sha": "a"*40, "short": "a"*12, "author": "X", "time": 100,
+             "summary": "s1", "turnins": ["4787"], "hsds": [],
+             "merge": "m1"*6, "merge_summary": "Merge user_turnin4787",
+             "add": 5, "del": 2, "binary": False},
+            {"sha": "b"*40, "short": "b"*12, "author": "Y", "time": 200,
+             "summary": "s2", "turnins": ["4787", "78"], "hsds": [],
+             "merge": "m1"*6, "merge_summary": "Merge user_turnin4787",
+             "add": 1, "del": 0, "binary": False},
+            {"sha": "c"*40, "short": "c"*12, "author": "X", "time": 50,
+             "summary": "s3", "turnins": [],  # <- no TI → must not contribute
+             "hsds": [], "merge": "",  "merge_summary": "",
+             "add": 3, "del": 3, "binary": False},
+        ],
+        "path": "f", "repo": "R", "head": "H", "follow": True,
+        "truncated": False,
+    }
+
+    class _R:  # stub RepoInfo
+        key = "R"; head = "H"
+        def _git(self, *a, **k):
+            import types
+            return types.SimpleNamespace(returncode=1, stdout="", stderr="")
+
+    monkeypatch.setattr(C, "build_file_commits",
+                        lambda repo, rel, follow=True, force=False: fake_commits)
+    d = C.build_file_tis(_R(), "f")
+
+    tids = {t["id"] for t in d["tis"]}
+    assert tids == {"4787", "78"}                    # C2: no phantom TIs
+    per_commit = set()
+    for c in fake_commits["commits"]:
+        per_commit.update(c["turnins"])
+    assert tids == per_commit                        # D3: exact round-trip
+
+    by_id = {t["id"]: t for t in d["tis"]}
+    assert by_id["4787"]["n_commits"] == 2           # aggregation correct
+    assert by_id["78"]["n_commits"] == 1
+    assert by_id["4787"]["add"] == 6                 # +5 +1
+    assert by_id["4787"]["del"] == 2
+    assert d["n_commits"] == 3
+
+
+def test_build_file_tis_empty_commits(monkeypatch):
+    """No commits → no TIs, cleanly (guards against divide-by-zero-style bugs)."""
+    monkeypatch.setattr(C, "build_file_commits",
+                        lambda repo, rel, follow=True, force=False: {
+                            "commits": [], "n_commits": 0, "path": "x",
+                            "repo": "R", "head": "H", "follow": True,
+                            "truncated": False})
+    class _R: key="R"; head="H"
+    d = C.build_file_tis(_R(), "x")
+    assert d["n_tis"] == 0 and d["tis"] == [] and d["n_commits"] == 0
+
+
+def test_turnin_regex_rejects_workweek_and_paths():
+    """B2: workweek stamps like 24ww32 and bare path numbers must not be
+    mistaken for turnin ids."""
+    ids = [m.group(1) for m in C._TURNIN_RE.finditer(
+        "24ww32 gk.workarea.01 v2 build 999 user_turnin4787")]
+    assert ids == ["4787"]
+
+
+def test_list_file_commits_uses_follow(monkeypatch):
+    """D1: list_file_commits must pass --follow when requested (rename
+    history is essential for file identity across renames)."""
+    called = {}
+    class _R:
+        root = "/tmp"; key = "K"; base = ""
+        def to_git_path(self, r): return r
+        def _git(self, *args, timeout=60):
+            called["args"] = args
+            import types
+            return types.SimpleNamespace(returncode=0,
+                                          stdout="dead\nbeef\n", stderr="")
+    out = C.list_file_commits(_R(), "x", follow=True)
+    assert out == ["dead", "beef"]
+    assert "--follow" in called["args"]
+    assert "--no-merges" in called["args"]
+
+    called.clear()
+    C.list_file_commits(_R(), "x", follow=False)
+    assert "--follow" not in called["args"]
