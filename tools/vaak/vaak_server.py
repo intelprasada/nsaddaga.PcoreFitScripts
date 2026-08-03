@@ -432,6 +432,29 @@ def move_draft(session: str, draft_id: str, direction: str) -> bool:
     return True
 
 
+def reorder_draft(session: str, draft_id: str, to_index: str | int | None) -> bool:
+    """Move a draft directly to a zero-based position in its session queue."""
+    try:
+        requested = int(to_index)
+    except (TypeError, ValueError):
+        return False
+    with _drafts_lock:
+        data = _load_drafts()
+        items = data.get(session, [])
+        old_index = next(
+            (i for i, item in enumerate(items) if item["id"] == draft_id), -1
+        )
+        if old_index < 0 or not items:
+            return False
+        new_index = max(0, min(len(items) - 1, requested))
+        if old_index == new_index:
+            return True
+        item = items.pop(old_index)
+        items.insert(new_index, item)
+        _save_drafts(data)
+    return True
+
+
 def pop_first_draft(session: str) -> dict | None:
     with _drafts_lock:
         data = _load_drafts()
@@ -896,7 +919,14 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
  display:flex;align-items:center;gap:8px}
 #queue{display:flex;flex-direction:column;gap:7px}
 .qi{border:1px solid #30363d;border-radius:8px;background:#161b22;padding:8px 10px;
- display:flex;gap:8px;align-items:flex-start}
+ display:flex;gap:8px;align-items:flex-start;transition:opacity .12s,border-color .12s,transform .12s}
+.qi.dragging{opacity:.35}
+.qi.drop-before{border-top:3px solid #58a6ff;transform:translateY(2px)}
+.qi.drop-after{border-bottom:3px solid #58a6ff;transform:translateY(-2px)}
+.qdrag{flex:0 0 auto;color:#8b949e;border:1px solid transparent;border-radius:5px;
+ padding:1px 5px;line-height:20px;cursor:grab;user-select:none;font-size:16px}
+.qdrag:hover,.qdrag:focus{color:#58a6ff;border-color:#58a6ff;outline:none;background:#58a6ff14}
+.qdrag:active{cursor:grabbing}
 .qi .qt{flex:1;white-space:pre-wrap;word-break:break-word;font-size:14px;min-width:0;cursor:text}
 .qi .qt:hover{background:#ffffff08;border-radius:4px}
 .qi.editing{border-color:#58a6ff;box-shadow:0 0 0 2px #58a6ff33;flex-direction:column;align-items:stretch;gap:6px}
@@ -1456,6 +1486,8 @@ function renderStatus(s){
 
 async function loadDrafts(){
   if(!sel){$('#queue').innerHTML='';return;}
+  // Do not let the 4s poll replace the DOM underneath an active drag.
+  if(document.querySelector('#queue .qi.dragging'))return;
   try{
     const d=await api('/api/drafts?session='+encodeURIComponent(sel));
     $('#autoflush').checked=!!d.autoflush;
@@ -1499,7 +1531,9 @@ function renderQueue(items){
   el.innerHTML='';
   items.forEach((it,i)=>{
     const d=document.createElement('div');d.className='qi';d.dataset.id=it.id;
-    d.innerHTML=`<span class="qt" title="Click to edit">${esc(it.text)}</span>`+
+    d.innerHTML=`<span class="qdrag" draggable="true" tabindex="0" role="button" `+
+      `title="Drag to reorder (arrow buttons remain available)" aria-label="Drag queued item to reorder">&#x2630;</span>`+
+      `<span class="qt" title="Click to edit">${esc(it.text)}</span>`+
       `<span class="qa">`+
       `<button class="sec mini" data-a="edit">\u270e Edit</button>`+
       `<button class="sec mini" data-a="copy">Copy</button>`+
@@ -1524,6 +1558,7 @@ function renderQueue(items){
     d.querySelector('[data-a=cancel]').onclick=()=>cancelEdit(d);
     d.querySelector('[data-a=save]').onclick=()=>saveEdit(d,it.id);
     d.querySelector('.qt').onclick=()=>beginEdit(d,it.text);
+    wireQueueDrag(d,it.id);
     const ta=d.querySelector('.qedit textarea');
     ta.onkeydown=(e)=>{
       if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();saveEdit(d,it.id);}
@@ -1532,6 +1567,48 @@ function renderQueue(items){
     el.appendChild(d);
   });
   _restoreEditState(editState);
+}
+
+let queueDragId=null;
+function clearQueueDropState(){
+  document.querySelectorAll('#queue .qi').forEach(row=>{
+    row.classList.remove('dragging','drop-before','drop-after');
+  });
+}
+function wireQueueDrag(row,id){
+  const handle=row.querySelector('.qdrag');
+  handle.addEventListener('dragstart',e=>{
+    if(row.classList.contains('editing')){e.preventDefault();return;}
+    queueDragId=id;
+    row.classList.add('dragging');
+    e.dataTransfer.effectAllowed='move';
+    e.dataTransfer.setData('text/plain',id);
+  });
+  row.addEventListener('dragover',e=>{
+    if(!queueDragId||queueDragId===id)return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect='move';
+    row.classList.remove('drop-before','drop-after');
+    const after=e.clientY>row.getBoundingClientRect().top+row.offsetHeight/2;
+    row.classList.add(after?'drop-after':'drop-before');
+  });
+  row.addEventListener('dragleave',e=>{
+    if(!row.contains(e.relatedTarget))row.classList.remove('drop-before','drop-after');
+  });
+  row.addEventListener('drop',e=>{
+    e.preventDefault();
+    if(!queueDragId||queueDragId===id){clearQueueDropState();queueDragId=null;return;}
+    const rows=Array.from(document.querySelectorAll('#queue .qi'));
+    const sourceIndex=rows.findIndex(r=>r.dataset.id===queueDragId);
+    const targetIndex=rows.indexOf(row);
+    const after=e.clientY>row.getBoundingClientRect().top+row.offsetHeight/2;
+    let toIndex=targetIndex+(after?1:0);
+    if(sourceIndex<toIndex)toIndex--;
+    const movedId=queueDragId;
+    clearQueueDropState();queueDragId=null;
+    reorderDraft(movedId,toIndex);
+  });
+  handle.addEventListener('dragend',()=>{clearQueueDropState();queueDragId=null;});
 }
 function beginEdit(row,text){
   const el=$('#queue');
@@ -1616,6 +1693,13 @@ async function sendDraft(id){
   }catch(e){logline('send error: '+e.message,'err');}
 }
 async function moveDraft(id,dir){const d=await api('/api/drafts/move',{session:sel,id,dir});renderQueue(d.drafts||[]);}
+async function reorderDraft(id,toIndex){
+  try{
+    const d=await api('/api/drafts/reorder',{session:sel,id,to_index:toIndex});
+    if(!d.ok)logline('reorder failed','err');
+    renderQueue(d.drafts||[]);
+  }catch(e){logline('reorder error: '+e.message,'err');loadDrafts();}
+}
 async function delDraft(id){const d=await api('/api/drafts/delete',{session:sel,id});renderQueue(d.drafts||[]);loadSessions();}
 async function sendAll(){
   if(!sel)return;
@@ -2228,6 +2312,11 @@ class Handler(BaseHTTPRequestHandler):
         elif p == "/api/drafts/move":
             ok = move_draft(session, str(body.get("id", "")),
                             str(body.get("dir", "up")))
+            self._json({"ok": ok, "drafts": get_drafts(session)})
+        elif p == "/api/drafts/reorder":
+            ok = reorder_draft(
+                session, str(body.get("id", "")), body.get("to_index")
+            )
             self._json({"ok": ok, "drafts": get_drafts(session)})
         elif p == "/api/drafts/send":
             ok, info = send_draft(session, str(body.get("id", "")), submit)
