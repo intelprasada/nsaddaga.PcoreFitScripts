@@ -808,6 +808,65 @@ def build_commit(repo: RepoInfo, sha: str, force: bool = False) -> dict:
 
 
 # --------------------------------------------------------------------------
+# File diff for a single commit — powers the "click a file → see its diff"
+# view inside the commit and TI lenses.
+# --------------------------------------------------------------------------
+_DIFF_MAX_BYTES = 512 * 1024   # cap patch text at 512 KB
+_DIFF_MAX_LINES = 4000         # …and 4k lines, whichever hits first
+
+
+def build_diff(repo: RepoInfo, sha: str, rel: str, force: bool = False) -> dict:
+    """`git show <sha> -- <path>` for the diff view. For TI merges we show the
+    combined merge diff; for regular commits we show the change vs parent."""
+    rp = repo._git("rev-parse", "--verify", f"{sha}^{{commit}}", timeout=20)
+    if rp.returncode != 0 or not rp.stdout.strip():
+        return {"error": "commit not found", "sha": sha, "path": rel,
+                "repo": repo.key, "head": repo.head}
+    full = rp.stdout.strip()
+    ck = f"{repo.key}_{full}_{rel}"
+    if not force:
+        cached = _cache_read("diff", ck)
+        if cached is not None:
+            return cached
+
+    # is this a merge? use -m --first-parent so the diff is meaningful
+    rpar = repo._git("rev-list", "--parents", "-n", "1", full, timeout=20)
+    parents = rpar.stdout.split()[1:] if rpar.returncode == 0 and rpar.stdout else []
+    is_merge = len(parents) > 1
+
+    args = ["show", "--no-color", "--format=", "-U8"]
+    if is_merge:
+        args += ["-m", "--first-parent"]
+    args += [full, "--", rel]
+    r = repo._git(*args, timeout=90)
+    diff = r.stdout or ""
+    truncated = False
+    if len(diff.encode("utf-8", "replace")) > _DIFF_MAX_BYTES:
+        # keep the header + as many hunks as fit
+        head, sep, rest = diff.partition("\n@@")
+        allowed = _DIFF_MAX_BYTES - len(head.encode("utf-8", "replace"))
+        diff = head + (sep + rest.encode("utf-8", "replace")[:max(0, allowed)]
+                       .decode("utf-8", "replace") if sep else "")
+        truncated = True
+    lines = diff.splitlines()
+    if len(lines) > _DIFF_MAX_LINES:
+        lines = lines[:_DIFF_MAX_LINES]
+        truncated = True
+        diff = "\n".join(lines) + "\n"
+
+    add, dele, binary = _file_numstat(repo, full, rel)
+    payload = {
+        "sha": full, "short": _short(full), "path": rel,
+        "repo": repo.key, "head": repo.head,
+        "is_merge": is_merge, "parents": [_short(p) for p in parents],
+        "add": add, "del": dele, "binary": binary,
+        "diff": diff, "truncated": truncated, "empty": not diff.strip(),
+    }
+    _cache_write("diff", ck, payload)
+    return payload
+
+
+# --------------------------------------------------------------------------
 # File-scope views — "TI Scope" and "Commit Scope" tabs. These answer the
 # whole-file questions ("who / which TI has ever touched this file?") that the
 # range-scoped Context tab can't. To keep the two round-trip-consistent, the
@@ -1030,6 +1089,18 @@ class Handler(BaseHTTPRequestHandler):
                 return
             force = q.get("force", ["0"])[0] in ("1", "true")
             self._json(build_commit(repo, sha, force=force))
+            return
+        if path == "/api/diff":
+            sha = (q.get("sha", [""])[0] or "").strip()
+            rel = (q.get("path", [""])[0] or "").strip()
+            if not re.match(r"^[0-9a-fA-F]{4,40}$", sha):
+                self._json({"error": "bad sha"}, 400)
+                return
+            if not rel:
+                self._json({"error": "missing path"}, 400)
+                return
+            force = q.get("force", ["0"])[0] in ("1", "true")
+            self._json(build_diff(repo, sha, rel, force=force))
             return
         if path in ("/api/file/tis", "/api/file/commits"):
             rel = q.get("path", [""])[0]
