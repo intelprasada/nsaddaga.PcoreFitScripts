@@ -554,6 +554,69 @@ def kill_session(name: str) -> tuple[bool, str]:
     return True, n
 
 
+# --- Spawn a new tmux session running cli-copilot ---------------------------
+_SPAWN_NAME_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\- ]{0,63}$")
+_SPAWN_MODEL_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,63}$")
+SPAWN_LAUNCH_CMD = os.environ.get("VAAK_SPAWN_LAUNCH_CMD", "cli-copilot")
+# Wait times (seconds) for cli-copilot to boot and accept slash commands.
+SPAWN_BOOT_WAIT = float(os.environ.get("VAAK_SPAWN_BOOT_WAIT", "7.0"))
+SPAWN_CMD_WAIT = float(os.environ.get("VAAK_SPAWN_CMD_WAIT", "1.5"))
+
+
+def spawn_copilot_session(name: str, model_id: str = "") -> tuple[bool, str]:
+    """Create a new tmux session, start cli-copilot in it, enable /allow-all
+    (auto-approve tool/path/URL requests), and — if model_id is non-empty —
+    select that model with `/model <id>`.
+
+    Names are validated against a conservative allowlist (letters, digits,
+    `._- `, up to 64 chars, must start alphanumeric). Model ids are validated
+    against `[A-Za-z0-9._-]+` so they can't inject a slash command payload.
+    """
+    n = (name or "").strip()
+    if not n:
+        return False, "session name required"
+    if not _SPAWN_NAME_OK.match(n):
+        return False, "invalid session name (letters, digits, '._- ' only; ≤64 chars, must start alphanumeric)"
+    if target_exists(n):
+        return False, f"tmux session '{n}' already exists"
+    mid = (model_id or "").strip()
+    if mid and not _SPAWN_MODEL_OK.match(mid):
+        return False, "invalid model id"
+
+    r = subprocess.run(["tmux", "new", "-d", "-s", n],
+                       capture_output=True, text=True, check=False)
+    if r.returncode != 0:
+        return False, (r.stderr or "tmux new failed").strip()
+
+    # From here on, failures should still surface but not orphan the session.
+    def _send_literal(text: str) -> None:
+        subprocess.run(["tmux", "send-keys", "-t", n, "-l", "--", text],
+                       capture_output=True, check=False)
+
+    def _send_enter() -> None:
+        subprocess.run(["tmux", "send-keys", "-t", n, "Enter"],
+                       capture_output=True, check=False)
+
+    try:
+        # Start the CLI. `cli-copilot` is a tcsh alias in the user's shell, so
+        # letting tmux's default login shell resolve it is the right thing.
+        _send_literal(SPAWN_LAUNCH_CMD)
+        _send_enter()
+        time.sleep(SPAWN_BOOT_WAIT)
+        # Enable all-permissions mode.
+        _send_literal("/allow-all")
+        _send_enter()
+        time.sleep(SPAWN_CMD_WAIT)
+        # Select the recommended model, if one was specified.
+        if mid:
+            _send_literal("/model " + mid)
+            _send_enter()
+            time.sleep(SPAWN_CMD_WAIT)
+    except Exception as e:
+        return False, f"spawn steps failed: {e}"
+    return True, n
+
+
 # --- Auto-flush poller ------------------------------------------------------
 # For sessions with auto-flush enabled, watch for a busy->ready transition and
 # then send exactly one queued draft (the head of the queue). We require the
@@ -736,6 +799,10 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
 #mgCard .mg-copy{background:#1b2230;border:1px solid #2a3446;color:#e6edf3;border-radius:9px;padding:9px 14px;font-weight:600;cursor:pointer;transition:border-color .15s,background .15s}
 #mgCard .mg-copy:hover{border-color:#6ea8fe}
 #mgCard .mg-copy.done{border-color:#3fb950;color:#3fb950}
+#mgCard .mg-launch{background:linear-gradient(135deg,#238636,#2ea043);border-color:#2ea043;color:#fff}
+#mgCard .mg-launch:hover{border-color:#3fb950;background:linear-gradient(135deg,#2ea043,#3fb950)}
+#mgCard .mg-launch:disabled{opacity:.65;cursor:progress;background:#1b2230;border-color:#2a3446;color:#8b949e}
+#mgCard .mg-launch.done{background:#1b2230;border-color:#3fb950;color:#3fb950}
 #mgCard .mg-section{margin-top:18px}
 #mgCard .mg-section h2{font-size:13px;text-transform:uppercase;letter-spacing:.7px;color:#94a3b8;margin:0 0 10px}
 #mgCard .mg-rules{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
@@ -812,6 +879,7 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
        <div class="mg-cmd">
         <span class="mg-cmdbox" id="mgRCmd"></span>
         <button class="mg-copy" id="mgCopyBtn" title="Copy the /model command">Copy</button>
+        <button class="mg-copy mg-launch" id="mgLaunchBtn" title="Create a new tmux session, launch cli-copilot, /allow-all, and select this model">🚀 Launch session</button>
        </div>
       </div>
      </div>
@@ -1326,6 +1394,33 @@ function mgSvg(id){return '<svg viewBox="0 0 24 24" width="20" height="20" fill=
     const cmd='/model '+d.mid;$('#mgRCmd').textContent=cmd;
     const cp=$('#mgCopyBtn');cp.classList.remove('done');cp.textContent='Copy';
     cp.onclick=()=>mgCopy(cmd,cp);
+    const lb=$('#mgLaunchBtn');
+    if(lb){
+      lb.classList.remove('done');lb.disabled=false;lb.textContent='🚀 Launch session';
+      lb.onclick=()=>mgLaunch(d,lb);
+    }
+  }
+  async function mgLaunch(d,btn){
+    const suggested=d.id.replace(/[^A-Za-z0-9._-]/g,'')||'copilot';
+    const name=(prompt(`New tmux session name for the "${d.model}" copilot?\n\nThis will:\n  1. tmux new -d -s <name>\n  2. run cli-copilot inside it\n  3. send /allow-all\n  4. select model ${d.mid}`, suggested)||'').trim();
+    if(!name)return;
+    btn.disabled=true;const orig=btn.textContent;btn.textContent='Launching\u2026';
+    try{
+      const r=await api('/api/spawn_session',{session:name,model_id:d.mid});
+      if(r&&r.ok){
+        btn.classList.add('done');btn.textContent='\u2713 Launched: '+name;
+        toast(`Launched session ${name} with ${d.model}`);
+        logline('spawned '+name+' model='+d.mid,'ok');
+        loadSessions();
+        setTimeout(()=>{btn.classList.remove('done');btn.disabled=false;btn.textContent=orig;},4000);
+      } else {
+        btn.disabled=false;btn.textContent=orig;
+        toast('Launch failed: '+((r&&r.error)||'unknown'));
+      }
+    }catch(err){
+      btn.disabled=false;btn.textContent=orig;
+      toast('Launch error: '+err.message);
+    }
   }
   function mgCopy(text,b){
     const done=()=>{b.classList.add('done');b.textContent='Copied \u2713';setTimeout(()=>{b.classList.remove('done');b.textContent='Copy';},1600);};
@@ -1468,6 +1563,14 @@ class Handler(BaseHTTPRequestHandler):
             name = str(body.get("session") or body.get("target") or "").strip()
             ok, info = kill_session(name)
             self._json({"ok": ok, "session": info} if ok
+                       else {"ok": False, "error": info})
+            return
+
+        if p == "/api/spawn_session":
+            name = str(body.get("session") or body.get("name") or "").strip()
+            model_id = str(body.get("model_id") or body.get("mid") or "").strip()
+            ok, info = spawn_copilot_session(name, model_id)
+            self._json({"ok": ok, "session": info, "model_id": model_id} if ok
                        else {"ok": False, "error": info})
             return
 
