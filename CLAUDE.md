@@ -115,22 +115,139 @@ After promotion, on the local prod worktree:
 
 ---
 
-## 7. Push workaround (corp proxy blocks `git push`)
+## 7. Landing changes in `main` when corp proxy blocks `git push`
 
-`git-receive-pack` is blocked by corp proxy (HTTP 403, EC/HPC Policy 241). Do NOT retry `git push` in a loop — it will never succeed.
+`git-receive-pack` is blocked by the corp proxy (HTTP 403, EC/HPC Policy
+241). Do **not** retry `git push` in a loop; it will not succeed from this
+environment.
 
-Use the REST-API push script template. There is one on disk you can duplicate:
+The workaround still follows the normal protected-branch flow:
+
+```text
+local feature branch
+  → GitHub feature branch (Git Data REST API)
+  → issue + PR targeting main
+  → required checks
+  → squash merge
+  → main
+```
+
+Never use this workaround to create or update `main` or `prod` directly.
+
+### 7.1 Prepare and commit a branch
+
+Use a fresh worktree based on the latest `origin/main`. This avoids changing
+the branch in another session's worktree:
+
+```bash
+cd /nfs/site/disks/nsaddaga_wa/FitScripts/core-tools
+git fetch origin main
+git worktree add /tmp/ct-<slug> -b <type>/<slug> origin/main
+cd /tmp/ct-<slug>
+
+# edit, test, and review the diff
+git add <files>
+git commit -m "<type>(<scope>): <summary>
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+```
+
+The REST script pushes committed `HEAD`, not uncommitted working-tree changes.
+
+### 7.2 Publish the feature branch through the Git Data API
+
+Duplicate one of the existing `/tmp/push_*.py` templates rather than modifying
+a template that another session may be using:
 
 ```bash
 cp /tmp/push_320_dsl.py /tmp/push_<slug>.py
-# edit NEW_BRANCH and BASE_BRANCH at the top
+```
+
+Set these constants at the top of the copy:
+
+```python
+NEW_BRANCH = "<type>/<slug>"
+BASE_BRANCH = "main"
+```
+
+The script should:
+
+1. Resolve `origin/main` and its tree.
+2. Upload each changed file with `POST /repos/{owner}/{repo}/git/blobs`.
+3. Create a tree based on the `origin/main` tree with
+   `POST /repos/{owner}/{repo}/git/trees`.
+4. Create a commit with the local commit message and `origin/main` as its
+   parent using `POST /repos/{owner}/{repo}/git/commits`.
+5. Create `refs/heads/<type>/<slug>` with
+   `POST /repos/{owner}/{repo}/git/refs`.
+
+Run it from the feature worktree so `git rev-parse HEAD` and the diff resolve
+to the intended branch:
+
+```bash
+cd /tmp/ct-<slug>
+export https_proxy=http://proxy-dmz.intel.com:912
+export http_proxy=http://proxy-dmz.intel.com:911
+export no_proxy=localhost,127.0.0.1,.intel.com
 GITHUB_TOKEN=$(gh auth token) python3 /tmp/push_<slug>.py
 ```
 
-The script uploads blobs → tree → commit → ref via the GitHub Git Data API. It requires:
+Confirm that the script created `refs/heads/<type>/<slug>`. If the ref already
+exists, stop and inspect it; do not force-update it or silently overwrite work
+from another session.
 
-- `git fetch origin <BASE_BRANCH>` first, so `origin/<BASE_BRANCH>` resolves.
-- A committed HEAD (script pushes HEAD, not the working tree).
+### 7.3 Create the issue and PR
+
+Use body files so shell quoting, Markdown, and command names are preserved:
+
+```bash
+gh issue create \
+  --repo intelprasada/nsaddaga.PcoreFitScripts \
+  --title "<issue title>" \
+  --body-file /tmp/<slug>-issue.md
+
+gh pr create \
+  --repo intelprasada/nsaddaga.PcoreFitScripts \
+  --base main \
+  --head <type>/<slug> \
+  --title "<PR title>" \
+  --body-file /tmp/<slug>-pr.md
+```
+
+Include `Closes #<issue-number>.` in the PR body. Do not add a label unless
+the label is known to exist; `gh issue create` fails if a requested label is
+invalid.
+
+### 7.4 Wait for checks and merge
+
+```bash
+gh pr checks <pr-number> \
+  --repo intelprasada/nsaddaga.PcoreFitScripts
+
+gh pr merge <pr-number> \
+  --repo intelprasada/nsaddaga.PcoreFitScripts \
+  --squash \
+  --delete-branch
+
+gh pr view <pr-number> \
+  --repo intelprasada/nsaddaga.PcoreFitScripts \
+  --json state,mergedAt
+```
+
+Merge only after all required checks pass. `--squash` lands the reviewed PR
+in `main`; this is the only step that updates `main`.
+
+### 7.5 Clean up
+
+After confirming the PR state is `MERGED`:
+
+```bash
+cd /nfs/site/disks/nsaddaga_wa/FitScripts/core-tools
+git worktree remove /tmp/ct-<slug> --force
+rm -f /tmp/push_<slug>.py /tmp/<slug>-issue.md /tmp/<slug>-pr.md
+```
+
+Delete only the named temporary files and worktree created for the task.
 
 ---
 
