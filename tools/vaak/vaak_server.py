@@ -491,6 +491,35 @@ def broadcast_send(targets, text: str, submit: bool) -> list[dict]:
     return results
 
 
+# Named control keys allowed via /api/key. Values are tmux key names sent WITHOUT
+# `-l`, so they are interpreted as real key presses (interrupts, not text).
+ALLOWED_KEYS = {
+    "C-c": "C-c",       # Ctrl-C — interrupt / cancel
+    "Escape": "Escape",  # Esc — dismiss / stop the current CLI action
+    "C-d": "C-d",       # Ctrl-D — EOF
+    "C-u": "C-u",       # clear the current input line
+    "Enter": "Enter",
+    "Up": "Up",
+    "Down": "Down",
+}
+
+
+def send_key(target: str, key: str) -> tuple[bool, str]:
+    """Send a single named control key (from ALLOWED_KEYS) to a tmux target.
+    Unlike inject(), this does NOT use `-l`, so the key is interpreted as a real
+    key press (e.g. Ctrl-C interrupts instead of typing the literal text)."""
+    tk = ALLOWED_KEYS.get(key)
+    if tk is None:
+        return False, f"key '{key}' not allowed"
+    if not target_exists(target):
+        return False, f"tmux target '{target}' not found"
+    r = subprocess.run(["tmux", "send-keys", "-t", target, tk],
+                       capture_output=True, text=True, check=False)
+    if r.returncode != 0:
+        return False, (r.stderr or "send-keys failed").strip()
+    return True, tk
+
+
 # --- Auto-flush poller ------------------------------------------------------
 # For sessions with auto-flush enabled, watch for a busy->ready transition and
 # then send exactly one queued draft (the head of the queue). We require the
@@ -592,11 +621,15 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
 .qi .qt{flex:1;white-space:pre-wrap;word-break:break-word;font-size:14px;min-width:0}
 .qi .qa{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
 .empty{color:#8b949e;font-style:italic;font-size:13px}
-#paneWrap{border:1px solid #30363d;border-radius:10px;background:#06090f;overflow:hidden}
+#paneWrap{border:1px solid #30363d;border-radius:10px;background:#06090f;
+ display:flex;flex-direction:column;min-height:0;flex:0 0 auto}
 #paneHead{display:flex;align-items:center;gap:8px;justify-content:space-between;padding:7px 10px;
- border-bottom:1px solid #30363d;color:#8b949e;font-size:12px}
-#pane{margin:0;padding:10px;max-height:34vh;overflow:auto;white-space:pre-wrap;word-break:break-word;
- font:12px/1.35 ui-monospace,SFMono-Regular,Consolas,Liberation Mono,monospace;color:#c9d1d9}
+ border-bottom:1px solid #30363d;color:#8b949e;font-size:12px;flex:0 0 auto;
+ border-radius:10px 10px 0 0;background:#06090f}
+#pane{margin:0;padding:10px 10px 18px;max-height:50vh;min-height:20vh;overflow:auto;
+ white-space:pre-wrap;word-break:break-word;
+ font:12px/1.35 ui-monospace,SFMono-Regular,Consolas,Liberation Mono,monospace;color:#c9d1d9;
+ border-radius:0 0 10px 10px}
 #toasts{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:9}
 .toast{background:#12331f;color:#d1f7d6;border:1px solid #238636;border-radius:10px;
  padding:10px 12px;box-shadow:0 8px 24px #0008;font-size:14px}
@@ -609,6 +642,86 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
 #qrModal.show{display:flex}
 #qrCard{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:20px;
  text-align:center;max-width:90vw}
+/* Model guide modal */
+#mgModal{position:fixed;inset:0;background:#000b;display:none;align-items:flex-start;
+ justify-content:center;z-index:60;overflow:auto;padding:20px 14px 48px}
+#mgModal.show{display:flex}
+#mgCard{width:100%;max-width:1040px;position:relative}
+#mgClose{position:fixed;top:16px;right:20px;z-index:61;background:#21262d;border:1px solid #30363d;
+ color:#e6edf3;border-radius:8px;padding:6px 12px;font-size:13px;font-weight:600;cursor:pointer}
+#mgClose:hover{border-color:#58a6ff}
+/* Model guide inner styles (scoped inside #mgCard) */
+#mgCard .mg-banner{background:linear-gradient(135deg,#1a2540 0%,#141925 60%);border:1px solid #2a3446;
+ border-radius:14px;padding:18px 20px;box-shadow:0 10px 30px -12px #000a;position:relative;overflow:hidden}
+#mgCard .mg-banner::before{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,#6ea8fe10,transparent);pointer-events:none}
+#mgCard .mg-brand{display:flex;align-items:center;gap:12px;margin-bottom:4px}
+#mgCard .mg-logo{width:34px;height:34px;border-radius:9px;flex:0 0 auto;background:linear-gradient(135deg,#6ea8fe,#8b7bff);display:grid;place-items:center;font-weight:800;color:#0b0e14;box-shadow:0 4px 14px -4px #6ea8fe80}
+#mgCard h1.mg-h1{font-size:20px;margin:0;letter-spacing:.2px;color:#e6edf3}
+#mgCard .mg-sub{color:#94a3b8;font-size:13px;margin:2px 0 0}
+#mgCard .mg-field{margin-top:16px}
+#mgCard .mg-label{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.7px;color:#94a3b8;margin-bottom:7px;font-weight:600}
+#mgCard .mg-picker{display:grid;grid-template-columns:minmax(310px,36%) 1fr;gap:16px;align-items:stretch}
+#mgCard .mg-rail{background:#0f141d;border:1px solid #2a3446;border-radius:14px;padding:8px;display:grid;grid-template-rows:repeat(7,minmax(0,1fr));gap:6px;min-height:410px;box-sizing:border-box}
+#mgCard .mg-tile{appearance:none;border:1px solid transparent;background:transparent;color:#e6edf3;border-radius:10px;padding:9px 10px;text-align:left;cursor:pointer;display:grid;grid-template-columns:30px 1fr 18px;align-items:center;gap:9px;transition:background .15s,border-color .15s,box-shadow .15s,transform .15s}
+#mgCard .mg-tile:hover{background:#6ea8fe14;border-color:#34445d}
+#mgCard .mg-tile:focus-visible{outline:none;border-color:#6ea8fe;box-shadow:0 0 0 3px #6ea8fe66}
+#mgCard .mg-tile[aria-checked="true"]{background:linear-gradient(135deg,#1f6feb30,#8b7bff1f);border-color:#5b83c7;box-shadow:inset 3px 0 0 #6ea8fe}
+#mgCard .mg-tile .mg-icon{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;color:#8bbcff;background:#6ea8fe14;border:1px solid #2a3446}
+#mgCard .mg-tile[aria-checked="true"] .mg-icon{background:linear-gradient(135deg,#6ea8fe,#8b7bff);color:#0b0e14;border-color:transparent}
+#mgCard .mg-tile .mg-tt{min-width:0}
+#mgCard .mg-tile .mg-tt b{display:block;font-size:13.5px;font-weight:700;line-height:1.18;color:#e6edf3}
+#mgCard .mg-tile .mg-tt small{display:block;color:#94a3b8;font-size:11.5px;line-height:1.2;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#mgCard .mg-tile .mg-check{color:#7db3ff;opacity:0;font-weight:800}
+#mgCard .mg-tile[aria-checked="true"] .mg-check{opacity:1}
+#mgCard .mg-result{margin-top:0;background:#141925;border:1px solid #2a3446;border-radius:14px;box-shadow:0 10px 30px -12px #000a;overflow:hidden;min-height:410px;display:flex;flex-direction:column;position:relative;box-sizing:border-box}
+#mgCard .mg-result::after{content:"";position:absolute;right:-48px;bottom:-56px;width:180px;height:180px;border-radius:50%;background:#6ea8fe0d;pointer-events:none}
+#mgCard .mg-rhead{padding:22px 24px 16px;border-bottom:1px solid #2a3446;background:radial-gradient(circle at 24px 20px,#6ea8fe18,transparent 130px),linear-gradient(180deg,#182034,transparent)}
+#mgCard .mg-rtask{color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.6px;font-weight:600}
+#mgCard .mg-rmodel{font-size:24px;font-weight:800;margin:6px 0 2px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+#mgCard .mg-rmodel .mg-icon{display:inline-flex;color:#6ea8fe}
+#mgCard .mg-pri{background:linear-gradient(135deg,#6ea8fe,#8b7bff);-webkit-background-clip:text;background-clip:text;color:transparent}
+#mgCard .mg-badges{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+#mgCard .mg-badge{font-size:12px;font-weight:600;padding:4px 10px;border-radius:20px;border:1px solid #2a3446;display:inline-flex;align-items:center;gap:6px;background:#1b2230}
+#mgCard .mg-badge .k{color:#94a3b8;font-weight:500}
+#mgCard .mg-badge.eff{border-color:#7a5c17;background:#3a2f12;color:#e3b341}
+#mgCard .mg-badge.ctx{border-color:#2b4b7a;background:#12233a;color:#7db3ff}
+#mgCard .mg-rbody{padding:18px 24px 22px;display:flex;flex-direction:column;flex:1}
+#mgCard .mg-why{color:#cbd5e1}
+#mgCard .mg-why b{color:#e6edf3}
+#mgCard .mg-alts{margin-top:16px}
+#mgCard .mg-alts .h{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:#94a3b8;margin-bottom:8px;font-weight:600}
+#mgCard .mg-chips{display:flex;gap:8px;flex-wrap:wrap}
+#mgCard .mg-chip{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;padding:5px 10px;border-radius:8px;background:#1b2230;border:1px solid #2a3446;color:#cbd5e1}
+#mgCard .mg-cmd{margin-top:auto;padding-top:18px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;position:relative;z-index:1}
+#mgCard .mg-cmdbox{font-family:ui-monospace,Consolas,monospace;font-size:14px;background:#0a0d13;border:1px solid #2a3446;border-radius:9px;padding:9px 12px;color:#a5d6ff;flex:1;min-width:200px}
+#mgCard .mg-copy{background:#1b2230;border:1px solid #2a3446;color:#e6edf3;border-radius:9px;padding:9px 14px;font-weight:600;cursor:pointer;transition:border-color .15s,background .15s}
+#mgCard .mg-copy:hover{border-color:#6ea8fe}
+#mgCard .mg-copy.done{border-color:#3fb950;color:#3fb950}
+#mgCard .mg-section{margin-top:18px}
+#mgCard .mg-section h2{font-size:13px;text-transform:uppercase;letter-spacing:.7px;color:#94a3b8;margin:0 0 10px}
+#mgCard .mg-rules{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+#mgCard .mg-rule{display:flex;gap:12px;background:#141925;border:1px solid #2a3446;border-radius:11px;padding:12px 14px}
+#mgCard .mg-rule .n{width:22px;height:22px;border-radius:7px;flex:0 0 auto;display:grid;place-items:center;font-size:12px;font-weight:800;color:#0b0e14;background:linear-gradient(135deg,#6ea8fe,#8b7bff)}
+#mgCard .mg-rule p{margin:0;color:#cbd5e1;font-size:14px}
+#mgCard .mg-rule b{color:#e6edf3}
+#mgCard .mg-tabtoggle{background:none;border:1px solid #2a3446;color:#94a3b8;border-radius:9px;padding:7px 12px;cursor:pointer;font-weight:600;font-size:13px}
+#mgCard .mg-tabtoggle:hover{color:#e6edf3;border-color:#6ea8fe}
+#mgCard table.mg-table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13.5px;display:none}
+#mgCard table.mg-table.show{display:table}
+#mgCard table.mg-table th,#mgCard table.mg-table td{text-align:left;padding:10px 12px;border-bottom:1px solid #2a3446;vertical-align:top}
+#mgCard table.mg-table th{color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.5px;position:sticky;top:0;background:#141925}
+#mgCard table.mg-table tbody tr:hover{background:#6ea8fe0f}
+#mgCard table.mg-table td .m{font-family:ui-monospace,Consolas,monospace;color:#a5d6ff}
+#mgCard .mg-legend{margin-top:22px;color:#64748b;font-size:12.5px;display:flex;gap:18px;flex-wrap:wrap}
+#mgCard .mg-legend b{color:#94a3b8}
+#mgCard .mg-foot{margin-top:24px;color:#64748b;font-size:12px;text-align:center}
+@media (max-width:780px){
+ #mgCard{max-width:620px}
+ #mgCard .mg-picker{grid-template-columns:1fr}
+ #mgCard .mg-rail{min-height:0;grid-template-rows:none}
+ #mgCard .mg-result{min-height:0}
+ #mgCard .mg-rules{grid-template-columns:1fr}
+}
 #qrCard h3{margin:0 0 12px;color:#58a6ff}
 #qrImg{background:#fff;padding:12px;border-radius:8px;display:inline-block}
 #qrUrl{margin-top:12px;color:#8b949e;font-family:monospace;font-size:12px;word-break:break-all;max-width:320px}
@@ -626,7 +739,8 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
 }
 </style></head><body>
 <header><b>Vaak</b> <span class="sub">\u2192 dictate &amp; queue into tmux CLI sessions</span>
- <button class="sec mini" id="qrBtn" style="margin-left:auto" title="Open on your phone">QR</button></header>
+ <button class="sec mini" id="mgBtn" style="margin-left:auto" title="AI model selection guide">&#x1F9E0; Model Guide</button>
+ <button class="sec mini" id="qrBtn" style="margin-left:8px" title="Open on your phone">QR</button></header>
 <div id="qrModal"><div id="qrCard">
  <h3>Open Vaak on your phone</h3>
  <div id="qrImg"></div>
@@ -634,6 +748,55 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
  <div class="hint" style="margin-top:8px">Scan with your phone camera (same network / VPN).</div>
  <button class="sec" id="qrClose">Close</button>
 </div></div>
+<div id="mgModal">
+ <button id="mgClose">\u00d7 Close</button>
+ <div id="mgCard">
+  <div class="mg-banner">
+   <div class="mg-brand">
+    <div class="mg-logo">AI</div>
+    <div><h1 class="mg-h1">Copilot Model Picker</h1>
+     <p class="mg-sub">Pick your task &rarr; get the right model, effort &amp; context tier.</p></div>
+   </div>
+   <div class="mg-field">
+    <div class="mg-label" id="mgPickerLabel">Choose the closest task</div>
+    <div class="mg-picker">
+     <div class="mg-rail" id="mgRail" role="radiogroup" aria-labelledby="mgPickerLabel"></div>
+     <div class="mg-result" id="mgResult" aria-live="polite">
+      <div class="mg-rhead">
+       <div class="mg-rtask" id="mgRTask"></div>
+       <div class="mg-rmodel"><span class="mg-icon" id="mgRIcon"></span><span class="mg-pri" id="mgRModel"></span></div>
+       <div class="mg-badges" id="mgRBadges"></div>
+      </div>
+      <div class="mg-rbody">
+       <div class="mg-why" id="mgRWhy"></div>
+       <div class="mg-alts"><div class="h">Also good</div><div class="mg-chips" id="mgRAlts"></div></div>
+       <div class="mg-cmd">
+        <span class="mg-cmdbox" id="mgRCmd"></span>
+        <button class="mg-copy" id="mgCopyBtn" title="Copy the /model command">Copy</button>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="mg-section"><h2>Rules of thumb</h2><div class="mg-rules" id="mgRules"></div></div>
+  <div class="mg-section">
+   <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+    <h2 style="margin:0">Full comparison</h2>
+    <button class="mg-tabtoggle" id="mgTabToggle" aria-expanded="false">Show table</button>
+   </div>
+   <table class="mg-table" id="mgTable">
+    <thead><tr><th>Task</th><th>Model</th><th>Effort</th><th>Context</th></tr></thead>
+    <tbody id="mgTbody"></tbody>
+   </table>
+  </div>
+  <div class="mg-legend">
+   <span><b>Effort</b> &mdash; reasoning depth (low &rarr; max). Raise it before switching models.</span>
+   <span><b>Context</b> &mdash; default vs long_context (whole-repo / long docs).</span>
+  </div>
+  <p class="mg-foot">Switch anytime with <code>/model &lt;id&gt;</code> in the CLI. Reference only &mdash; availability may vary by plan.</p>
+ </div>
+</div>
 <div id="wrap">
   <div id="nav">
     <h3><span>Sessions</span><span id="navcount"></span></h3>
@@ -653,6 +816,9 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
       <button id="sendNow">Send now \u2192</button>
       <button class="sec" id="addQ">+ Add to queue</button>
       <button class="sec" id="clear">Clear</button>
+      <span style="width:1px;height:22px;background:#30363d;margin:0 2px"></span>
+      <button class="sec" id="ctrlC" title="Send Ctrl-C (interrupt) to the selected session">^C</button>
+      <button class="sec" id="escKey" title="Send Esc to the selected session">Esc</button>
       <label><input type="checkbox" id="enterSends" checked> Enter = send now</label>
       <label><input type="checkbox" id="submit" checked> Submit in CLI</label>
       <label><input type="checkbox" id="keep" checked> Keep focus</label>
@@ -781,7 +947,11 @@ async function loadPane(){
     const nearBottom=(pre.scrollHeight-pre.scrollTop-pre.clientHeight)<40;
     const prevTop=pre.scrollTop;
     pre.textContent=(d.lines||[]).join('\\n');
-    pre.scrollTop=nearBottom?pre.scrollHeight:prevTop;
+    if(nearBottom){
+      requestAnimationFrame(()=>{pre.scrollTop=pre.scrollHeight;});
+    }else{
+      pre.scrollTop=prevTop;
+    }
     $('#paneMeta').textContent='showing '+(d.lines||[]).length+' lines from '+d.target+(nearBottom?'':' \\u00b7 scroll-lock (scroll down to follow)');
   }catch(e){$('#paneMeta').textContent='mirror error: '+e.message;}
 }
@@ -940,6 +1110,18 @@ async function toggleAuto(){
 }
 
 $('#sendNow').onclick=sendNow;$('#addQ').onclick=addToQueue;
+async function sendKey(key,label){
+  if(!sel){logline('pick a session first','err');return;}
+  try{
+    const d=await api('/api/key',{target:sel,key});
+    if(d.ok)logline('sent '+(label||key)+' \\u2192 '+sel,'ok');
+    else logline('key failed: '+d.error,'err');
+  }catch(e){logline('key error: '+e.message,'err');}
+  if($('#keep').checked)msg.focus();
+  loadSessions();
+}
+$('#ctrlC').onclick=()=>sendKey('C-c','Ctrl-C');
+$('#escKey').onclick=()=>sendKey('Escape','Esc');
 $('#clear').onclick=()=>{msg.value='';msg.focus();};
 $('#sendAll').onclick=sendAll;
 $('#autoflush').onchange=toggleAuto;
@@ -995,6 +1177,131 @@ msg.focus();
   $('#qrBtn').onclick=showQR;
   $('#qrClose').onclick=function(){$('#qrModal').classList.remove('show');};
   $('#qrModal').onclick=function(e){if(e.target===$('#qrModal'))$('#qrModal').classList.remove('show');};
+
+/* ---- Model Guide ---- */
+const MG_DATA=[
+  {id:"allrounder",task:"Everyday coding, features & PRs (best default)",
+   model:"Claude Sonnet 5",mid:"claude-sonnet-5",effort:"medium\u2013high",ctx:"default",
+   why:"The best all-round workhorse: near-Opus quality at much higher speed and lower cost. Start here for almost everything.",
+   alts:["claude-sonnet-4.6","claude-opus-4.8"]},
+  {id:"hard",task:"Deep debugging, architecture & big refactors",
+   model:"Claude Opus 5",mid:"claude-opus-5",effort:"high\u2013max",ctx:"default / long_context",
+   why:"Strongest reasoning and multi-step tool use. Reach for it when correctness matters more than speed, or when Sonnet stalls on a hard problem.",
+   alts:["claude-opus-4.8","claude-opus-4.7","gpt-5.6-sol"]},
+  {id:"codegen",task:"Pure code generation & completions",
+   model:"GPT-5.3-Codex",mid:"gpt-5.3-codex",effort:"medium\u2013high",ctx:"default",
+   why:"Code-specialized model tuned for writing and completing code with minimal ceremony.",
+   alts:["claude-sonnet-5","gpt-5.5"]},
+  {id:"reasoning",task:"Planning, algorithms & structured reasoning",
+   model:"GPT-5.6 Sol",mid:"gpt-5.6-sol",effort:"high\u2013xhigh",ctx:"default / long_context",
+   why:"Excellent step-by-step reasoning for math, algorithms, and detailed implementation plans. Use xhigh effort for the hardest problems.",
+   alts:["gpt-5.5","claude-opus-5","gemini-3.1-pro-preview"]},
+  {id:"bigcontext",task:"Large-codebase understanding, long docs & multimodal",
+   model:"Gemini 3.1 Pro",mid:"gemini-3.1-pro-preview",effort:"high",ctx:"long_context",
+   why:"Huge context window plus strong reasoning and image/PDF input \u2014 ideal for whole-repo comprehension and long documents.",
+   alts:["claude-opus-5","gpt-5.6-terra"]},
+  {id:"fast",task:"Fast iteration, simple edits & high volume",
+   model:"Claude Haiku 4.5",mid:"claude-haiku-4.5",effort:"low",ctx:"default",
+   why:"Quick and cheap for small, well-scoped edits and high-throughput work where you don\u2019t need deep reasoning.",
+   alts:["gemini-3.6-flash","gpt-5-mini"]},
+  {id:"lookup",task:"Quick lookups & search / explore subagents",
+   model:"MAI-Code-1-Flash",mid:"mai-code-1-flash-picker",effort:"low",ctx:"default",
+   why:"Lightweight and fast \u2014 great to assign to explore/search subagents so they scan the codebase cheaply while your main model does the heavy lifting.",
+   alts:["gemini-3.5-flash","gpt-5.4-mini"]},
+];
+const MG_RULES=[
+  "Start on <b>Sonnet</b> (the default). Escalate to <b>Opus</b> only when it stalls or the task is genuinely hard.",
+  "Raise <b>effort</b> before switching models \u2014 a high-effort Sonnet often beats a low-effort Opus.",
+  "Use <b>long_context</b> for whole-repo or long-document tasks; use <b>Flash / mini</b> to keep routine work cheap.",
+  "For <b>subagents</b>: give explore/search agents a Flash/mini model; give hard implementation agents Opus or Sonnet."
+];
+const MG_ICON={
+  allrounder:'<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
+  hard:'<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/>',
+  codegen:'<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
+  reasoning:'<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+  bigcontext:'<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
+  fast:'<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+  lookup:'<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+};
+function mgSvg(id){return '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" '+
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+(MG_ICON[id]||'')+'</svg>';}
+
+(function initModelGuide(){
+  const rail=$('#mgRail'), modal=$('#mgModal');
+  let selectedIdx=-1, typeahead='', typeTimer=null;
+  MG_DATA.forEach((d,i)=>{
+    const tile=document.createElement('button');
+    tile.type='button';tile.className='mg-tile';tile.id='mgtile-'+i;tile.dataset.mgTile='true';
+    tile.setAttribute('role','radio');tile.setAttribute('aria-checked','false');
+    tile.innerHTML=`<span class="mg-icon">${mgSvg(d.id)}</span>
+      <span class="mg-tt"><b>${d.task}</b><small>${d.model} \u00b7 ${d.effort} \u00b7 ${d.ctx}</small></span>
+      <span class="mg-check" aria-hidden="true">\u2713</span>`;
+    tile.addEventListener('click',()=>mgSelect(i,true));
+    tile.addEventListener('keydown',e=>mgTileKey(e,i));
+    rail.appendChild(tile);
+  });
+  MG_RULES.forEach((r,i)=>{
+    const d=document.createElement('div');d.className='mg-rule';
+    d.innerHTML=`<span class="n">${i+1}</span><p>${r}</p>`;
+    $('#mgRules').appendChild(d);
+  });
+  MG_DATA.forEach(d=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${d.task}</td><td><b>${d.model}</b><br><span class="m">${d.mid}</span></td><td>${d.effort}</td><td>${d.ctx}</td>`;
+    $('#mgTbody').appendChild(tr);
+  });
+  function mgFocus(i){const el=rail.children[Math.max(0,Math.min(MG_DATA.length-1,i))];if(el)el.focus();}
+  function mgSelect(i,focus){
+    selectedIdx=i;const d=MG_DATA[i];
+    [...rail.children].forEach((tile,idx)=>{tile.setAttribute('aria-checked',idx===i?'true':'false');tile.tabIndex=idx===i?0:-1;});
+    mgRender(d);if(focus)mgFocus(i);
+  }
+  function mgRender(d){
+    $('#mgRTask').textContent='Recommended for: '+d.task;
+    $('#mgRIcon').innerHTML=mgSvg(d.id);$('#mgRModel').textContent=d.model;
+    $('#mgRBadges').innerHTML=
+      `<span class="mg-badge"><span class="k">id</span> <span style="font-family:ui-monospace,monospace">${d.mid}</span></span>`+
+      `<span class="mg-badge eff"><span class="k">effort</span> ${d.effort}</span>`+
+      `<span class="mg-badge ctx"><span class="k">context</span> ${d.ctx}</span>`;
+    $('#mgRWhy').innerHTML=d.why;
+    $('#mgRAlts').innerHTML=d.alts.map(a=>`<span class="mg-chip">${a}</span>`).join('');
+    const cmd='/model '+d.mid;$('#mgRCmd').textContent=cmd;
+    const cp=$('#mgCopyBtn');cp.classList.remove('done');cp.textContent='Copy';
+    cp.onclick=()=>mgCopy(cmd,cp);
+  }
+  function mgCopy(text,b){
+    const done=()=>{b.classList.add('done');b.textContent='Copied \u2713';setTimeout(()=>{b.classList.remove('done');b.textContent='Copy';},1600);};
+    if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(done,()=>fb(text,done));}else fb(text,done);
+  }
+  function fb(text,done){const ta=document.createElement('textarea');ta.value=text;ta.style.cssText='position:fixed;opacity:0';document.body.appendChild(ta);ta.select();try{document.execCommand('copy');done();}catch(e){}document.body.removeChild(ta);}
+  function mgTileKey(e,i){
+    let next=null;
+    if(e.key==='ArrowDown'||e.key==='ArrowRight')next=(i+1)%MG_DATA.length;
+    else if(e.key==='ArrowUp'||e.key==='ArrowLeft')next=(i+MG_DATA.length-1)%MG_DATA.length;
+    else if(e.key==='Home')next=0;
+    else if(e.key==='End')next=MG_DATA.length-1;
+    if(next!==null){e.preventDefault();mgSelect(next,true);}
+    else if(e.key==='Enter'||e.key===' '){e.preventDefault();mgSelect(i,true);}
+    else if(e.key==='Escape'){e.preventDefault();mgHide();}
+    else if(e.key.length===1&&/\S/.test(e.key)){
+      clearTimeout(typeTimer);typeahead+=e.key.toLowerCase();
+      const idx=MG_DATA.findIndex(d=>d.task.toLowerCase().startsWith(typeahead));
+      if(idx>=0)mgSelect(idx,true);typeTimer=setTimeout(()=>typeahead='',600);
+    }
+  }
+  function mgShow(){modal.classList.add('show');mgSelect(0,false);setTimeout(()=>mgFocus(0),0);}
+  function mgHide(){modal.classList.remove('show');$('#mgBtn').focus();}
+  $('#mgTabToggle').addEventListener('click',()=>{
+    const t=$('#mgTable'),b=$('#mgTabToggle'),show=!t.classList.contains('show');
+    t.classList.toggle('show',show);b.textContent=show?'Hide table':'Show table';b.setAttribute('aria-expanded',show?'true':'false');
+  });
+  $('#mgBtn').onclick=mgShow;
+  $('#mgClose').onclick=mgHide;
+  modal.onclick=e=>{if(e.target===modal)mgHide();};
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&modal.classList.contains('show'))mgHide();});
+  mgSelect(0,false);
+})();
 })();
 </script></body></html>"""
 
@@ -1091,6 +1398,13 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": True, "count": len(results),
                         "sent": sum(1 for r in results if r["ok"]),
                         "results": results})
+            return
+
+        if p == "/api/key":
+            target = str(body.get("target") or TARGET)
+            ok, info = send_key(target, str(body.get("key", "")))
+            self._json({"ok": ok, "key": info, "target": target} if ok
+                       else {"ok": False, "error": info})
             return
 
         # --- draft queue endpoints (all keyed by session name) ---
