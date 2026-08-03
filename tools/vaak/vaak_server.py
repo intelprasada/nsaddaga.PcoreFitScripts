@@ -902,6 +902,9 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
 #log{font-family:monospace;font-size:12px;color:#8b949e;white-space:pre-wrap;
  border-top:1px solid #30363d;padding-top:7px;height:var(--log-h,16vh);min-height:60px;
  overflow:auto;flex:0 0 auto}
+#logHead{display:flex;align-items:center;gap:8px;padding:4px 0 2px;font-size:11px;
+ color:#8b949e;flex:0 0 auto}
+#logHead .grow{flex:1}
 .ok{color:#3fb950}.err{color:#f85149}
 /* QR modal */
 #qrModal{position:fixed;inset:0;background:#000a;display:none;align-items:center;
@@ -1193,6 +1196,10 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
     </h4>
     <div id="queue"></div>
     <div id="gutterLog" class="gutter gutter-h" title="Drag to resize log (double-click to reset)"></div>
+    <div id="logHead"><b>Console log</b><span class="grow"></span>
+      <span class="hint" id="logCount"></span>
+      <button class="sec mini" id="clearLogBtn" title="Clear the console log (also removes the persisted copy)">Clear</button>
+    </div>
     <div id="log"></div>
   </main>
 </div>
@@ -1212,8 +1219,32 @@ const prevStatus={};
 const originalTitle=document.title;
 let titleFlashTimer=null;
 let audioCtx=null;
-function logline(t,cls){const d=document.createElement('div');if(cls)d.className=cls;
-  d.textContent=new Date().toLocaleTimeString()+'  '+t;log.prepend(d);}
+function logline(t,cls){
+  const entry={ts:new Date().toLocaleTimeString(),text:String(t),cls:cls||''};
+  logBuf.unshift(entry);
+  if(logBuf.length>LOG_MAX)logBuf.length=LOG_MAX;
+  _logSave();
+  _logRender(entry);
+  _logUpdateCount();
+}
+/* ---- Persistent console log ---- */
+const LOG_MAX=(function(){const n=parseInt(localStorage.getItem('vaakLogMax')||'',10);return n>0?Math.min(5000,n):500;})();
+let logBuf=[];
+try{const p=JSON.parse(localStorage.getItem('vaakLog')||'[]');if(Array.isArray(p))logBuf=p;}catch(e){logBuf=[];}
+function _logSave(){try{localStorage.setItem('vaakLog',JSON.stringify(logBuf.slice(0,LOG_MAX)));}catch(e){}}
+function _logRender(entry){
+  const d=document.createElement('div');
+  if(entry.cls)d.className=entry.cls;
+  d.textContent=(entry.ts||'')+'  '+(entry.text||'');
+  log.prepend(d);
+}
+function _logUpdateCount(){
+  const el=document.getElementById('logCount');
+  if(el)el.textContent=logBuf.length+' / '+LOG_MAX;
+}
+function clearLog(){logBuf=[];_logSave();log.innerHTML='';_logUpdateCount();}
+// Replay newest-first buffer so the most recent line ends up on top.
+(function _logReplay(){for(let i=logBuf.length-1;i>=0;i--)_logRender(logBuf[i]);_logUpdateCount();})();
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
 function stopTitleFlash(){
@@ -1671,6 +1702,7 @@ msg.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&!e.shiftKey&&$('#enterSends').checked){e.preventDefault();sendNow();}
 });
 updatePaneVisibility();
+if($('#clearLogBtn'))$('#clearLogBtn').onclick=()=>{if(confirm('Clear the console log? This also removes the persisted copy.'))clearLog();};
 loadSessions().then(()=>{loadDrafts();loadPane();});
 setInterval(loadSessions,2500);
 setInterval(loadDrafts,4000);

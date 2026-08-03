@@ -731,3 +731,28 @@ def test_page_has_compose_resize_gutter():
     assert 0 < ic < ig < ip
     # Drag handler must be wired.
     assert "drag($('#gutterCompose'),'compose-h','y')" in p
+
+
+def test_page_console_log_persistent():
+    """Console log lines should survive page refresh AND server restart:
+    each logline is mirrored to localStorage['vaakLog'] (newest-first,
+    capped at vaakLogMax / LOG_MAX = 500), and the page replays the
+    buffer on load. A Clear button wipes both DOM and localStorage."""
+    p = D.PAGE
+    for n in ("vaakLog", "logBuf", "_logRender", "_logReplay",
+             "clearLog", "clearLogBtn", "id=\"logHead\"",
+             "localStorage.setItem('vaakLog'", "LOG_MAX"):
+        assert n in p, n
+    # logline must go through the persistence path.
+    idx = p.find("function logline(")
+    end = p.find("/* ---- Persistent console log", idx)
+    assert end > idx
+    body = p[idx:end]
+    assert "logBuf.unshift" in body
+    assert "_logSave()" in body
+    assert "_logRender(entry)" in body
+    # Log head must sit BETWEEN the resize gutter and the log itself.
+    ig = p.find('id="gutterLog"')
+    ih = p.find('id="logHead"')
+    il = p.find('id="log"')
+    assert 0 < ig < ih < il
