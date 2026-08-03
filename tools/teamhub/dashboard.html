@@ -389,6 +389,37 @@
     </section>
     <section class="kpis" id="tiKpis"></section>
 
+    <!-- Turnin activity chart -->
+    <section class="card" style="margin-bottom:12px;">
+      <div class="flex" style="margin-bottom:8px;">
+        <h3 style="margin:0;">Turnin activity</h3>
+        <span class="h-sub" id="tiChartHint">Counts of this engineer's turnins over time. Intel work-week format (WW01 = week containing Jan 1, Sun-start).</span>
+        <div class="spacer"></div>
+        <label class="sub" for="tiChartGran"><b>Bar granularity:</b></label>
+        <select id="tiChartGran">
+          <option value="ww" selected>Work week (WW)</option>
+          <option value="month">Month</option>
+        </select>
+        <label class="sub" for="tiChartSpan"><b>Look back:</b></label>
+        <select id="tiChartSpan">
+          <option value="4w">Last 4 WW</option>
+          <option value="8w">Last 8 WW</option>
+          <option value="13w" selected>Last 13 WW (a quarter)</option>
+          <option value="26w">Last 26 WW (a half)</option>
+          <option value="52w">Last 52 WW (a year)</option>
+          <option value="3m">Last 3 months</option>
+          <option value="6m">Last 6 months</option>
+          <option value="12m">Last 12 months</option>
+          <option value="ytd">Year to date</option>
+          <option value="win">Current window (from filter)</option>
+        </select>
+        <label class="sub"><input type="checkbox" id="tiChartStack" checked style="vertical-align:middle;"/> Split by status</label>
+      </div>
+      <div style="height:280px; position:relative;">
+        <canvas id="tiActivityCanvas"></canvas>
+      </div>
+    </section>
+
     <section class="card">
       <div class="flex">
         <h3 style="margin:0;">Turnins</h3>
@@ -1338,6 +1369,177 @@ let tiInFlight = null;
 
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 
+// ---- Intel work-week helpers ---------------------------------------------
+// Intel WW definition: Sunday-start week; WW01 = the week containing Jan 1.
+// intelWWStart(d) returns the Date at 00:00 of the Sunday that opens the WW
+// that contains `d`.
+function intelWWStart(d) {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  x.setDate(x.getDate() - x.getDay()); // roll back to Sunday
+  return x;
+}
+// Return {year, ww} for the WW containing `d`. The "WW year" is the calendar
+// year of the Sunday that opens the WW (matches Intel usage: WW01 2026 =
+// the week starting the Sunday on/before Jan 1 2026's WW01 anchor).
+function intelWW(d) {
+  const sun = intelWWStart(d);
+  // Anchor: the Sunday of the WW that contains Jan 1 of the year OF that Sunday.
+  const year = sun.getFullYear();
+  const jan1 = new Date(year, 0, 1);
+  const anchor = intelWWStart(jan1); // may be in Dec of prior year
+  const diffDays = Math.round((sun - anchor) / 86400000);
+  let ww = Math.floor(diffDays / 7) + 1;
+  // If the WW starts before Jan 1 anchor's year (i.e. late Dec belongs to
+  // last year's WW52/53), roll back the year label.
+  if (ww < 1) {
+    const prev = new Date(year - 1, 0, 1);
+    const prevAnchor = intelWWStart(prev);
+    ww = Math.floor((sun - prevAnchor) / 86400000 / 7) + 1;
+    return { year: year - 1, ww, start: sun };
+  }
+  return { year, ww, start: sun };
+}
+function wwLabel(y, ww) { return `WW${String(ww).padStart(2,"0")}'${String(y).slice(-2)}`; }
+function monthLabel(d) {
+  const m = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getMonth()];
+  return `${m} '${String(d.getFullYear()).slice(-2)}`;
+}
+function monthStart(d) { return new Date(d.getFullYear(), d.getMonth(), 1); }
+function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+function addMonths(d, n) { const x = new Date(d); x.setMonth(x.getMonth() + n); return x; }
+
+// Given a "span" selector value + the current dashboard window, return
+// [start, end] Date bounds for the activity chart.
+function tiChartBounds(spanVal, tdWindow) {
+  const now = new Date();
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // today 00:00
+  if (spanVal === "win" && tdWindow) {
+    return [new Date(tdWindow.since + "T00:00:00"), new Date(tdWindow.until + "T00:00:00")];
+  }
+  if (spanVal === "ytd") return [new Date(end.getFullYear(), 0, 1), end];
+  const m = /^(\d+)([wm])$/.exec(spanVal);
+  if (!m) return [addDays(end, -13*7), end];
+  const n = +m[1];
+  return m[2] === "w" ? [addDays(end, -n*7 + 1), end] : [addMonths(end, -n + 1), end];
+}
+
+// Bucket a list of TIs (each with turnin_time_epoch) into ordered {label, key,
+// counts:{status: n}, total} rows at the requested granularity.
+function bucketTurnins(turnins, gran, bounds) {
+  const [start, end] = bounds;
+  const buckets = new Map(); // key -> {label, sortKey, start, counts, total}
+  const bucketFor = (d) => {
+    if (gran === "month") {
+      const ms = monthStart(d);
+      const key = `${ms.getFullYear()}-${String(ms.getMonth()+1).padStart(2,"0")}`;
+      return { key, label: monthLabel(ms), sortKey: ms.getTime(), start: ms };
+    }
+    const { year, ww, start: ws } = intelWW(d);
+    return { key: `${year}-W${String(ww).padStart(2,"0")}`, label: wwLabel(year, ww), sortKey: ws.getTime(), start: ws };
+  };
+  // Pre-seed every bucket in the range so gaps show as zero bars.
+  let cursor = gran === "month" ? monthStart(start) : intelWWStart(start);
+  const endMs = end.getTime();
+  while (cursor.getTime() <= endMs) {
+    const b = bucketFor(cursor);
+    if (!buckets.has(b.key)) buckets.set(b.key, {...b, counts:{}, total:0});
+    cursor = gran === "month" ? addMonths(cursor, 1) : addDays(cursor, 7);
+  }
+  for (const t of turnins) {
+    const ep = +t.turnin_time_epoch;
+    if (!ep) continue;
+    const d = new Date(ep * 1000);
+    if (d < start || d > addDays(end, 1)) continue;
+    const b = bucketFor(d);
+    let row = buckets.get(b.key);
+    if (!row) { row = {...b, counts:{}, total:0}; buckets.set(b.key, row); }
+    const st = normStatus(t.status);
+    row.counts[st] = (row.counts[st] || 0) + 1;
+    row.total += 1;
+  }
+  return [...buckets.values()].sort((a,b)=> a.sortKey - b.sortKey);
+}
+function normStatus(s) {
+  const l = String(s||"").toLowerCase();
+  if (/releas/.test(l))                 return "Released";
+  if (/cancel|withdraw/.test(l))        return "Cancelled";
+  if (/reject|fail/.test(l))            return "Rejected";
+  if (/hold|pending|queue|progress|flight/.test(l)) return "In flight";
+  return s ? s : "Other";
+}
+const TI_STATUS_COLORS = {
+  "Released":  "#10b981",
+  "In flight": "#3b82f6",
+  "Cancelled": "#f59e0b",
+  "Rejected":  "#ef4444",
+  "Other":     "#94a3b8",
+};
+
+let tiActivityChart = null;
+function renderTiActivityChart() {
+  const canvas = document.getElementById("tiActivityCanvas");
+  if (!canvas || !tiData || !tiData.turnins) {
+    if (tiActivityChart) { tiActivityChart.destroy(); tiActivityChart = null; }
+    return;
+  }
+  const gran   = document.getElementById("tiChartGran").value;
+  const span   = document.getElementById("tiChartSpan").value;
+  const stack  = document.getElementById("tiChartStack").checked;
+  const bounds = tiChartBounds(span, tiData.window);
+  const rows   = bucketTurnins(tiData.turnins, gran, bounds);
+
+  const labels = rows.map(r => r.label);
+  const order  = ["Released","In flight","Cancelled","Rejected","Other"];
+  const datasets = stack
+    ? order.map(s => ({
+        label: s,
+        data:  rows.map(r => r.counts[s] || 0),
+        backgroundColor: TI_STATUS_COLORS[s],
+        borderWidth: 0,
+        stack: "ti",
+      }))
+    : [{
+        label: "Turnins",
+        data:  rows.map(r => r.total),
+        backgroundColor: "#6366f1",
+        borderWidth: 0,
+      }];
+
+  if (tiActivityChart) tiActivityChart.destroy();
+  tiActivityChart = new Chart(canvas.getContext("2d"), {
+    type: "bar",
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: stack, position: "top", labels: { color: "#e5e7eb" } },
+        tooltip: {
+          callbacks: {
+            title: (items) => {
+              const r = rows[items[0].dataIndex];
+              const s = r.start;
+              if (gran === "month") return `${r.label} (${s.toISOString().slice(0,10)})`;
+              const e = addDays(s, 6);
+              return `${r.label}  (${s.toISOString().slice(0,10)} → ${e.toISOString().slice(0,10)})`;
+            },
+            footer: (items) => {
+              const r = rows[items[0].dataIndex];
+              return `Total: ${r.total}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: { stacked: stack, ticks: { color: "#cbd5e1", maxRotation: 60, minRotation: 45, autoSkip: false }, grid: { display: false } },
+        y: { stacked: stack, beginAtZero: true, ticks: { color: "#cbd5e1", precision: 0 }, grid: { color: "rgba(148,163,184,0.15)" } },
+      },
+    },
+    plugins: [barValueLabels],
+  });
+}
+
 function renderTiKpis(td) {
   const el = document.getElementById("tiKpis");
   if (!td) { el.innerHTML = ""; return; }
@@ -1589,6 +1791,7 @@ async function loadTurnins(force = false) {
     tiData = await r.json();
     renderTiKpis(tiData);
     renderTiTable();
+    renderTiActivityChart();
     st.textContent = "Updated " + new Date().toLocaleTimeString();
   } catch (e) {
     st.textContent = "Error: " + e.message;
@@ -1755,7 +1958,7 @@ document.getElementById("anonTheme").addEventListener("change", (ev)=>{
     renderEngineer(currentData);
   }
   if (teamTurnins && teamView === "turnins") renderTeamTurnins(teamTurnins);
-  if (tiData) { renderTiKpis(tiData); renderTiTable(); }
+  if (tiData) { renderTiKpis(tiData); renderTiTable(); renderTiActivityChart(); }
   if (summaryData) renderSummaries();
 });
 document.getElementById("summaryFilter").addEventListener("input", renderSummaries);
@@ -1793,6 +1996,10 @@ document.getElementById("tiReload").addEventListener("click", ()=>{
   loadTurnins();
 });
 document.getElementById("tiFilter").addEventListener("input", renderTiTable);
+["tiChartGran","tiChartSpan","tiChartStack"].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener("change", renderTiActivityChart);
+});
 document.querySelectorAll(".view-toggle").forEach(b => {
   b.addEventListener("click", ()=> setTeamView(b.dataset.view));
 });
