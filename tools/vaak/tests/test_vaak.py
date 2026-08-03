@@ -713,3 +713,21 @@ def test_page_save_edit_closes_edit_box():
     rm = body.find("row.classList.remove('editing')")
     rq = body.find("renderQueue(")
     assert rm > 0 and rq > 0 and rm < rq, "must clear .editing before renderQueue"
+
+
+def test_page_has_compose_resize_gutter():
+    """Compose area (status bar + msg textarea + controls) above the
+    terminal mirror should be draggable via #gutterCompose, driven by
+    the --compose-h CSS custom property, persisted in localStorage."""
+    p = D.PAGE
+    assert 'id="compose"' in p
+    assert 'id="gutterCompose"' in p
+    assert '--compose-h' in p or 'compose-h' in p
+    assert 'vaakComposeH' in p
+    # Gutter must appear AFTER #compose and BEFORE #paneWrap in DOM order.
+    ic = p.find('id="compose"')
+    ig = p.find('id="gutterCompose"')
+    ip = p.find('id="paneWrap"')
+    assert 0 < ic < ig < ip
+    # Drag handler must be wired.
+    assert "drag($('#gutterCompose'),'compose-h','y')" in p

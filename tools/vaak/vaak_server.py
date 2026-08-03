@@ -887,6 +887,8 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
 .empty{color:#8b949e;font-style:italic;font-size:13px}
 #paneWrap{border:1px solid #30363d;border-radius:10px;background:#06090f;
  display:flex;flex-direction:column;min-height:0;flex:0 0 auto}
+#compose{display:flex;flex-direction:column;gap:10px;height:var(--compose-h,auto);
+ min-height:120px;overflow:auto;flex:0 0 auto}
 #paneHead{display:flex;align-items:center;gap:8px;justify-content:space-between;padding:7px 10px;
  border-bottom:1px solid #30363d;color:#8b949e;font-size:12px;flex:0 0 auto;
  border-radius:10px 10px 0 0;background:#06090f}
@@ -1134,6 +1136,7 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
   </div>
   <div id="gutterV" class="gutter gutter-v" title="Drag to resize sidebar (double-click to reset)"></div>
   <main>
+    <div id="compose">
     <div class="stbar">
       <b id="selName">no session</b>
       <span class="pill" id="selStatus">\u2014</span>
@@ -1177,6 +1180,8 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
       </label>
       <span class="hint" id="paneMeta">terminal mirror polls every 1.5s</span>
     </div>
+    </div>
+    <div id="gutterCompose" class="gutter gutter-h" title="Drag to resize compose area (double-click to reset)"></div>
     <div id="paneWrap">
       <div id="paneHead"><b>Terminal mirror</b><span class="hint">read-only tmux capture-pane</span></div>
       <pre id="pane"></pre>
@@ -1590,18 +1595,26 @@ applyPaneFont();
               min:80,max:window.innerHeight-260,horiz:false},
     'log-h':{key:'vaakLogH',def:Math.round(window.innerHeight*0.16),
               min:60,max:window.innerHeight-260,horiz:false},
+    'compose-h':{key:'vaakComposeH',def:null,min:120,max:window.innerHeight-200,horiz:false,optional:true},
   };
   const root=document.documentElement;
   function apply(name,px){
     const s=defs[name];
+    if(px===null||px===undefined){
+      root.style.removeProperty('--'+name);
+      localStorage.removeItem(s.key);
+      return;
+    }
     const v=Math.max(s.min,Math.min(s.max,px));
     root.style.setProperty('--'+name,v+'px');
     localStorage.setItem(s.key,String(v));
   }
   function restore(){
     Object.entries(defs).forEach(([name,s])=>{
-      const stored=parseInt(localStorage.getItem(s.key)||'',10);
-      apply(name,isNaN(stored)?s.def:stored);
+      const raw=localStorage.getItem(s.key);
+      const stored=raw==null?NaN:parseInt(raw,10);
+      if(!isNaN(stored))apply(name,stored);
+      else if(!s.optional)apply(name,s.def);
     });
   }
   restore();
@@ -1612,7 +1625,14 @@ applyPaneFont();
       document.body.classList.add('resizing');
       if(axis==='y')document.body.classList.add('rowres');
       const start=(axis==='x')?e.clientX:e.clientY;
-      const cur=parseInt(getComputedStyle(root).getPropertyValue('--'+name),10)||defs[name].def;
+      let cur=parseInt(getComputedStyle(root).getPropertyValue('--'+name),10);
+      if(isNaN(cur)){
+        // No CSS var yet (e.g. compose-h defaults to auto); seed from
+        // the actual element size so drags feel continuous.
+        const targetSel=(name==='compose-h')?'#compose':null;
+        const el=targetSel?document.querySelector(targetSel):null;
+        cur=el?el.getBoundingClientRect().height:defs[name].def;
+      }
       function mm(ev){
         const now=(axis==='x')?ev.clientX:ev.clientY;
         apply(name,cur+(now-start));
@@ -1626,17 +1646,20 @@ applyPaneFont();
       document.addEventListener('mousemove',mm);
       document.addEventListener('mouseup',mu);
     });
-    gutter.addEventListener('dblclick',()=>{apply(name,defs[name].def);});
+    gutter.addEventListener('dblclick',()=>{
+      apply(name,defs[name].optional?null:defs[name].def);
+    });
   }
   drag($('#gutterV'),'nav-w','x');
   drag($('#gutterPane'),'pane-h','y');
   drag($('#gutterLog'),'log-h','y');
+  drag($('#gutterCompose'),'compose-h','y');
   window.addEventListener('resize',()=>{
     Object.keys(defs).forEach(name=>{
       const s=defs[name];
-      s.max=(name==='nav-w')?600:window.innerHeight-260;
-      const cur=parseInt(getComputedStyle(root).getPropertyValue('--'+name),10)||s.def;
-      if(cur>s.max)apply(name,s.max);
+      s.max=(name==='nav-w')?600:window.innerHeight-(name==='compose-h'?200:260);
+      const cur=parseInt(getComputedStyle(root).getPropertyValue('--'+name),10);
+      if(!isNaN(cur)&&cur>s.max)apply(name,s.max);
     });
   });
 })();
