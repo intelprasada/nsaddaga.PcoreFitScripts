@@ -1476,6 +1476,12 @@ const TI_STATUS_COLORS = {
 };
 
 let tiActivityChart = null;
+let tiBucketFilter = null; // {key, label, startEpoch, endEpoch} or null
+function clearTiBucketFilter(rerender) {
+  if (!tiBucketFilter) return;
+  tiBucketFilter = null;
+  if (rerender !== false) { renderTiTable(); renderTiActivityChart(); }
+}
 function renderTiActivityChart() {
   const canvas = document.getElementById("tiActivityCanvas");
   if (!canvas || !tiData || !tiData.turnins) {
@@ -1489,19 +1495,22 @@ function renderTiActivityChart() {
   const rows   = bucketTurnins(tiData.turnins, gran, bounds);
 
   const labels = rows.map(r => r.label);
+  const selIdx = tiBucketFilter ? rows.findIndex(r => r.key === tiBucketFilter.key) : -1;
+  const dimAlpha = "55"; // hex alpha for non-selected bars when a filter is active
+  const withSel = (hex) => rows.map((_, i) => (selIdx < 0 || i === selIdx) ? hex : (hex + dimAlpha));
   const order  = ["Released","In flight","Cancelled","Rejected","Other"];
   const datasets = stack
     ? order.map(s => ({
         label: s,
         data:  rows.map(r => r.counts[s] || 0),
-        backgroundColor: TI_STATUS_COLORS[s],
+        backgroundColor: withSel(TI_STATUS_COLORS[s]),
         borderWidth: 0,
         stack: "ti",
       }))
     : [{
         label: "Turnins",
         data:  rows.map(r => r.total),
-        backgroundColor: "#6366f1",
+        backgroundColor: withSel("#6366f1"),
         borderWidth: 0,
       }];
 
@@ -1513,6 +1522,28 @@ function renderTiActivityChart() {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
+      onClick: (evt, elems, chart) => {
+        // Prefer a real bar hit; if empty area was clicked, clear the filter.
+        const hits = chart.getElementsAtEventForMode(evt, "index", { intersect: true }, false);
+        if (!hits.length) { clearTiBucketFilter(); return; }
+        const idx = hits[0].index;
+        const r = rows[idx];
+        if (!r) return;
+        // Toggle off if the same bucket is clicked again.
+        if (tiBucketFilter && tiBucketFilter.key === r.key) { clearTiBucketFilter(); return; }
+        const endD = gran === "month" ? addMonths(r.start, 1) : addDays(r.start, 7);
+        tiBucketFilter = {
+          key: r.key,
+          label: r.label,
+          startEpoch: Math.floor(r.start.getTime() / 1000),
+          endEpoch:   Math.floor(endD.getTime()   / 1000), // exclusive
+        };
+        renderTiTable();
+        renderTiActivityChart();
+      },
+      onHover: (evt, elems) => {
+        evt.native.target.style.cursor = elems.length ? "pointer" : "default";
+      },
       plugins: {
         legend: { display: stack, position: "top", labels: { color: "#e5e7eb" } },
         tooltip: {
@@ -1676,8 +1707,24 @@ function renderTiTable() {
   tb.innerHTML = "";
   if (!tiData) return;
   const q = (document.getElementById("tiFilter").value || "").trim();
-  const rows = tiData.turnins.filter(t => tiMatchesFilter(t, q));
-  document.getElementById("tiCount").textContent = `${rows.length} turnin${rows.length===1?"":"s"}`;
+  let rows = tiData.turnins.filter(t => tiMatchesFilter(t, q));
+  if (tiBucketFilter) {
+    const {startEpoch, endEpoch} = tiBucketFilter;
+    rows = rows.filter(t => {
+      const ep = +t.turnin_time_epoch || 0;
+      return ep >= startEpoch && ep < endEpoch;
+    });
+  }
+  const countEl = document.getElementById("tiCount");
+  const base = `${rows.length} turnin${rows.length===1?"":"s"}`;
+  if (tiBucketFilter) {
+    countEl.innerHTML = `${base} · <span class="sub">in ${esc(tiBucketFilter.label)}</span> ` +
+      `<a href="#" id="tiBucketClear" class="badge" style="background:#334155;color:#fff;text-decoration:none;cursor:pointer;">Show all ×</a>`;
+    const clr = document.getElementById("tiBucketClear");
+    if (clr) clr.addEventListener("click", (e)=>{ e.preventDefault(); clearTiBucketFilter(); });
+  } else {
+    countEl.textContent = base;
+  }
   // Color-coding thresholds: prefer this engineer's own released stats;
   // fall back to any released pipe if too few. Falsy → neutral (no color).
   const thresholds = (tiData.pipe && tiData.pipe.released && tiData.pipe.released.n)
@@ -1772,7 +1819,7 @@ function renderTiDetail(t) {
 }
 
 async function loadTurnins(force = false) {
-  if (!selectedEngineer) { tiData = null; renderTiKpis(null); renderTiTable(); return; }
+  if (!selectedEngineer) { tiData = null; tiBucketFilter = null; renderTiKpis(null); renderTiTable(); return; }
   const proj  = document.getElementById("proj").value;
   const range = document.getElementById("range").value;
   const year  = document.getElementById("year").value;
@@ -1789,6 +1836,7 @@ async function loadTurnins(force = false) {
     const r = await fetch(`/api/turnins?${qs.toString()}`, { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     tiData = await r.json();
+    tiBucketFilter = null;
     renderTiKpis(tiData);
     renderTiTable();
     renderTiActivityChart();
@@ -1998,7 +2046,7 @@ document.getElementById("tiReload").addEventListener("click", ()=>{
 document.getElementById("tiFilter").addEventListener("input", renderTiTable);
 ["tiChartGran","tiChartSpan","tiChartStack"].forEach(id => {
   const el = document.getElementById(id);
-  if (el) el.addEventListener("change", renderTiActivityChart);
+  if (el) el.addEventListener("change", () => { clearTiBucketFilter(false); renderTiActivityChart(); renderTiTable(); });
 });
 document.querySelectorAll(".view-toggle").forEach(b => {
   b.addEventListener("click", ()=> setTeamView(b.dataset.view));
