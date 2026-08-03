@@ -32,7 +32,7 @@ dropdown in the web UI.
 
 ```
                 +----------------------------------------------+
- left nav bar   |  Vaak  -> dictate & queue into tmux sessions |
+ left nav bar   |  Vaak  🎼 conduct your CLI orchestra          |
  (sessions +    +------------------+---------------------------+
   status dots)  | ● copilot [node] | selected session: ready   |
                 | ● review  [node] | [ big Win+H text box ]     |
