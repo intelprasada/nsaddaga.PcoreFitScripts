@@ -103,7 +103,8 @@ survive a Vaak restart and re-associate with the same session.
 
 | Control | Effect |
 |---------|--------|
-| **Session nav / Rescan** | Left bar; click a session to target it. Status dot = busy/ready; badge = queued drafts. Auto-rescans every ~2.5s. |
+| **Session nav / Rescan** | Left bar; click a session to target it. Status dot = busy/ready; badge = queued drafts. Auto-rescans every ~2.5s. Hover a row for its ⧉ (copy attach command) and ✕ (kill) shortcuts. |
+| **⧉ Copy attach command** | Header button and per-row shortcut copy `tmux attach -t <session>` to the clipboard so you can attach from any Linux terminal in a couple of keystrokes. |
 | **Enter = send now** | Enter sends the box to the selected session immediately (Shift+Enter inserts a newline). |
 | **Submit in CLI** | Off = only type the text into the CLI, don't press Enter — lets you stitch several dictations into one prompt, then submit manually. |
 | **^C / Esc** | Send a real Ctrl-C (interrupt) or Escape key press to the selected session — e.g. to cancel a running command or stop the CLI's current action. |
