@@ -286,3 +286,38 @@ def test_send_key_ctrl_c_interrupts():
         assert any(ln.strip() == marker for ln in cap.stdout.splitlines())
     finally:
         subprocess.run(["tmux", "kill-session", "-t", sess], check=False)
+
+
+def test_kill_session_rejects_empty():
+    ok, msg = D.kill_session("")
+    assert ok is False and "required" in msg
+
+
+def test_kill_session_rejects_shell_metachars():
+    for bad in ["foo;rm -rf x", "a|b", "a`whoami`", "a$b", "a b\nc", "a\"b", "a'b", "a\\b"]:
+        ok, msg = D.kill_session(bad)
+        assert ok is False, f"expected reject for {bad!r}"
+        assert "invalid characters" in msg, f"got: {msg}"
+
+
+def test_kill_session_rejects_missing():
+    ok, msg = D.kill_session("vaak_no_such_%s" % uuid.uuid4().hex[:8])
+    assert ok is False and "not found" in msg
+
+
+@pytest.mark.skipif(not _HAS_TMUX, reason="tmux not installed")
+def test_kill_session_kills_real_session_and_purges_drafts(tmp_path, monkeypatch):
+    monkeypatch.setattr(D, "DRAFTS_PATH", tmp_path / "drafts.json", raising=False)
+    sess = "vaak_kill_%s" % uuid.uuid4().hex[:8]
+    subprocess.run(["tmux", "new", "-d", "-s", sess], check=True)
+    try:
+        D.add_draft(sess, "queued item 1")
+        assert D.get_drafts(sess), "sanity: draft should exist before kill"
+        ok, name = D.kill_session(sess)
+        assert ok is True and name == sess
+        r = subprocess.run(["tmux", "has-session", "-t", sess],
+                           capture_output=True, text=True, check=False)
+        assert r.returncode != 0
+        assert D.get_drafts(sess) == []
+    finally:
+        subprocess.run(["tmux", "kill-session", "-t", sess], check=False)
