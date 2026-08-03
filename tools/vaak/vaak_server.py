@@ -720,7 +720,18 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
 #queue{display:flex;flex-direction:column;gap:7px}
 .qi{border:1px solid #30363d;border-radius:8px;background:#161b22;padding:8px 10px;
  display:flex;gap:8px;align-items:flex-start}
-.qi .qt{flex:1;white-space:pre-wrap;word-break:break-word;font-size:14px;min-width:0}
+.qi .qt{flex:1;white-space:pre-wrap;word-break:break-word;font-size:14px;min-width:0;cursor:text}
+.qi .qt:hover{background:#ffffff08;border-radius:4px}
+.qi.editing{border-color:#58a6ff;box-shadow:0 0 0 2px #58a6ff33;flex-direction:column;align-items:stretch;gap:6px}
+.qi.editing .qt{display:none}
+.qi.editing .qa{display:none}
+.qi .qedit{display:none;flex-direction:column;gap:6px;width:100%}
+.qi.editing .qedit{display:flex}
+.qi .qedit textarea{width:100%;min-height:60px;background:#0b0f14;color:#e6edf3;border:1px solid #30363d;
+ border-radius:6px;padding:8px 10px;font:14px/1.4 inherit;resize:vertical;box-sizing:border-box}
+.qi .qedit textarea:focus{outline:none;border-color:#58a6ff}
+.qi .qedit .qhint{color:#8b949e;font-size:11px}
+.qi .qedit .qactions{display:flex;gap:6px;justify-content:flex-end}
 .qi .qa{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
 .empty{color:#8b949e;font-style:italic;font-size:13px}
 #paneWrap{border:1px solid #30363d;border-radius:10px;background:#06090f;
@@ -1143,22 +1154,60 @@ function renderQueue(items){
   if(!items.length){el.innerHTML='<div class="empty">No queued items. Type above and \u201cAdd to queue\u201d \u2014 works even while the session is busy.</div>';return;}
   el.innerHTML='';
   items.forEach((it,i)=>{
-    const d=document.createElement('div');d.className='qi';
-    d.innerHTML=`<span class="qt">${esc(it.text)}</span>`+
+    const d=document.createElement('div');d.className='qi';d.dataset.id=it.id;
+    d.innerHTML=`<span class="qt" title="Click to edit">${esc(it.text)}</span>`+
       `<span class="qa">`+
+      `<button class="sec mini" data-a="edit">\u270e Edit</button>`+
       `<button class="sec mini" data-a="copy">Copy</button>`+
       `<button class="mini" data-a="send">Send</button>`+
       `<button class="sec mini" data-a="up" ${i===0?'disabled':''}>\u2191</button>`+
       `<button class="sec mini" data-a="down" ${i===items.length-1?'disabled':''}>\u2193</button>`+
       `<button class="sec mini" data-a="del">\u2715</button>`+
-      `</span>`;
+      `</span>`+
+      `<div class="qedit">`+
+      `<textarea></textarea>`+
+      `<div class="qhint">Enter to save \u00b7 Shift+Enter for newline \u00b7 Esc to cancel</div>`+
+      `<div class="qactions">`+
+      `<button class="sec mini" data-a="cancel">Cancel</button>`+
+      `<button class="mini" data-a="save">Save</button>`+
+      `</div></div>`;
     d.querySelector('[data-a=copy]').onclick=()=>copyText(it.text);
     d.querySelector('[data-a=send]').onclick=()=>sendDraft(it.id);
     d.querySelector('[data-a=up]').onclick=()=>moveDraft(it.id,'up');
     d.querySelector('[data-a=down]').onclick=()=>moveDraft(it.id,'down');
     d.querySelector('[data-a=del]').onclick=()=>delDraft(it.id);
+    d.querySelector('[data-a=edit]').onclick=()=>beginEdit(d,it.text);
+    d.querySelector('[data-a=cancel]').onclick=()=>cancelEdit(d);
+    d.querySelector('[data-a=save]').onclick=()=>saveEdit(d,it.id);
+    d.querySelector('.qt').onclick=()=>beginEdit(d,it.text);
+    const ta=d.querySelector('.qedit textarea');
+    ta.onkeydown=(e)=>{
+      if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();saveEdit(d,it.id);}
+      else if(e.key==='Escape'){e.preventDefault();cancelEdit(d);}
+    };
     el.appendChild(d);
   });
+}
+function beginEdit(row,text){
+  const el=$('#queue');
+  el.querySelectorAll('.qi.editing').forEach(r=>{if(r!==row)r.classList.remove('editing');});
+  row.classList.add('editing');
+  const ta=row.querySelector('.qedit textarea');
+  ta.value=text;
+  const rows=Math.max(2,Math.min(10,(text.match(/\\n/g)||[]).length+2));
+  ta.rows=rows;
+  ta.focus();ta.setSelectionRange(ta.value.length,ta.value.length);
+}
+function cancelEdit(row){row.classList.remove('editing');}
+async function saveEdit(row,id){
+  const ta=row.querySelector('.qedit textarea');
+  const text=ta.value.trim();
+  if(!text){logline('empty text \u2014 use \u2715 to delete instead','err');return;}
+  try{
+    const d=await api('/api/drafts/update',{session:sel,id,text});
+    if(d&&d.ok){logline('edited draft','ok');renderQueue(d.drafts||[]);}
+    else logline('edit failed: '+((d&&d.error)||'unknown'),'err');
+  }catch(e){logline('edit error: '+e.message,'err');}
 }
 
 async function sendNow(){
