@@ -448,7 +448,7 @@ def _parse_porcelain(out: str, start: int) -> list[dict]:
 # sha, so cached on disk forever.
 # --------------------------------------------------------------------------
 _HSD_RE = re.compile(r"\b(\d{9,14})\b")
-_TURNIN_RE = re.compile(r"(?:user_turnin|integrate_bundle|turnin)[ _]?(\d{3,7})",
+_TURNIN_RE = re.compile(r"(?:user_turnin|integrate_bundle|turnin)[ _]?(\d{2,7})",
                         re.IGNORECASE)
 
 
@@ -487,23 +487,33 @@ def enrich_commit(repo: RepoInfo, sha: str) -> dict:
                 t = m.group(1)
                 if t not in info["turnins"]:
                     info["turnins"].append(t)
-    # Introducing merge → turnin id (the value that maps to gatekeeper turnins).
+    # Introducing merge → the OLDEST merge on the ancestry path from this
+    # commit up to HEAD: the gatekeeper merge that first brought the commit
+    # into the model (user_turnin<N> / integrate_bundle<N> / ...).
+    #
+    # BEWARE: `git log -n1 --reverse` is a footgun — the count is applied
+    # *before* the reverse, so it yields the NEWEST merge on the path (≈ HEAD,
+    # i.e. the latest turnin) instead of the oldest. That made every line in
+    # every file resolve to the most recent turnin. Enumerate the ancestry-path
+    # merges and take the first after reversing (the true introducing merge).
     mrg = subprocess.run(
         ["git", "-C", repo.root, "--no-pager", "log", "--merges",
-         "--ancestry-path", "--reverse", "--max-count=1",
+         "--ancestry-path", "--reverse",
          "--format=%H%x00%s", f"{sha}..HEAD"],
-        capture_output=True, text=True, timeout=45, check=False)
-    if mrg.returncode == 0 and mrg.stdout.strip():
-        msha, _, msubj = mrg.stdout.strip().partition("\x00")
-        info["merge"] = msha[:12]
-        info["merge_summary"] = msubj
-        for m in _TURNIN_RE.finditer(msubj):
-            t = m.group(1)
-            if t not in info["turnins"]:
-                info["turnins"].append(t)
-        for h in _extract_hsds(msubj):
-            if h not in info["hsds"]:
-                info["hsds"].append(h)
+        capture_output=True, text=True, timeout=60, check=False)
+    if mrg.returncode == 0 and mrg.stdout:
+        first = next((ln for ln in mrg.stdout.splitlines() if ln), "")
+        if first:
+            msha, _, msubj = first.partition("\x00")
+            info["merge"] = msha[:12]
+            info["merge_summary"] = msubj
+            for m in _TURNIN_RE.finditer(msubj):
+                t = m.group(1)
+                if t not in info["turnins"]:
+                    info["turnins"].append(t)
+            for h in _extract_hsds(msubj):
+                if h not in info["hsds"]:
+                    info["hsds"].append(h)
     _cache_write("commit", ck, info)
     return info
 
@@ -594,7 +604,7 @@ def resolve_turnin_merge(repo: RepoInfo, tid: str) -> str:
     are also tagged `*_turnin<id>`. Returns the full merge sha or ""."""
     tok = _ti_token_re(tid)
     r = repo._git("log", "--merges", "-E",
-                  f"--grep=turnin[ _]?{tid}([^0-9]|$)",
+                  f"--grep=(turnin|bundle)[ _]?{tid}([^0-9]|$)",
                   "--format=%H%x00%s", "-n", "40", timeout=45)
     if r.returncode == 0:
         for line in r.stdout.splitlines():

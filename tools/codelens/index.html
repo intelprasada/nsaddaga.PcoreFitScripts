@@ -409,7 +409,8 @@ function renderContext(c){
       `<span class="lc">${cm.lines}L</span></div>`+
       `<div class="sm">${esc(cm.summary)}</div>`+
       `<div class="meta">${esc(cm.author)}${cm.idsid?` · <span class="mono">${esc(cm.idsid)}</span>`:""} · ${when}`+
-      (cm.turnins&&cm.turnins.length?` · ${cm.turnins.map(tiPill).join("")}`:"")+
+      (cm.turnins&&cm.turnins.length?` · ${cm.turnins.map(tiPill).join("")}`:
+        (cm.merge?` · via <span class="clink mono" data-sha="${esc(cm.merge)}" title="${esc(cm.merge_summary||"")}">${esc(cm.merge)}</span>`:""))+
       (cm.hsds&&cm.hsds.length?` · ${cm.hsds.map(hsdLink).join("")}`:"")+
       `</div></div>`;
   });
@@ -540,6 +541,7 @@ function commitLensHtml(d){
   h+=`<div><div class="k">Date</div><div class="v num">${dstr(d.time)||'—'}</div></div>`;
   h+=`<div><div class="k">Commit</div><div class="v mono">${esc(d.short)}${d.is_merge?' <span class="badge merge">merge</span>':''}</div></div>`;
   if(d.parents&&d.parents.length) h+=`<div><div class="k">Parent${d.parents.length>1?'s':''}</div><div class="v mono">${d.parents.map(esc).join(' ')}</div></div>`;
+  if(d.merge) h+=`<div><div class="k">Introduced by</div><div class="v"><span class="clink mono" data-sha="${esc(d.merge)}">${esc(d.merge)}</span>${d.merge_summary?` <span class="sub">${esc(d.merge_summary)}</span>`:''}</div></div>`;
   h+=`</div>`;
   h+=`<div class="lens-msg"><div class="sm">${esc(d.summary)}</div>${d.body?`<div class="bd">${esc(d.body)}</div>`:''}</div>`;
   if((d.turnins||[]).length) h+=`<h4>Turnin</h4>`+d.turnins.map(tiLinkL).join("");

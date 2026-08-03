@@ -39,6 +39,14 @@ def test_turnin_regex_variants():
     assert ids == {"4787", "22027", "16331"}
 
 
+def test_turnin_regex_two_digit_bundle():
+    # early integrate_bundle / user_turnin ids are only 2 digits and must
+    # still be picked up (regression: they were dropped by a \d{3,7} bound).
+    ids = {m.group(1) for m in C._TURNIN_RE.finditer(
+        "Merge branch 'master' of .../core/integrate_bundle78 user_turnin42")}
+    assert ids == {"78", "42"}
+
+
 # --- name / idsid helpers ---------------------------------------------------
 @pytest.mark.parametrize("raw,expected", [
     ("Mostovicz, Tsvi", "Tsvi Mostovicz"),
