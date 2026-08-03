@@ -1461,7 +1461,13 @@ async function saveEdit(row,id){
   if(!text){logline('empty text \u2014 use \u2715 to delete instead','err');return;}
   try{
     const d=await api('/api/drafts/update',{session:sel,id,text});
-    if(d&&d.ok){logline('edited draft','ok');renderQueue(d.drafts||[]);}
+    if(d&&d.ok){
+      // Close the edit box BEFORE renderQueue re-runs so the capture/restore
+      // machinery (which exists to survive the 4s poll) doesn't reopen it.
+      row.classList.remove('editing');
+      if(ta&&document.activeElement===ta)ta.blur();
+      logline('edited draft','ok');renderQueue(d.drafts||[]);
+    }
     else logline('edit failed: '+((d&&d.error)||'unknown'),'err');
   }catch(e){logline('edit error: '+e.message,'err');}
 }
