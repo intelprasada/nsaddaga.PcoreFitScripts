@@ -105,6 +105,7 @@ survive a Vaak restart and re-associate with the same session.
 |---------|--------|
 | **Session nav / Rescan** | Left bar; click a session to target it. Status dot = busy/ready; badge = queued drafts. Auto-rescans every ~2.5s. Hover a row for its ⧉ (copy attach command) and ✕ (kill) shortcuts. |
 | **⧉ Copy attach command** | Header button and per-row shortcut copy `tmux attach -t <session>` to the clipboard so you can attach from any Linux terminal in a couple of keystrokes. |
+| **🕓 History** | Header button opens a modal listing the last N prompts you sent from Vaak (direct sends, broadcasts, queue flushes, autoflush). N is configurable in the modal (persisted in this browser) and capped by `VAAK_HISTORY_MAX`. Each entry has **Use** (load into the prompt box), **+ Queue**, **Send now**, and **Copy**. A search box filters client-side; a "Only current session" toggle scopes the fetch server-side. |
 | **Enter = send now** | Enter sends the box to the selected session immediately (Shift+Enter inserts a newline). |
 | **Submit in CLI** | Off = only type the text into the CLI, don't press Enter — lets you stitch several dictations into one prompt, then submit manually. |
 | **^C / Esc** | Send a real Ctrl-C (interrupt) or Escape key press to the selected session — e.g. to cancel a running command or stop the CLI's current action. |
@@ -129,6 +130,8 @@ all configuration is via environment variables:
 | `VAAK_HOST` | `0.0.0.0` | Bind address (0.0.0.0 so a laptop browser can reach this host by IP). |
 | `VAAK_DRAFTS` | `~/.vaak/drafts.json` | Where per-session draft queues persist. |
 | `VAAK_AUTOFLUSH_PATH` | `~/.vaak/autoflush.json` | Where per-session **Auto-send when ready** enablement persists so a Vaak restart preserves your toggles. |
+| `VAAK_HISTORY_PATH` | `~/.vaak/history.json` | Where the recent-prompt history persists (used by the **&#x1F553; History** button). |
+| `VAAK_HISTORY_MAX` | `500` | Maximum recorded prompts kept on disk and in memory (clamped to 10\u201310000). The UI's "Show last N" input is capped at this value. |
 | `VAAK_BUSY_RE` | Copilot-CLI footer regex | Regex marking a pane as *busy* when found in its tail. Override for other CLIs. |
 | `VAAK_STATUS_TAIL` | `8` | How many trailing non-blank pane lines to scan for the busy marker. |
 | `VAAK_PANE_LINES` | `1000` | Default number of lines exposed by `/api/pane` and shown in the terminal mirror (requests are capped at 5000). |
@@ -152,6 +155,8 @@ Everything below returns JSON.
 | `GET /api/info` | Default target, its resolved pane id, and all tmux panes as `[{id,label}]`. |
 | `POST /api/key` | Body `{token, target?, key}` — sends a real control key press (allowlist: `C-c`, `Escape`, `C-d`, `C-u`, `Enter`, `Up`, `Down`). Unlike `/api/send`, the key is interpreted, not typed literally. |
 | `POST /api/kill_session` | Body `{token, session}` — runs `tmux kill-session` and purges the session's persisted drafts. Rejects empty names and names containing shell metacharacters (`;&\|`` `$<>\"'\\`). |
+| `GET /api/history` | Query `?limit=N&session=<name>` — returns the last N sent prompts (newest first). Omit `session` for all sessions. `N` is clamped to `[1, VAAK_HISTORY_MAX]`. |
+| `POST /api/history/clear` | Body `{token}` — deletes every recorded prompt (in-memory + on-disk). |
 | `POST /api/broadcast` | Body `{token, text, targets:[names], submit?}` — sends `text` to every target; returns per-target results. |
 | `POST /api/send` | `{token, text, target?, submit?}` — types `text` into `target` now. |
 | `POST /api/drafts/add` | `{token, session, text}` — enqueue a draft. |
