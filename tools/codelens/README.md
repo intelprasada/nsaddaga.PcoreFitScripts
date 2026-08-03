@@ -33,7 +33,7 @@ Switch between the configured repos with the selector in the top bar.
 |------|----------|
 | **Left — file tree** | Lazy directory tree rooted at `core/fe`. Click a file to open it. |
 | **Center — editor** | Monaco, read-only, SystemVerilog-aware highlighting. A colored bar in the line gutter encodes the last author of each line (matching the author dots on the right); hover a line for author · date · commit summary · sha. |
-| **Right — context** | Recomputed for the **visible line range** as you scroll: <ul><li>**Authors of visible lines** — display name, resolved IDSID, and how many visible lines each touched.</li><li>**Turnins** — the `user_turnin<N>` that introduced those lines.</li><li>**HSDs referenced** — article ids parsed from the introducing commits, linked to hsdes.intel.com.</li><li>**Commits** — per-commit breakdown (sha, summary, author, turnin, HSDs, line count).</li></ul> |
+| **Right — context** | Recomputed for the **visible line range** as you scroll: <ul><li>**Authors of visible lines** — display name, resolved IDSID, and how many visible lines each touched.</li><li>**Turnins** — the `user_turnin<N>` that introduced those lines. **Click a TI** to open its drill-down lens (see below).</li><li>**HSDs referenced** — article ids parsed from the introducing commits, linked to hsdes.intel.com.</li><li>**Commits** — per-commit breakdown (sha, summary, author, turnin, HSDs, line count). **Click a sha** to open its commit lens.</li></ul> |
 
 ### Pane size (number of lines)
 
@@ -46,6 +46,26 @@ summarizes:
 
 The context and blame refresh automatically (debounced) as you scroll, and the
 `⟳` button forces a cache-bypassing recompute.
+
+### Drill-down lenses (TI & commit)
+
+Turnins and commit shas everywhere in the right pane are **clickable**, opening
+a focused overlay — modeled on the TeamHub turnin drill-down, but scoped to the
+one thing you clicked:
+
+- **TI lens** — for a `user_turnin<N>`: the introducing merge, status, the
+  commits it brought in (SHA · subject · author · date), every file it changed
+  with per-file `+add / −del` counts, contributing authors (with IDSIDs), and
+  the HSDs it references.
+- **Commit lens** — for a single sha: full author / IDSID / date, the complete
+  commit message, the turnin and HSDs it maps to, and the list of files it
+  changed with `+add / −del` counts.
+
+The two lenses cross-link: click a commit inside a TI lens to dive into that
+commit, click the commit's turnin to jump back up — a breadcrumb tracks the
+trail. A file name jumps straight to that file in the editor (when it lives
+under `core/fe`). `Esc` or a click on the backdrop closes the overlay. Both
+lenses are derived live from git and cached immutably under `.cache/`.
 
 ## How the context is derived
 
@@ -87,6 +107,8 @@ The UI is a thin client over these JSON endpoints (handy for scripting):
 | `GET /api/file?repo=&path=` | File content + language + line count. |
 | `GET /api/blame?repo=&path=&start=&end=` | Per-line blame for a range. |
 | `GET /api/context?repo=&path=&start=&end=[&force=1]` | Aggregated authors / turnins / HSDs / commits for a range. |
+| `GET /api/ti?repo=&id=<turnin>[&force=1]` | **TI lens**: introducing merge, commits, files-changed (+/−), HSDs, authors for one turnin. |
+| `GET /api/commit?repo=&sha=<sha>[&force=1]` | **Commit lens**: full metadata + message, files-changed (+/−), turnin/HSD/merge for one commit. |
 | `GET /api/health` | Liveness + repo status. |
 
 Paths in the API are relative to `core/fe`; path traversal outside the base is

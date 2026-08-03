@@ -95,6 +95,78 @@
     border-top:1px solid var(--border);color:var(--muted);font-size:11px;
     display:flex;gap:16px}
   #status .err{color:#f85149}
+
+  /* clickable turnin pills + commit shas in the context pane */
+  .ti-link{cursor:pointer}
+  .ti-link:hover{filter:brightness(1.18);text-decoration:none}
+  .commit .sha.clink{cursor:pointer}
+  .commit .sha.clink:hover{text-decoration:underline}
+
+  /* ---- lens overlay (TI / commit drill-down) ---- */
+  #lensOv{position:fixed;inset:0;z-index:50;display:none;
+    background:rgba(1,4,9,.64);backdrop-filter:blur(3px);
+    align-items:flex-start;justify-content:center;padding:5vh 16px}
+  #lensOv.open{display:flex}
+  .lens{background:var(--panel);border:1px solid var(--border);border-radius:12px;
+    width:min(940px,96vw);max-height:88vh;display:flex;flex-direction:column;
+    box-shadow:0 18px 60px #000a;overflow:hidden;animation:lensIn .14s ease-out}
+  @keyframes lensIn{from{opacity:0;transform:translateY(8px) scale(.99)}to{opacity:1;transform:none}}
+  .lens-hd{display:flex;align-items:center;gap:10px;padding:11px 16px;
+    border-bottom:1px solid var(--border);background:var(--panel2);flex:0 0 auto}
+  .lens-hd .ic{font-size:15px;flex:0 0 auto}
+  .lens-hd .ti{font-weight:700;font-size:15px;letter-spacing:.2px}
+  .lens-hd .sp{flex:1}
+  .lens-nav{display:flex;align-items:center;gap:7px;padding:6px 16px;flex-wrap:wrap;
+    border-bottom:1px solid var(--border);font-size:12px;color:var(--muted);
+    background:#0b1120;min-height:33px;flex:0 0 auto}
+  .lens-nav .crumb{cursor:pointer;color:var(--accent)}
+  .lens-nav .crumb:hover{text-decoration:underline}
+  .lens-nav .cur{color:var(--fg)} .lens-nav .sep{opacity:.5}
+  .lens-bd{overflow:auto;padding:14px 16px;flex:1 1 auto}
+  .lens-x{cursor:pointer;border:1px solid var(--border);background:var(--panel);
+    border-radius:6px;color:var(--muted);padding:2px 9px;font-size:14px;line-height:1}
+  .lens-x:hover{border-color:var(--accent);color:var(--fg)}
+  .lens-meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    gap:9px 18px;margin-bottom:14px}
+  .lens-meta .k{color:var(--muted);font-size:10px;text-transform:uppercase;
+    letter-spacing:.5px;margin-bottom:2px}
+  .lens-meta .v{font-size:13px;word-break:break-word}
+  .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;
+    border:1px solid var(--border);background:var(--panel2);font-weight:600}
+  .badge.merged{background:#12261a;border-color:#238636;color:#7ee2a8}
+  .badge.model{background:#3a2f12;border-color:#7a5c17;color:#fbd57e}
+  .badge.merge{background:#2a2340;border-color:#5b21b6;color:#d6c2ff}
+  .lens-stat{display:flex;gap:14px;align-items:center;margin-bottom:6px;
+    font-size:12px;color:var(--muted)}
+  .lens-stat b{color:var(--fg)}
+  .add{color:#3fb950} .del{color:#f85149}
+  .lens .sub{color:var(--muted);font-size:11.5px}
+  .lens h4{margin:16px 0 7px;font-size:11px;text-transform:uppercase;
+    letter-spacing:.6px;color:var(--muted);display:flex;gap:8px;align-items:center}
+  table.lt{width:100%;border-collapse:collapse;font-size:12.5px}
+  table.lt td,table.lt th{padding:5px 8px;border-bottom:1px solid #ffffff0d;
+    text-align:left;vertical-align:top}
+  table.lt th{color:var(--muted);font-size:10px;text-transform:uppercase;
+    letter-spacing:.5px;font-weight:600}
+  table.lt tr:hover td{background:#ffffff08}
+  .stt{display:inline-block;width:17px;height:17px;line-height:17px;text-align:center;
+    border-radius:4px;font-size:11px;font-weight:700;font-family:monospace}
+  .stt.M{background:#2a2412;color:#e3b341} .stt.A{background:#12261a;color:#3fb950}
+  .stt.D{background:#3a1418;color:#f85149} .stt.R{background:#12233a;color:#58a6ff}
+  .fbar{display:inline-block;height:8px;border-radius:2px;vertical-align:middle;min-width:1px}
+  .flink,.clink{color:var(--accent);cursor:pointer}
+  .flink:hover,.clink:hover{text-decoration:underline}
+  .lens .num{font-variant-numeric:tabular-nums;white-space:nowrap}
+  .lens-msg{background:var(--panel2);border:1px solid var(--border);border-radius:8px;
+    padding:10px 12px;margin:4px 0 8px}
+  .lens-msg .sm{font-weight:600;margin-bottom:6px;white-space:pre-wrap;word-break:break-word}
+  .lens-msg .bd{color:#c9d1d9;white-space:pre-wrap;word-break:break-word;font-size:12.5px;
+    font-family:'Cascadia Code',Consolas,monospace}
+  .lens-empty{color:var(--muted);font-style:italic;padding:6px 0}
+  .lens-load{padding:44px;text-align:center;color:var(--muted)}
+  .chip{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;
+    background:var(--panel2);border:1px solid var(--border);margin:0 5px 5px 0}
+  .chip .id{color:var(--muted);margin-left:5px}
 </style>
 </head>
 <body>
@@ -140,7 +212,7 @@
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s??"").replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-let editor=null, monacoReady=false, curRepo=null, curPath=null, curLang="plaintext";
+let editor=null, monacoReady=false, curRepo=null, curPath=null, curLang="plaintext", curBase="";
 let blameByLine={}, decorations=[], ctxTimer=null, curTotalLines=0;
 
 /* ---- author color (stable hash -> HSL) ---- */
@@ -169,10 +241,12 @@ async function loadRepos(){
   });
   curRepo=d.default; sel.value=curRepo;
   const active=d.repos.find(r=>r.key===curRepo);
+  curBase=active&&active.base?active.base:"";
   $('#repoHead').textContent=active&&active.head?("@"+active.head):"";
   $('#stRepo').textContent=active?`${active.key}: ${active.root} (base ${active.base||"."})`:"";
   sel.onchange=async()=>{ curRepo=sel.value; clearEditor(); await loadTree(); 
     const a=(await api('/api/repos')).repos.find(r=>r.key===curRepo);
+    curBase=a&&a.base?a.base:"";
     $('#repoHead').textContent=a&&a.head?("@"+a.head):"";
     $('#stRepo').textContent=a?`${a.key}: ${a.root} (base ${a.base||"."})`:""; };
 }
@@ -306,7 +380,7 @@ function applyBlame(bl){
 /* ---- render right pane ---- */
 function renderContext(c){
   const hsdLink=h=>`<a class="pill hsd mono" target="_blank" rel="noopener" href="https://hsdes.intel.com/appstore/article/#/${encodeURIComponent(h)}">${esc(h)}</a>`;
-  const tiPill=t=>`<span class="pill turnin mono" title="turnin ${esc(t)}">TI ${esc(t)}</span>`;
+  const tiPill=t=>`<span class="pill turnin mono ti-link" data-ti="${esc(t)}" title="open TI ${esc(t)}">TI ${esc(t)}</span>`;
   let html="";
 
   html+=`<div class="sec"><div class="hd"><span>Authors of visible lines</span><span>${c.authors.length}</span></div>`;
@@ -331,7 +405,7 @@ function renderContext(c){
   if(!c.commits.length) html+=`<div class="empty">no commits</div>`;
   c.commits.forEach(cm=>{
     const when=cm.time?new Date(cm.time*1000).toISOString().slice(0,10):"";
-    html+=`<div class="commit"><div class="row1"><span class="sha mono">${esc(cm.short)}</span>`+
+    html+=`<div class="commit"><div class="row1"><span class="sha mono clink" data-sha="${esc(cm.sha||cm.short)}" title="open commit ${esc(cm.short)}">${esc(cm.short)}</span>`+
       `<span class="lc">${cm.lines}L</span></div>`+
       `<div class="sm">${esc(cm.summary)}</div>`+
       `<div class="meta">${esc(cm.author)}${cm.idsid?` · <span class="mono">${esc(cm.idsid)}</span>`:""} · ${when}`+
@@ -342,6 +416,148 @@ function renderContext(c){
   html+=`</div>`;
   $('#ctxBody').innerHTML=html;
 }
+
+/* =====================================================================
+   Lens overlay — TI drill-down + Commit drill-down. Click a TI pill or a
+   commit sha in the context pane to open; navigate between them with a
+   breadcrumb; Esc or backdrop closes. Mirrors the TeamHub TI drill-down.
+   ===================================================================== */
+const dstr=t=>t?new Date(t*1000).toISOString().slice(0,10):"";
+const nfmt=n=>(n||0).toLocaleString();
+const hsdLinkL=h=>`<a class="pill hsd mono" target="_blank" rel="noopener" href="https://hsdes.intel.com/appstore/article/#/${encodeURIComponent(h)}">${esc(h)}</a>`;
+const tiLinkL=t=>`<span class="pill turnin mono ti-link" data-ti="${esc(t)}" title="open TI ${esc(t)}">TI ${esc(t)}</span>`;
+
+function fbar(add,del){
+  const tot=(add||0)+(del||0); if(!tot) return "";
+  const w=Math.max(2,Math.round(Math.min(1,tot/160)*46));
+  const g=Math.round(w*(add||0)/tot), r=Math.max(0,w-g);
+  return `<span class="fbar" style="width:${g}px;background:#3fb950"></span>`+
+         `<span class="fbar" style="width:${r}px;background:#f85149;margin-left:1px"></span>`;
+}
+function filesTable(files){
+  if(!files||!files.length) return `<div class="lens-empty">no files</div>`;
+  const rows=files.map(f=>`<tr>
+    <td><span class="stt ${esc(f.status||'M')}">${esc(f.status||'M')}</span></td>
+    <td><span class="flink" data-path="${esc(f.path)}" title="open ${esc(f.path)}">${esc(f.path)}</span></td>
+    <td class="num">${f.binary?'<span class="sub">binary</span>':
+      `<span class="add">+${f.add}</span> <span class="del">-${f.del}</span> ${fbar(f.add,f.del)}`}</td>
+  </tr>`).join("");
+  return `<table class="lt"><thead><tr><th></th><th>File</th><th>Changes</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function commitsTable(commits){
+  if(!commits||!commits.length) return `<div class="lens-empty">no commits</div>`;
+  const rows=commits.map(c=>`<tr>
+    <td><span class="clink mono" data-sha="${esc(c.sha)}">${esc(c.short)}</span></td>
+    <td>${c.merge?'<span class="badge merge">merge</span>':''}</td>
+    <td>${esc(c.summary||"")}</td>
+    <td class="num sub">${esc(c.author||"")}${c.idsid?` · <span class="mono">${esc(c.idsid)}</span>`:''}</td>
+    <td class="num sub">${dstr(c.time)}</td>
+  </tr>`).join("");
+  return `<table class="lt"><thead><tr><th>SHA</th><th></th><th>Subject</th><th>Author</th><th>Date</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+let lensStack=[];
+function ensureLensDom(){
+  if($('#lensOv')) return;
+  const ov=document.createElement('div'); ov.id='lensOv';
+  ov.innerHTML=`<div class="lens" role="dialog" aria-modal="true" aria-label="drill-down">
+    <div class="lens-hd"><span class="ic"></span><span class="ti"></span><span class="sp"></span>
+      <button class="lens-x" title="Close (Esc)">✕</button></div>
+    <div class="lens-nav"></div><div class="lens-bd"></div></div>`;
+  document.body.appendChild(ov);
+  ov.addEventListener('click',e=>{ if(e.target===ov) closeLens(); });
+  ov.querySelector('.lens-x').onclick=closeLens;
+  ov.querySelector('.lens-bd').addEventListener('click',onLensClick);
+  ov.querySelector('.lens-nav').addEventListener('click',onCrumbClick);
+}
+function closeLens(){ const ov=$('#lensOv'); if(ov) ov.classList.remove('open'); lensStack=[]; }
+function onLensClick(e){
+  const ti=e.target.closest('.ti-link'); if(ti){ pushLens('ti',ti.dataset.ti); return; }
+  const cl=e.target.closest('.clink'); if(cl&&cl.dataset.sha){ pushLens('commit',cl.dataset.sha); return; }
+  const fl=e.target.closest('.flink'); if(fl&&fl.dataset.path){ openFileFromLens(fl.dataset.path); return; }
+}
+function onCrumbClick(e){
+  const c=e.target.closest('.crumb'); if(!c) return;
+  const i=parseInt(c.dataset.i,10);
+  if(!isNaN(i)&&i<lensStack.length-1){ lensStack=lensStack.slice(0,i+1); renderLensTop(); }
+}
+function openLens(kind,key){ ensureLensDom(); lensStack=[{kind,key}]; renderLensTop(); }
+function pushLens(kind,key){ lensStack.push({kind,key}); renderLensTop(); }
+function openFileFromLens(path){
+  const base=curBase||"core/fe";
+  if(base && path.startsWith(base+"/")){ closeLens(); openFile(path.slice(base.length+1),null); return; }
+  setMsg(`"${path}" is outside ${base} — open it from that repo's own base`,true);
+}
+async function renderLensTop(){
+  ensureLensDom();
+  const ov=$('#lensOv'); ov.classList.add('open');
+  const top=lensStack[lensStack.length-1];
+  const nav=ov.querySelector('.lens-nav'), bd=ov.querySelector('.lens-bd');
+  ov.querySelector('.lens-hd .ic').textContent = top.kind==='ti'?'🔀':'◆';
+  ov.querySelector('.lens-hd .ti').innerHTML = top.kind==='ti'
+    ? `TI ${esc(top.key)}` : `commit <span class="mono">${esc(String(top.key).slice(0,12))}</span>`;
+  nav.innerHTML = lensStack.map((s,i)=>{
+    const label = s.kind==='ti'?`TI ${esc(s.key)}`:`commit ${esc(String(s.key).slice(0,12))}`;
+    const last = i===lensStack.length-1;
+    return `<span class="${last?'cur':'crumb'}" data-i="${i}">${label}</span>`+(last?'':' <span class="sep">›</span> ');
+  }).join("");
+  bd.innerHTML=`<div class="lens-load">Loading…</div>`;
+  try{
+    if(top.kind==='ti'){
+      const d=await api(`/api/ti?${repoQ()}&id=${encodeURIComponent(top.key)}`);
+      bd.innerHTML = d.error?`<div class="lens-empty">${esc(d.error)} — turnin ${esc(top.key)}</div>`:tiLensHtml(d);
+    }else{
+      const d=await api(`/api/commit?${repoQ()}&sha=${encodeURIComponent(top.key)}`);
+      bd.innerHTML = d.error?`<div class="lens-empty">${esc(d.error)}</div>`:commitLensHtml(d);
+    }
+  }catch(e){ bd.innerHTML=`<div class="lens-empty">${esc(e.message)}</div>`; }
+  bd.scrollTop=0;
+}
+function tiLensHtml(d){
+  const m=d.merge||{}, st=d.stat||{files:0,add:0,del:0};
+  let h=`<div class="lens-meta">`;
+  h+=`<div><div class="k">Status</div><div class="v"><span class="badge ${d.tag?'model':'merged'}">${esc(d.status||'')}</span></div></div>`;
+  h+=`<div><div class="k">Introducing merge</div><div class="v"><span class="clink mono" data-sha="${esc(m.sha)}">${esc(m.short)}</span></div></div>`;
+  h+=`<div><div class="k">Merged</div><div class="v num">${dstr(m.time)||'—'}</div></div>`;
+  if(d.incoming) h+=`<div><div class="k">Bundle</div><div class="v mono">${esc(d.incoming)}</div></div>`;
+  if(d.tag) h+=`<div><div class="k">Tag</div><div class="v mono">${esc(d.tag)}</div></div>`;
+  h+=`</div>`;
+  h+=`<div class="lens-stat"><span><b>${d.n_commits}</b> commit${d.n_commits==1?'':'s'}</span>`+
+     `<span><b>${st.files}</b> file${st.files==1?'':'s'}</span>`+
+     `<span class="add">+${nfmt(st.add)}</span><span class="del">-${nfmt(st.del)}</span></div>`;
+  const auth=(d.authors||[]).filter(a=>a.commits>0);
+  if(auth.length) h+=`<h4>Authors</h4>`+auth.map(a=>`<span class="chip">${esc(a.name)}<span class="id mono">${a.idsid?esc(a.idsid):'—'}</span>${a.commits?` · ${a.commits}`:''}</span>`).join("");
+  h+=`<h4>HSDs <span class="sub">${(d.hsds||[]).length}</span></h4>`+
+     ((d.hsds||[]).length?d.hsds.map(hsdLinkL).join(""):`<span class="lens-empty">none referenced</span>`);
+  h+=`<h4>Commits <span class="sub">${(d.commits||[]).length}</span></h4>`+commitsTable(d.commits);
+  h+=`<h4>Files changed <span class="sub">${(d.files||[]).length}</span></h4>`+filesTable(d.files);
+  return h;
+}
+function commitLensHtml(d){
+  const st=d.stat||{files:0,add:0,del:0};
+  let h=`<div class="lens-meta">`;
+  h+=`<div><div class="k">Author</div><div class="v">${esc(d.author)}${d.idsid?` <span class="sub mono">${esc(d.idsid)}</span>`:''}</div></div>`;
+  h+=`<div><div class="k">Date</div><div class="v num">${dstr(d.time)||'—'}</div></div>`;
+  h+=`<div><div class="k">Commit</div><div class="v mono">${esc(d.short)}${d.is_merge?' <span class="badge merge">merge</span>':''}</div></div>`;
+  if(d.parents&&d.parents.length) h+=`<div><div class="k">Parent${d.parents.length>1?'s':''}</div><div class="v mono">${d.parents.map(esc).join(' ')}</div></div>`;
+  h+=`</div>`;
+  h+=`<div class="lens-msg"><div class="sm">${esc(d.summary)}</div>${d.body?`<div class="bd">${esc(d.body)}</div>`:''}</div>`;
+  if((d.turnins||[]).length) h+=`<h4>Turnin</h4>`+d.turnins.map(tiLinkL).join("");
+  if((d.hsds||[]).length) h+=`<h4>HSDs</h4>`+d.hsds.map(hsdLinkL).join("");
+  h+=`<h4>Files changed <span class="sub">${st.files}</span></h4>`;
+  h+=`<div class="lens-stat"><span class="add">+${nfmt(st.add)}</span><span class="del">-${nfmt(st.del)}</span></div>`;
+  h+=filesTable(d.files);
+  return h;
+}
+
+/* open the lens from clicks in the right context pane (event-delegated) */
+$('#ctxBody').addEventListener('click',e=>{
+  const ti=e.target.closest('.ti-link'); if(ti){ openLens('ti',ti.dataset.ti); return; }
+  const cl=e.target.closest('.clink'); if(cl&&cl.dataset.sha){ openLens('commit',cl.dataset.sha); return; }
+});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){ const ov=$('#lensOv'); if(ov&&ov.classList.contains('open')) closeLens(); }
+});
 
 function setMsg(m,err){ const el=$('#stMsg'); el.textContent=m||""; el.className=err?"err":""; }
 
