@@ -20,8 +20,11 @@ dropdown in the web UI.
   you compose items while a session is busy and send them (individually, in
   order, or auto-flushed) once it's ready.
 - A read-only **terminal mirror** shows the selected tmux pane via
-  `capture-pane`, including scrollback history (choose 40–5000 lines in the
-  mirror's "scrollback" selector), and optional in-page **ready alerts** ping
+  `capture-pane`, including up to 40–5000 lines of tmux history when the
+  application uses the normal screen. Copilot CLI always uses the alternate
+  screen, so its own timeline is navigated with the mirror's Top / Older /
+  Newer / Live buttons or by scrolling past the mirror's top/bottom edge.
+  Optional in-page **ready alerts** ping
   when a session transitions from busy to ready.
 - **Broadcast**: tick multiple sessions in the nav (or “All” / “All ready”)
   and send the same command to all of them at once.
@@ -106,14 +109,14 @@ survive a Vaak restart and re-associate with the same session.
 | **Session nav / Rescan** | Left bar; click a session to target it. Status dot = busy/ready; badge = queued drafts. Auto-rescans every ~2.5s. Hover a row for its ⧉ (copy attach command) and ✕ (kill) shortcuts. |
 | **⧉ Copy attach command** | Header button and per-row shortcut copy `tmux attach -t <session>` to the clipboard so you can attach from any Linux terminal in a couple of keystrokes. |
 | **🕓 History** | Header button opens a modal listing the last N prompts you sent from Vaak (direct sends, broadcasts, queue flushes, autoflush). N is configurable in the modal (persisted in this browser) and capped by `VAAK_HISTORY_MAX`. Each entry has **Use** (load into the prompt box), **+ Queue**, **Send now**, and **Copy**. A search box filters client-side; a "Only current session" toggle scopes the fetch server-side. |
-| **Resizable panes** | Drag the thin gutters between the sidebar & main, below the terminal mirror, and above the log to resize each pane. Double-click a gutter to reset it. All three widths/heights are persisted in this browser (`vaakNavW`, `vaakPaneH`, `vaakLogH`), so they survive tab reloads and Vaak restarts. |
+| **Resizable panes** | Drag the labeled handle directly below the prompt to resize the prompt, or the thin gutters beside the sidebar, below the terminal mirror, and above the log. Double-click a gutter to reset it. Sizes are persisted in this browser (`vaakMsgH`, `vaakNavW`, `vaakPaneH`, `vaakLogH`), so they survive tab reloads and Vaak restarts. |
 | **Enter = send now** | Enter sends the box to the selected session immediately (Shift+Enter inserts a newline). |
 | **Submit in CLI** | Off = only type the text into the CLI, don't press Enter — lets you stitch several dictations into one prompt, then submit manually. |
 | **^C / Esc** | Send a real Ctrl-C (interrupt) or Escape key press to the selected session — e.g. to cancel a running command or stop the CLI's current action. |
 | **Keep focus** | Refocus the box after sending so you can immediately dictate again. |
 | **Alert when ready** | Flash title + beep + toast when a watched session changes busy → ready. Persisted in this browser. |
 | **Show/Hide terminal mirror** | Toggle the read-only selected-pane mirror. Persisted in this browser. |
-| **Scrollback (lines)** | How many lines of tmux scrollback the mirror pulls (40–5000). Persisted per browser. tmux only retains up to its own `history-limit` (default 2000 — raise it with `tmux set -g history-limit 10000` for new sessions). |
+| **Scrollback (lines)** | Maximum tmux history requested by the mirror (40–5000), persisted per browser. Normal-screen applications are limited by tmux's `history-limit`. Copilot CLI uses an alternate screen (`history_size=0`), so only one rendered viewport is capturable at once; scroll beyond the mirror edge or use Top / Older / Newer / Live to navigate Copilot's internal timeline. |
 | **Font size (px)** | Text size of the terminal mirror (10–20px). Persisted per browser. |
 | **+ Add to queue** | Stage the box as a draft (allowed even while busy). |
 | **Send all in order / Auto-send when ready** | Flush the queue manually, or auto-flush on each busy→ready edge. |
