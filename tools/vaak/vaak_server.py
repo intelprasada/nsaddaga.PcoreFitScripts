@@ -82,6 +82,15 @@ DRAFTS_PATH = Path(os.environ.get("VAAK_DRAFTS",
 # Where per-session auto-flush enablement persists (list of session names).
 AUTOFLUSH_PATH = Path(os.environ.get("VAAK_AUTOFLUSH_PATH",
                                      str(Path.home() / ".vaak" / "autoflush.json")))
+# Sent-prompt history. Persisted so restarts keep the "recall last N prompts"
+# affordance useful. HISTORY_MAX caps both in-memory and on-disk retention.
+HISTORY_PATH = Path(os.environ.get("VAAK_HISTORY_PATH",
+                                   str(Path.home() / ".vaak" / "history.json")))
+try:
+    HISTORY_MAX = int(os.environ.get("VAAK_HISTORY_MAX", "500"))
+except ValueError:
+    HISTORY_MAX = 500
+HISTORY_MAX = max(10, min(10000, HISTORY_MAX))
 # Seconds between auto-flush poller ticks.
 AUTOFLUSH_INTERVAL = float(os.environ.get("VAAK_AUTOFLUSH_INTERVAL", "2.0"))
 # Grace delay after a session goes ready before auto-sending the next draft.
@@ -247,6 +256,85 @@ def _save_autoflush() -> None:
 _autoflush.update(_load_autoflush())
 
 
+# --- Prompt history ---------------------------------------------------------
+# Every successful `inject()` (i.e. any prompt that Vaak types into a tmux
+# session — direct sends, broadcasts, queue flushes, autoflush) is appended
+# here so the user can recall/re-send the last N prompts from the UI. Stored
+# as a bounded deque and mirrored to disk atomically on every append.
+import collections
+_history_lock = threading.RLock()
+_history: "collections.deque[dict]" = collections.deque(maxlen=HISTORY_MAX)
+
+
+def _load_history() -> list[dict]:
+    """Return prior history from disk (best-effort)."""
+    try:
+        with HISTORY_PATH.open(encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            data = data["items"]
+        if not isinstance(data, list):
+            return []
+        out: list[dict] = []
+        for it in data:
+            if not isinstance(it, dict):
+                continue
+            text = str(it.get("text", ""))
+            if not text:
+                continue
+            out.append({
+                "id": str(it.get("id") or f"h{int(time.time()*1000)}"),
+                "ts": float(it.get("ts") or time.time()),
+                "session": str(it.get("session", "")),
+                "text": text,
+                "submit": bool(it.get("submit", True)),
+                "source": str(it.get("source", "send")),
+            })
+        return out[-HISTORY_MAX:]
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def _save_history() -> None:
+    """Atomically persist current history. Held under _history_lock by callers."""
+    try:
+        HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = HISTORY_PATH.with_suffix(".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump({"items": list(_history)}, f, indent=2)
+        tmp.replace(HISTORY_PATH)
+    except OSError:
+        pass
+
+
+_hist_counter = [0]
+
+
+def _record_history(session: str, text: str, submit: bool,
+                    source: str = "send") -> None:
+    """Append one prompt to history and persist. Silent on any error."""
+    text = (text or "").strip()
+    if not text:
+        return
+    _hist_counter[0] += 1
+    item = {
+        "id": f"h{int(time.time()*1000)}-{_hist_counter[0]}",
+        "ts": time.time(),
+        "session": str(session or ""),
+        "text": text,
+        "submit": bool(submit),
+        "source": str(source or "send"),
+    }
+    with _history_lock:
+        _history.append(item)
+        _save_history()
+
+
+with _history_lock:
+    for _it in _load_history():
+        _history.append(_it)
+
+
 def _load_drafts() -> dict:
     try:
         with DRAFTS_PATH.open(encoding="utf-8") as f:
@@ -383,6 +471,7 @@ def inject(target: str, text: str, submit: bool) -> tuple[bool, str]:
                             capture_output=True, text=True, check=False)
         if r2.returncode != 0:
             return False, (r2.stderr or "Enter failed").strip()
+    _record_history(target, flat, submit)
     return True, flat
 
 
@@ -806,6 +895,42 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
 #qrModal.show{display:flex}
 #qrCard{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:20px;
  text-align:center;max-width:90vw}
+/* Prompt history modal */
+#histModal{position:fixed;inset:0;background:#000b;display:none;align-items:flex-start;
+ justify-content:center;z-index:60;overflow:auto;padding:24px 14px 48px}
+#histModal.show{display:flex}
+#histCard{width:100%;max-width:960px;background:#0d1117;border:1px solid #30363d;border-radius:12px;
+ padding:14px 16px 18px;box-shadow:0 20px 40px -12px #000c;display:flex;flex-direction:column;gap:10px;max-height:calc(100vh - 60px)}
+#histCard .hist-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-bottom:1px solid #21262d;padding-bottom:10px}
+#histCard .hist-ctrls{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap}
+#histCard .hist-l{display:inline-flex;align-items:center;gap:6px;color:#8b949e;font-size:12.5px;white-space:nowrap}
+#histCard input[type=number]{width:70px;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:3px 6px;font:inherit;font-size:12.5px}
+#histCard input[type=search]{background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:4px 8px;font:inherit;font-size:12.5px;min-width:180px}
+#histCard input[type=search]:focus,#histCard input[type=number]:focus{outline:none;border-color:#58a6ff}
+#histCard .hist-meta{color:#8b949e;font-size:12px}
+#histList{overflow:auto;flex:1;display:flex;flex-direction:column;gap:6px;padding-right:4px}
+#histList .hi{display:grid;grid-template-columns:120px 160px 1fr auto;gap:8px;align-items:start;
+ padding:8px 10px;background:#161b22;border:1px solid #21262d;border-radius:8px;font-size:12.5px}
+#histList .hi:hover{border-color:#30363d;background:#1a2029}
+#histList .hi-ts{color:#8b949e;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:1.6}
+#histList .hi-sess{color:#79c0ff;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:1.6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#histList .hi-sess .hi-src{color:#8b949e;font-size:10.5px;margin-left:4px}
+#histList .hi-txt{color:#e6edf3;white-space:pre-wrap;word-break:break-word;line-height:1.5;
+ max-height:6.5em;overflow:hidden;position:relative}
+#histList .hi-txt.expanded{max-height:none}
+#histList .hi-txt .hi-more{color:#58a6ff;cursor:pointer;font-size:11px}
+#histList .hi-actions{display:flex;flex-direction:column;gap:4px;align-items:flex-end}
+#histList .hi-actions button{background:#21262d;border:1px solid #30363d;color:#c9d1d9;
+ border-radius:6px;padding:2px 8px;font-size:11.5px;cursor:pointer;font-family:inherit;min-width:70px}
+#histList .hi-actions button:hover{border-color:#58a6ff;color:#58a6ff}
+#histList .hi-actions button.hi-send{background:#238636;border-color:#2ea043;color:#fff}
+#histList .hi-actions button.hi-send:hover{background:#2ea043}
+#histList .hi-actions button:disabled{opacity:.4;cursor:not-allowed;border-color:#30363d;color:#8b949e}
+#histList .hi-empty{color:#8b949e;text-align:center;padding:40px 0;font-style:italic}
+@media (max-width:640px){
+ #histList .hi{grid-template-columns:1fr;grid-template-rows:auto auto auto auto}
+ #histList .hi-actions{flex-direction:row;flex-wrap:wrap;align-items:flex-start}
+}
 /* Model guide modal */
 #mgModal{position:fixed;inset:0;background:#000b;display:none;align-items:flex-start;
  justify-content:center;z-index:60;overflow:auto;padding:20px 14px 48px}
@@ -907,7 +1032,8 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
 }
 </style></head><body>
 <header><b>Vaak</b> <span class="sub">\u2192 dictate &amp; queue into tmux CLI sessions</span>
- <button class="sec mini" id="mgBtn" style="margin-left:auto" title="AI model selection guide">&#x1F9E0; Model Guide</button>
+ <button class="sec mini" id="histBtn" style="margin-left:auto" title="Recall the last N prompts sent from Vaak">&#x1F553; History</button>
+ <button class="sec mini" id="mgBtn" style="margin-left:8px" title="AI model selection guide">&#x1F9E0; Model Guide</button>
  <button class="sec mini" id="qrBtn" style="margin-left:8px" title="Open on your phone">QR</button></header>
 <div id="qrModal"><div id="qrCard">
  <h3>Open Vaak on your phone</h3>
@@ -915,6 +1041,24 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
  <div id="qrUrl"></div>
  <div class="hint" style="margin-top:8px">Scan with your phone camera (same network / VPN).</div>
  <button class="sec" id="qrClose">Close</button>
+</div></div>
+<div id="histModal"><div id="histCard">
+ <div class="hist-head">
+  <h3 style="margin:0">&#x1F553; Prompt history</h3>
+  <div class="hist-ctrls">
+   <label class="hist-l">Show last
+    <input type="number" id="histLimit" min="1" max="1000" step="10" value="100" title="How many recent prompts to display (persisted in this browser)">
+    prompts
+   </label>
+   <label class="hist-l"><input type="checkbox" id="histOnlySel"> Only current session</label>
+   <input type="search" id="histSearch" placeholder="Filter\u2026" title="Client-side filter (matches text or session)">
+   <button class="sec mini" id="histRefresh" title="Reload">\u21bb</button>
+   <button class="sec mini" id="histClear" title="Delete all history entries">Clear all</button>
+   <button class="sec mini" id="histClose">\u00d7 Close</button>
+  </div>
+ </div>
+ <div class="hist-meta" id="histMeta"></div>
+ <div id="histList"></div>
 </div></div>
 <div id="mgModal">
  <button id="mgClose">\u00d7 Close</button>
@@ -1422,6 +1566,100 @@ msg.focus();
   $('#qrClose').onclick=function(){$('#qrModal').classList.remove('show');};
   $('#qrModal').onclick=function(e){if(e.target===$('#qrModal'))$('#qrModal').classList.remove('show');};
 
+/* ---- Prompt history ---- */
+const HIST_LIMIT_KEY='vaakHistLimit';
+const HIST_ONLYSEL_KEY='vaakHistOnlySel';
+let histItems=[];
+function histFmtTs(ts){
+  const d=new Date(ts*1000);
+  const pad=n=>String(n).padStart(2,'0');
+  const now=new Date();
+  const same=d.toDateString()===now.toDateString();
+  const t=pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+  return same?t:(pad(d.getMonth()+1)+'/'+pad(d.getDate())+' '+t);
+}
+function histReadPrefs(){
+  const lim=parseInt(localStorage.getItem(HIST_LIMIT_KEY)||'100',10);
+  $('#histLimit').value=String(Math.max(1,Math.min(1000,isNaN(lim)?100:lim)));
+  $('#histOnlySel').checked=localStorage.getItem(HIST_ONLYSEL_KEY)==='1';
+}
+function histSavePrefs(){
+  localStorage.setItem(HIST_LIMIT_KEY,String($('#histLimit').value||100));
+  localStorage.setItem(HIST_ONLYSEL_KEY,$('#histOnlySel').checked?'1':'0');
+}
+async function histLoad(){
+  histSavePrefs();
+  const lim=parseInt($('#histLimit').value,10)||100;
+  const onlySel=$('#histOnlySel').checked;
+  const qs=new URLSearchParams({token,limit:String(lim)});
+  if(onlySel&&sel)qs.set('session',sel);
+  try{
+    const r=await fetch('/api/history?'+qs.toString());
+    const d=await r.json();
+    histItems=d.items||[];
+    $('#histMeta').textContent='Showing '+histItems.length+' of '+(d.total||0)+' recorded (server cap: '+(d.max||0)+')'+
+      (onlySel&&sel?(' \u00b7 filtered to '+sel):'');
+    histRender();
+  }catch(e){logline('history load error: '+e.message,'err');}
+}
+function histRender(){
+  const q=($('#histSearch').value||'').toLowerCase();
+  const el=$('#histList');
+  const filtered=q?histItems.filter(it=>it.text.toLowerCase().includes(q)||(it.session||'').toLowerCase().includes(q)):histItems;
+  if(!filtered.length){el.innerHTML='<div class="hi-empty">No prompts recorded yet. Send a prompt from Vaak and it will show up here.</div>';return;}
+  el.innerHTML='';
+  filtered.forEach((it,idx)=>{
+    const d=document.createElement('div');d.className='hi';
+    const long=(it.text.match(/\\n/g)||[]).length>4||it.text.length>500;
+    d.innerHTML=`<span class="hi-ts" title="${new Date(it.ts*1000).toLocaleString()}">${esc(histFmtTs(it.ts))}</span>`+
+      `<span class="hi-sess" title="${esc(it.session||'-')}">${esc(it.session||'-')}<span class="hi-src">\u00b7 ${esc(it.source||'send')}${it.submit===false?' (typed only)':''}</span></span>`+
+      `<div class="hi-txt"><span class="hi-body">${esc(it.text)}</span>${long?' <span class="hi-more">Show more</span>':''}</div>`+
+      `<div class="hi-actions">`+
+      `<button data-a="use" title="Load into the prompt box">Use \u2191</button>`+
+      `<button data-a="queue" title="Add to selected session's draft queue" ${sel?'':'disabled'}>+ Queue</button>`+
+      `<button class="hi-send" data-a="send" title="Send now to selected session" ${sel?'':'disabled'}>Send now</button>`+
+      `<button data-a="copy" title="Copy to clipboard">Copy</button>`+
+      `</div>`;
+    const txt=d.querySelector('.hi-txt');
+    const more=d.querySelector('.hi-more');
+    if(more)more.onclick=()=>{txt.classList.toggle('expanded');more.textContent=txt.classList.contains('expanded')?'Show less':'Show more';};
+    d.querySelector('[data-a=use]').onclick=()=>{msg.value=it.text;histHide();msg.focus();};
+    d.querySelector('[data-a=copy]').onclick=async()=>{if(await copyText(it.text))toast('Copied prompt');};
+    const qb=d.querySelector('[data-a=queue]');
+    if(!qb.disabled)qb.onclick=async()=>{
+      try{const r=await api('/api/drafts/add',{session:sel,text:it.text});
+        if(r.ok){toast('Queued for '+sel);renderQueue(r.drafts);loadSessions();}
+      }catch(e){logline('queue error: '+e.message,'err');}
+    };
+    const sb=d.querySelector('[data-a=send]');
+    if(!sb.disabled)sb.onclick=async()=>{
+      try{const r=await api('/api/send',{text:it.text,target:sel,submit:$('#submit').checked});
+        if(r.ok){toast('Sent to '+sel);logline('re-sent from history \u2192 '+sel,'ok');loadSessions();histLoad();}
+        else logline('re-send failed: '+r.error,'err');
+      }catch(e){logline('re-send error: '+e.message,'err');}
+    };
+    el.appendChild(d);
+  });
+}
+function histShow(){histReadPrefs();$('#histModal').classList.add('show');histLoad();setTimeout(()=>$('#histSearch').focus(),50);}
+function histHide(){$('#histModal').classList.remove('show');$('#histBtn').focus();}
+$('#histBtn').onclick=histShow;
+$('#histClose').onclick=histHide;
+$('#histModal').onclick=e=>{if(e.target===$('#histModal'))histHide();};
+$('#histRefresh').onclick=histLoad;
+$('#histLimit').onchange=histLoad;
+$('#histOnlySel').onchange=histLoad;
+$('#histSearch').oninput=histRender;
+$('#histClear').onclick=async()=>{
+  if(!confirm('Delete ALL recorded prompts? This cannot be undone.'))return;
+  try{const r=await api('/api/history/clear',{});
+    if(r.ok){toast('History cleared');histLoad();}
+  }catch(e){logline('clear failed: '+e.message,'err');}
+};
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&$('#histModal').classList.contains('show')){e.preventDefault();histHide();}
+});
+
 /* ---- Model Guide ---- */
 const MG_DATA=[
   {id:"allrounder",task:"Everyday coding, features & PRs (best default)",
@@ -1629,6 +1867,20 @@ class Handler(BaseHTTPRequestHandler):
             session = (q.get("session", [""])[0])
             self._json({"session": session, "drafts": get_drafts(session),
                         "autoflush": session in _autoflush})
+        elif p == "/api/history":
+            session_filter = (q.get("session", [""])[0]) or ""
+            try:
+                limit = int((q.get("limit", [str(HISTORY_MAX)])[0]))
+            except ValueError:
+                limit = HISTORY_MAX
+            limit = max(1, min(HISTORY_MAX, limit))
+            with _history_lock:
+                items = list(_history)
+            if session_filter:
+                items = [it for it in items if it.get("session") == session_filter]
+            items = list(reversed(items))[:limit]
+            self._json({"limit": limit, "max": HISTORY_MAX,
+                        "total": len(_history), "items": items})
         elif p == "/api/health":
             self._json({"ok": True})
         elif p == "/qrcode.js":
@@ -1740,6 +1992,11 @@ class Handler(BaseHTTPRequestHandler):
                     _autoflush.discard(session)
                 _save_autoflush()
             self._json({"ok": True, "session": session, "autoflush": on})
+        elif p == "/api/history/clear":
+            with _history_lock:
+                _history.clear()
+                _save_history()
+            self._json({"ok": True})
         else:
             self._json({"error": "not found"}, 404)
 
@@ -1752,6 +2009,7 @@ def main():
     print(f"  tmux target : {TARGET}  ({tgt_status})")
     print(f"  drafts file : {DRAFTS_PATH}")
     print(f"  autoflush   : {AUTOFLUSH_PATH} (persisted across restarts)")
+    print(f"  history file: {HISTORY_PATH} (last {HISTORY_MAX} prompts)")
     print(f"  open in browser (laptop): {url}")
     print(f"  local: http://localhost:{PORT}/?token={TOKEN}")
     start_autoflush()
