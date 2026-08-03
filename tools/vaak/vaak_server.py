@@ -1045,7 +1045,7 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
  header .sub{display:none}
 }
 </style></head><body>
-<header><b>Vaak</b> <span class="sub">\u2192 dictate &amp; queue into tmux CLI sessions</span>
+<header><b>Vaak</b> <span class="sub">&#x1F3BC; conduct your CLI orchestra \u2014 dictate &amp; queue across tmux sessions</span>
  <button class="sec mini" id="histBtn" style="margin-left:auto" title="Recall the last N prompts sent from Vaak">&#x1F553; History</button>
  <button class="sec mini" id="mgBtn" style="margin-left:8px" title="AI model selection guide">&#x1F9E0; Model Guide</button>
  <button class="sec mini" id="qrBtn" style="margin-left:8px" title="Open on your phone">QR</button></header>
