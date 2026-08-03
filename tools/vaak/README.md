@@ -149,6 +149,7 @@ Everything below returns JSON.
 | `GET /api/drafts?session=` | Queued drafts for a session + its autoflush flag. |
 | `GET /api/info` | Default target, its resolved pane id, and all tmux panes as `[{id,label}]`. |
 | `POST /api/key` | Body `{token, target?, key}` — sends a real control key press (allowlist: `C-c`, `Escape`, `C-d`, `C-u`, `Enter`, `Up`, `Down`). Unlike `/api/send`, the key is interpreted, not typed literally. |
+| `POST /api/kill_session` | Body `{token, session}` — runs `tmux kill-session` and purges the session's persisted drafts. Rejects empty names and names containing shell metacharacters (`;&\|`` `$<>\"'\\`). |
 | `POST /api/broadcast` | Body `{token, text, targets:[names], submit?}` — sends `text` to every target; returns per-target results. |
 | `POST /api/send` | `{token, text, target?, submit?}` — types `text` into `target` now. |
 | `POST /api/drafts/add` | `{token, session, text}` — enqueue a draft. |

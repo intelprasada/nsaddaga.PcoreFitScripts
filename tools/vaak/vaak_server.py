@@ -520,6 +520,40 @@ def send_key(target: str, key: str) -> tuple[bool, str]:
     return True, tk
 
 
+def kill_session(name: str) -> tuple[bool, str]:
+    """Kill an entire tmux session by name.
+
+    Rejects empty names, names containing shell metacharacters, and names that
+    don't currently exist as sessions. Also purges the session's persisted
+    drafts so a re-created session with the same name starts clean.
+    """
+    n = (name or "").strip()
+    if not n:
+        return False, "session name required"
+    if any(c in n for c in "\t\n\r;&|`$<>\\\"'"):
+        return False, "invalid characters in session name"
+    # Confirm it exists as a *session* (not just any target/pane addr).
+    r = subprocess.run(["tmux", "has-session", "-t", n],
+                       capture_output=True, text=True, check=False)
+    if r.returncode != 0:
+        return False, f"tmux session '{n}' not found"
+    r = subprocess.run(["tmux", "kill-session", "-t", n],
+                       capture_output=True, text=True, check=False)
+    if r.returncode != 0:
+        return False, (r.stderr or "kill-session failed").strip()
+    # Best-effort: drop this session's persisted drafts so a fresh session with
+    # the same name doesn't inherit the old queue.
+    try:
+        with _drafts_lock:
+            data = _load_drafts()
+            if n in data:
+                del data[n]
+                _save_drafts(data)
+    except Exception:
+        pass
+    return True, n
+
+
 # --- Auto-flush poller ------------------------------------------------------
 # For sessions with auto-flush enabled, watch for a busy->ready transition and
 # then send exactly one queued draft (the head of the queue). We require the
@@ -597,6 +631,11 @@ header .sub{color:#8b949e;font-size:12px}
 .badge{background:#3b2a5f;color:#ddd6fe;border:1px solid #5b21b6;border-radius:10px;
  font-size:11px;padding:0 7px;min-width:18px;text-align:center}
 .badge.zero{display:none}
+.sess .kill{flex:0 0 auto;background:transparent;border:1px solid transparent;color:#8b949e;
+ border-radius:6px;padding:0 6px;font-size:14px;line-height:20px;cursor:pointer;font-weight:600;
+ opacity:0;transition:opacity .12s,color .12s,border-color .12s}
+.sess:hover .kill,.sess.active .kill{opacity:1}
+.sess .kill:hover{color:#f85149;border-color:#f85149;background:#f851491a}
 main{flex:1;display:flex;flex-direction:column;gap:10px;padding:14px;min-width:0;overflow:auto}
 .stbar{display:flex;align-items:center;gap:8px;font-size:14px}
 .stbar .pill{font-size:12px;padding:2px 9px;border-radius:11px;border:1px solid #30363d}
@@ -989,10 +1028,28 @@ function renderNav(){
     d.innerHTML=`<input type="checkbox" class="bx" ${bcast.has(s.name)?'checked':''} title="Include in broadcast">`+
       `<span class="dot ${s.status}"></span>`+
       `<span class="nm">${esc(s.name)} <span class="cmd">${esc(s.command)}</span></span>`+
-      `<span class="badge ${s.drafts?'':'zero'}">${s.drafts}</span>`;
+      `<span class="badge ${s.drafts?'':'zero'}">${s.drafts}</span>`+
+      `<button class="kill" title="Kill this tmux session (tmux kill-session)" aria-label="Kill session ${esc(s.name)}">\u2715</button>`;
     const bx=d.querySelector('.bx');
     bx.onclick=(e)=>{e.stopPropagation();
       if(bx.checked)bcast.add(s.name); else bcast.delete(s.name); updateBcastBtn();};
+    const kb=d.querySelector('.kill');
+    kb.onclick=async(e)=>{
+      e.stopPropagation();
+      const n=s.name;
+      const nDrafts=s.drafts|0;
+      const warn=`Kill tmux session "${n}"?\n\nThis runs \`tmux kill-session\` and closes any CLI running inside it.`+
+                 (nDrafts?`\n\nThe ${nDrafts} queued draft(s) for this session will also be discarded.`:'');
+      if(!confirm(warn))return;
+      try{
+        const r=await api('/api/kill_session',{session:n});
+        if(r&&r.ok){toast(`Killed session ${n}`);logline('killed session '+n,'ok');
+          bcast.delete(n);
+          if(sel===n){sel='';$('#selName').textContent='no session';$('#selStatus').textContent='\u2014';$('#selStatus').className='pill';$('#selCmd').textContent='';$('#pane').textContent='';$('#queue').innerHTML='';}
+          loadSessions();
+        } else {toast(`Kill failed: ${r&&r.error||'unknown'}`,'err');}
+      }catch(err){toast('Kill error: '+err.message,'err');}
+    };
     d.onclick=()=>{sel=s.name;renderNav();renderStatus(s);loadDrafts();loadPane();msg.focus();};
     el.appendChild(d);
   });
@@ -1404,6 +1461,13 @@ class Handler(BaseHTTPRequestHandler):
             target = str(body.get("target") or TARGET)
             ok, info = send_key(target, str(body.get("key", "")))
             self._json({"ok": ok, "key": info, "target": target} if ok
+                       else {"ok": False, "error": info})
+            return
+
+        if p == "/api/kill_session":
+            name = str(body.get("session") or body.get("target") or "").strip()
+            ok, info = kill_session(name)
+            self._json({"ok": ok, "session": info} if ok
                        else {"ok": False, "error": info})
             return
 
