@@ -96,8 +96,96 @@ _CUSTOM = os.environ.get("CODELENS_REPO")
 if _CUSTOM:
     _REPO_SPECS = {"REPO": _CUSTOM, **_REPO_SPECS}
 
+
+def _register_custom(key: str, path: str) -> None:
+    """Add a user-registered workarea to _REPO_SPECS at runtime."""
+    _REPO_SPECS[key] = path
+    get_repo.cache_clear()  # RepoInfo is memoized; force re-resolution
+
+
+def _load_saved_custom_repos() -> None:
+    for key, path in _custom_load().items():
+        if isinstance(path, str) and path:
+            _register_custom(key, path)
+
 BASE_OVERRIDE = os.environ.get("CODELENS_BASE")  # e.g. "core/fe"
 PORT = int(os.environ.get("CODELENS_PORT", "8770"))
+
+# --------------------------------------------------------------------------
+# User-registered custom workareas (MODEL_ROOT paths from `source hdk.rc
+# -model_shell -w <path>`). Persisted so they survive server restarts.
+# --------------------------------------------------------------------------
+_CUSTOM_STORE = Path(os.environ.get("CODELENS_CUSTOM_STORE")
+                     or Path.home() / ".codelens" / "custom_repos.json")
+
+
+def _custom_load() -> dict:
+    try:
+        return json.loads(_CUSTOM_STORE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _custom_save(d: dict) -> None:
+    _CUSTOM_STORE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _CUSTOM_STORE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(d, indent=2), encoding="utf-8")
+    tmp.replace(_CUSTOM_STORE)
+
+
+def validate_model_root(raw_path: str) -> dict:
+    """Return {ok, error, root, cluster, stepping, branch, label} for a path
+    the user claims is a MODEL_ROOT (initialized via
+    `source /p/hdk/rtl/hdk.rc ... -model_shell -w <path>`).
+
+    A path qualifies iff:
+      * it exists and is a directory,
+      * it is a git repo (its `git rev-parse --show-toplevel` succeeds),
+      * the user-provided path IS the toplevel (not a subdirectory),
+      * `git config --get intel.cluster` and `intel.stepping` are set — these
+        are written by the model-shell setup flow and identify the -m and -s
+        arguments respectively.
+    """
+    out = {"ok": False, "error": "", "root": "", "cluster": "",
+           "stepping": "", "branch": "", "label": ""}
+    if not raw_path:
+        out["error"] = "path is empty"
+        return out
+    p = os.path.expanduser(raw_path.strip())
+    if not os.path.isdir(p):
+        out["error"] = f"not a directory: {p}"
+        return out
+    r = subprocess.run(["git", "-C", p, "rev-parse", "--show-toplevel"],
+                       capture_output=True, text=True, timeout=15, check=False)
+    if r.returncode != 0:
+        out["error"] = "not a git repo (git rev-parse failed)"
+        return out
+    root = r.stdout.strip()
+    if os.path.realpath(root) != os.path.realpath(p):
+        out["error"] = (f"path is inside a git repo but not its toplevel; "
+                        f"pass the MODEL_ROOT itself: {root}")
+        out["root"] = root
+        return out
+    def _cfg(k):
+        rr = subprocess.run(["git", "-C", root, "config", "--get", k],
+                            capture_output=True, text=True, timeout=10,
+                            check=False)
+        return rr.stdout.strip() if rr.returncode == 0 else ""
+    cluster, stepping = _cfg("intel.cluster"), _cfg("intel.stepping")
+    if not cluster or not stepping:
+        out["error"] = ("path is a git repo but not a MODEL_ROOT — "
+                        "git config intel.cluster / intel.stepping are unset. "
+                        "Did you `source /p/hdk/rtl/hdk.rc ... -model_shell "
+                        f"-w {root}` in this workarea first?")
+        out["root"] = root
+        return out
+    br = subprocess.run(["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"],
+                        capture_output=True, text=True, timeout=10, check=False)
+    branch = br.stdout.strip() if br.returncode == 0 else ""
+    out.update(ok=True, root=root, cluster=cluster, stepping=stepping,
+               branch=branch, label=f"{cluster}-{stepping}-{branch}"
+               if branch else f"{cluster}-{stepping}")
+    return out
 
 # Files we surface with syntax highlighting; everything else opens as text.
 _LANG_BY_EXT = {
@@ -1071,6 +1159,11 @@ class Handler(BaseHTTPRequestHandler):
                         "repos": [get_repo(k).as_dict() for k in _REPO_SPECS]})
             return
 
+        if path == "/api/repos/validate":
+            v = validate_model_root(q.get("path", [""])[0])
+            self._json(v, 200 if v["ok"] else 400)
+            return
+
         repo = self._repo_from(q)
         if not repo.ok:
             self._json({"error": f"repo '{repo.key}' unavailable: {repo.error}"},
@@ -1147,8 +1240,76 @@ class Handler(BaseHTTPRequestHandler):
 
         self._json({"error": "not found", "path": path}, 404)
 
+    def _read_json_body(self) -> dict:
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            n = 0
+        if n <= 0 or n > 64 * 1024:
+            return {}
+        try:
+            return json.loads(self.rfile.read(n).decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return {}
+
+    def _custom_key_for(self, label: str) -> str:
+        """Pick a unique key like CUSTOM:fit-a0-master, disambiguating on
+        collision."""
+        base = f"CUSTOM:{label}" if label else "CUSTOM"
+        if base not in _REPO_SPECS:
+            return base
+        for i in range(2, 100):
+            k = f"{base}#{i}"
+            if k not in _REPO_SPECS:
+                return k
+        return base  # give up, will overwrite
+
+    def do_POST(self) -> None:  # noqa: N802
+        u = urlparse(self.path)
+        if u.path == "/api/repos/custom":
+            body = self._read_json_body()
+            raw = (body.get("path") or "").strip()
+            v = validate_model_root(raw)
+            if not v["ok"]:
+                self._json({"ok": False, "error": v["error"], **v}, 400)
+                return
+            saved = _custom_load()
+            # If this exact toplevel is already registered, reuse its key.
+            existing = next((k for k, p in saved.items()
+                             if os.path.realpath(p) == os.path.realpath(v["root"])),
+                            None)
+            key = existing or self._custom_key_for(v["label"])
+            saved[key] = v["root"]
+            _custom_save(saved)
+            _register_custom(key, v["root"])
+            info = get_repo(key)
+            self._json({"ok": True, "key": key, "repo": info.as_dict(),
+                        "cluster": v["cluster"], "stepping": v["stepping"],
+                        "branch": v["branch"], "label": v["label"]})
+            return
+        self._json({"error": "not found", "path": u.path}, 404)
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        u = urlparse(self.path)
+        q = parse_qs(u.query)
+        if u.path == "/api/repos/custom":
+            key = (q.get("key", [""])[0] or "").strip()
+            if not key or not key.startswith("CUSTOM"):
+                self._json({"ok": False, "error": "missing/invalid key"}, 400)
+                return
+            saved = _custom_load()
+            if key in saved:
+                saved.pop(key)
+                _custom_save(saved)
+            _REPO_SPECS.pop(key, None)
+            get_repo.cache_clear()
+            self._json({"ok": True})
+            return
+        self._json({"error": "not found", "path": u.path}, 404)
+
 
 def main() -> None:
+    _load_saved_custom_repos()
     print(f"CodeLens serving on http://localhost:{PORT}", flush=True)
     for k in _REPO_SPECS:
         r = get_repo(k)
