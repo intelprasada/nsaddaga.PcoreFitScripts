@@ -807,8 +807,19 @@ header{padding:9px 16px;background:#161b22;border-bottom:1px solid #30363d;
 header b{color:#58a6ff}
 header .sub{color:#8b949e;font-size:12px}
 #wrap{flex:1;display:flex;min-height:0}
-#nav{width:230px;flex:0 0 auto;background:#12161d;border-right:1px solid #30363d;
- overflow:auto;display:flex;flex-direction:column}
+#nav{width:var(--nav-w,230px);flex:0 0 auto;background:#12161d;border-right:1px solid #30363d;
+ overflow:auto;display:flex;flex-direction:column;min-width:170px}
+/* Draggable gutters. The vertical one lives between nav and main; the two
+   horizontal ones live inside main (below the terminal mirror, above the log). */
+.gutter{background:transparent;transition:background .1s;position:relative;flex:0 0 auto}
+.gutter::after{content:"";position:absolute;background:#30363d;transition:background .12s}
+.gutter:hover::after,.gutter.dragging::after{background:#58a6ff}
+.gutter-v{width:6px;cursor:col-resize;flex:0 0 6px}
+.gutter-v::after{left:2px;top:0;bottom:0;width:2px}
+.gutter-h{height:8px;cursor:row-resize;margin:2px 0;flex:0 0 8px}
+.gutter-h::after{top:3px;left:0;right:0;height:2px}
+body.resizing{cursor:col-resize;user-select:none}
+body.resizing.rowres{cursor:row-resize}
 #nav h3{margin:0;padding:9px 12px;font-size:11px;letter-spacing:.6px;text-transform:uppercase;
  color:#8b949e;border-bottom:1px solid #30363d;display:flex;justify-content:space-between}
 .sess{padding:9px 12px;border-bottom:1px solid #1c222b;cursor:pointer;display:flex;
@@ -879,7 +890,7 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
 #paneHead{display:flex;align-items:center;gap:8px;justify-content:space-between;padding:7px 10px;
  border-bottom:1px solid #30363d;color:#8b949e;font-size:12px;flex:0 0 auto;
  border-radius:10px 10px 0 0;background:#06090f}
-#pane{margin:0;padding:10px 10px 18px;max-height:50vh;min-height:20vh;overflow:auto;
+#pane{margin:0;padding:10px 10px 18px;height:var(--pane-h,40vh);min-height:80px;overflow:auto;
  white-space:pre-wrap;word-break:break-word;
  font:12px/1.35 ui-monospace,SFMono-Regular,Consolas,Liberation Mono,monospace;color:#c9d1d9;
  border-radius:0 0 10px 10px}
@@ -887,7 +898,8 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
 .toast{background:#12331f;color:#d1f7d6;border:1px solid #238636;border-radius:10px;
  padding:10px 12px;box-shadow:0 8px 24px #0008;font-size:14px}
 #log{font-family:monospace;font-size:12px;color:#8b949e;white-space:pre-wrap;
- border-top:1px solid #30363d;padding-top:7px;max-height:16vh;overflow:auto;flex:0 0 auto}
+ border-top:1px solid #30363d;padding-top:7px;height:var(--log-h,16vh);min-height:60px;
+ overflow:auto;flex:0 0 auto}
 .ok{color:#3fb950}.err{color:#f85149}
 /* QR modal */
 #qrModal{position:fixed;inset:0;background:#000a;display:none;align-items:center;
@@ -1120,6 +1132,7 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
       <button class="sec mini" id="rescan" style="width:100%">\u21bb Rescan</button>
     </div>
   </div>
+  <div id="gutterV" class="gutter gutter-v" title="Drag to resize sidebar (double-click to reset)"></div>
   <main>
     <div class="stbar">
       <b id="selName">no session</b>
@@ -1168,11 +1181,13 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
       <div id="paneHead"><b>Terminal mirror</b><span class="hint">read-only tmux capture-pane</span></div>
       <pre id="pane"></pre>
     </div>
+    <div id="gutterPane" class="gutter gutter-h" title="Drag to resize terminal mirror (double-click to reset)"></div>
     <h4><span>Queue</span>
       <button class="mini" id="sendAll">Send all in order</button>
       <label style="font-weight:400"><input type="checkbox" id="autoflush"> Auto-send when ready</label>
     </h4>
     <div id="queue"></div>
+    <div id="gutterLog" class="gutter gutter-h" title="Drag to resize log (double-click to reset)"></div>
     <div id="log"></div>
   </main>
 </div>
@@ -1529,6 +1544,64 @@ $('#paneFont').value=String(paneFont);
 $('#paneFont').onchange=()=>{paneFont=parseInt($('#paneFont').value,10)||12;
   localStorage.setItem('vaakPaneFont',String(paneFont));applyPaneFont();};
 applyPaneFont();
+/* ---- Draggable pane resizing ---- */
+(function initResizers(){
+  const defs={
+    'nav-w':{key:'vaakNavW',def:230,min:170,max:600,horiz:true},
+    'pane-h':{key:'vaakPaneH',def:Math.round(window.innerHeight*0.4),
+              min:80,max:window.innerHeight-260,horiz:false},
+    'log-h':{key:'vaakLogH',def:Math.round(window.innerHeight*0.16),
+              min:60,max:window.innerHeight-260,horiz:false},
+  };
+  const root=document.documentElement;
+  function apply(name,px){
+    const s=defs[name];
+    const v=Math.max(s.min,Math.min(s.max,px));
+    root.style.setProperty('--'+name,v+'px');
+    localStorage.setItem(s.key,String(v));
+  }
+  function restore(){
+    Object.entries(defs).forEach(([name,s])=>{
+      const stored=parseInt(localStorage.getItem(s.key)||'',10);
+      apply(name,isNaN(stored)?s.def:stored);
+    });
+  }
+  restore();
+  function drag(gutter,name,axis){
+    if(!gutter)return;
+    gutter.addEventListener('mousedown',e=>{
+      e.preventDefault();gutter.classList.add('dragging');
+      document.body.classList.add('resizing');
+      if(axis==='y')document.body.classList.add('rowres');
+      const start=(axis==='x')?e.clientX:e.clientY;
+      const cur=parseInt(getComputedStyle(root).getPropertyValue('--'+name),10)||defs[name].def;
+      function mm(ev){
+        const now=(axis==='x')?ev.clientX:ev.clientY;
+        apply(name,cur+(now-start));
+      }
+      function mu(){
+        document.removeEventListener('mousemove',mm);
+        document.removeEventListener('mouseup',mu);
+        gutter.classList.remove('dragging');
+        document.body.classList.remove('resizing','rowres');
+      }
+      document.addEventListener('mousemove',mm);
+      document.addEventListener('mouseup',mu);
+    });
+    gutter.addEventListener('dblclick',()=>{apply(name,defs[name].def);});
+  }
+  drag($('#gutterV'),'nav-w','x');
+  drag($('#gutterPane'),'pane-h','y');
+  drag($('#gutterLog'),'log-h','y');
+  window.addEventListener('resize',()=>{
+    Object.keys(defs).forEach(name=>{
+      const s=defs[name];
+      s.max=(name==='nav-w')?600:window.innerHeight-260;
+      const cur=parseInt(getComputedStyle(root).getPropertyValue('--'+name),10)||s.def;
+      if(cur>s.max)apply(name,s.max);
+    });
+  });
+})();
 $('#readyAlert').checked=localStorage.getItem('vaakReadyAlert')!=='0';
 $('#readyAlert').onchange=()=>localStorage.setItem('vaakReadyAlert',$('#readyAlert').checked?'1':'0');
 window.addEventListener('focus',stopTitleFlash);
