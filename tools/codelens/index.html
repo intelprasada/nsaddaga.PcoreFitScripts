@@ -37,11 +37,18 @@
 
   /* main grid */
   #main{flex:1 1 auto;display:grid;
-    grid-template-columns:260px 1fr 360px;min-height:0}
+    grid-template-columns:var(--w-left,260px) 5px 1fr 5px var(--w-right,360px);
+    min-height:0}
   .col{min-width:0;min-height:0;display:flex;flex-direction:column;
     background:var(--panel);overflow:hidden}
   #tree{border-right:1px solid var(--border)}
   #ctx{border-left:1px solid var(--border)}
+  .resizer{background:transparent;cursor:col-resize;position:relative;z-index:5;
+    transition:background .12s}
+  .resizer::before{content:"";position:absolute;inset:0 1px;background:var(--border)}
+  .resizer:hover::before,.resizer.dragging::before{background:var(--accent)}
+  body.resizing{cursor:col-resize;user-select:none}
+  body.resizing iframe,body.resizing #editor{pointer-events:none}
   .col h3{margin:0;padding:8px 12px;font-size:11px;text-transform:uppercase;
     letter-spacing:.6px;color:var(--muted);border-bottom:1px solid var(--border);
     background:var(--panel2);flex:0 0 auto;display:flex;justify-content:space-between}
@@ -229,12 +236,16 @@
       <div class="scroll"><div id="treeRoot"></div></div>
     </div>
 
+    <div class="resizer" id="rsz-left" title="Drag to resize · double-click to reset"></div>
+
     <div class="col" id="center">
       <div id="editorWrap">
         <div id="loading">Loading Monaco…</div>
         <div id="editor"></div>
       </div>
     </div>
+
+    <div class="resizer" id="rsz-right" title="Drag to resize · double-click to reset"></div>
 
     <div class="col" id="ctx">
       <div id="ctxHead">
@@ -975,6 +986,76 @@ require(['vs/editor/editor.main'],function(){
 $('#paneSize').addEventListener('change',()=>refreshContext(false));
 $('#paneSize').addEventListener('keydown',e=>{ if(e.key==='Enter') refreshContext(false); });
 $('#refreshBtn').addEventListener('click',()=>refreshContext(true));
+
+/* ---- resizable panes (left tree ↔ center editor ↔ right context) ---- */
+(function initResizers(){
+  const DEFAULTS = {left:260, right:360};
+  const CLAMP = {left:[140, 640], right:[220, 900]};  // px
+  const root = document.documentElement;
+  const load = (k,d) => {
+    const v = parseInt(localStorage.getItem('codelens.w.'+k)||"",10);
+    return (isFinite(v) && v>=CLAMP[k][0] && v<=CLAMP[k][1]) ? v : d;
+  };
+  const apply = () => {
+    root.style.setProperty('--w-left',  load('left',  DEFAULTS.left)+'px');
+    root.style.setProperty('--w-right', load('right', DEFAULTS.right)+'px');
+  };
+  apply();
+
+  function attach(id, side){
+    const el = document.getElementById(id);
+    if(!el) return;
+    let dragging = false, startX = 0, startW = 0;
+    const clamp = v => {
+      const [lo, hi] = CLAMP[side];
+      const maxByViewport = Math.max(lo, Math.floor(window.innerWidth * 0.6));
+      return Math.min(Math.max(v, lo), Math.min(hi, maxByViewport));
+    };
+    el.addEventListener('pointerdown', ev => {
+      dragging = true; startX = ev.clientX;
+      startW = parseInt(getComputedStyle(root).getPropertyValue('--w-'+side))||DEFAULTS[side];
+      el.setPointerCapture(ev.pointerId);
+      el.classList.add('dragging');
+      document.body.classList.add('resizing');
+      ev.preventDefault();
+    });
+    el.addEventListener('pointermove', ev => {
+      if(!dragging) return;
+      const dx = ev.clientX - startX;
+      const w = clamp(side==='left' ? startW + dx : startW - dx);
+      root.style.setProperty('--w-'+side, w+'px');
+    });
+    const finish = ev => {
+      if(!dragging) return;
+      dragging = false;
+      el.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+      try{ el.releasePointerCapture(ev.pointerId); }catch(_){}
+      const w = parseInt(getComputedStyle(root).getPropertyValue('--w-'+side))||DEFAULTS[side];
+      localStorage.setItem('codelens.w.'+side, String(w));
+      if(editor) editor.layout();
+    };
+    el.addEventListener('pointerup', finish);
+    el.addEventListener('pointercancel', finish);
+    el.addEventListener('dblclick', () => {
+      root.style.setProperty('--w-'+side, DEFAULTS[side]+'px');
+      localStorage.removeItem('codelens.w.'+side);
+      if(editor) editor.layout();
+    });
+  }
+  attach('rsz-left','left');
+  attach('rsz-right','right');
+  // re-clamp on window resize so a saved width never exceeds viewport.
+  window.addEventListener('resize', () => {
+    ['left','right'].forEach(s=>{
+      const cur = parseInt(getComputedStyle(root).getPropertyValue('--w-'+s))||DEFAULTS[s];
+      const lo = CLAMP[s][0];
+      const hi = Math.min(CLAMP[s][1], Math.floor(window.innerWidth*0.6));
+      const next = Math.min(Math.max(cur, lo), hi);
+      if(next !== cur) root.style.setProperty('--w-'+s, next+'px');
+    });
+  });
+})();
 
 /* ---- init ---- */
 (async()=>{ try{ await loadRepos(); await loadTree(); }catch(e){ setMsg(e.message,true); } })();
