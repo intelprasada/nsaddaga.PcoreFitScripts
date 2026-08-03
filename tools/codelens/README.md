@@ -91,10 +91,28 @@ Everything is computed live from the git repos — no database:
 | `GFC_REPO` | gfc-b0 `-latest` symlink | Path anywhere inside the GFC repo. |
 | `CODELENS_REPO` | — | Extra/primary repo path; becomes the default when set. |
 | `CODELENS_BASE` | auto (`core/fe`) | Sub-path within the repo to root the browser at. |
+| `CODELENS_CUSTOM_STORE` | `~/.codelens/custom_repos.json` | Where user-registered MODEL_ROOT workareas are persisted. |
 | `IDSID_CACHE` | `./.idsid_cache.json` | IDSID resolution cache location. |
 
 The repo path may point anywhere inside a working tree; CodeLens resolves the
 git toplevel and locates `core/fe` beneath it automatically.
+
+Alongside the built-in JNC / GFC repos, users can register their own workarea
+via the **＋ workarea** button in the header. The path you pass there must be
+a `MODEL_ROOT` — i.e. the toplevel of a workarea you initialized with:
+
+```
+source /p/hdk/rtl/hdk.rc -cfg xhdk74_sles15 -model_shell -org cdg \
+       -m <cluster> -s <stepping> -b <branch> -w <path>
+```
+
+CodeLens validates the path by checking that it is (a) a git repo and (b) has
+`git config --get intel.cluster` and `git config --get intel.stepping` set —
+both are populated by the `-model_shell` setup and identify the `-m` and `-s`
+arguments respectively. Passing a subdirectory of the workarea (rather than
+its toplevel) is rejected with a message telling you the correct path to use.
+Registered workareas are persisted in `~/.codelens/custom_repos.json` and
+re-registered on server restart.
 
 ## HTTP API
 
@@ -103,6 +121,9 @@ The UI is a thin client over these JSON endpoints (handy for scripting):
 | Endpoint | Purpose |
 |----------|---------|
 | `GET /api/repos` | Configured repos, their resolved root/base/HEAD, and the default. |
+| `GET /api/repos/validate?path=` | Dry-run the MODEL_ROOT validation; returns `{ok, error, root, cluster, stepping, branch, label}`. |
+| `POST /api/repos/custom` `{path}` | Register a MODEL_ROOT workarea; persisted to disk. Returns the new repo's key + resolved info. |
+| `DELETE /api/repos/custom?key=` | Remove a previously registered workarea (its key comes from the `/api/repos` list — must start with `CUSTOM`). |
 | `GET /api/tree?repo=&path=` | One directory level under `core/fe`. |
 | `GET /api/file?repo=&path=` | File content + language + line count. |
 | `GET /api/blame?repo=&path=&start=&end=` | Per-line blame for a range. |

@@ -36,6 +36,43 @@
   input#paneSize{width:64px}
   input#pathInput{width:320px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 
+  /* --- Add-workarea modal --- */
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);
+    display:flex;align-items:center;justify-content:center;z-index:1000}
+  .modal-bg[hidden]{display:none}
+  .modal{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:8px;
+    min-width:560px;max-width:min(720px,90vw);box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  .modal-hd{display:flex;justify-content:space-between;align-items:center;
+    padding:10px 14px;border-bottom:1px solid #21262d;font-weight:600}
+  .modal-hd button{background:transparent;color:#c9d1d9;border:0;font-size:20px;cursor:pointer}
+  .modal-bd{padding:14px 18px;font-size:13px;line-height:1.5}
+  .modal-help{margin:6px 0 8px}
+  .modal-cmd{background:#0b0f19;border:1px solid #22272e;border-radius:6px;
+    padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:11px;color:#a5b4fc;overflow-x:auto;white-space:pre;margin:6px 0 10px}
+  .modal-row{display:flex;align-items:center;gap:10px;margin-top:8px}
+  .modal-row span{width:44px;color:#8b949e}
+  .modal-row input{flex:1;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:12px;background:#0b0f19;color:#c9d1d9;border:1px solid #30363d;
+    border-radius:6px;padding:6px 8px}
+  .modal-msg{margin-top:10px;font-size:12px;min-height:1.2em}
+  .modal-msg.ok{color:#7ee2a8}
+  .modal-msg.err{color:#ff9a94}
+  .modal-saved{margin-top:10px;font-size:12px;color:#8b949e}
+  .modal-saved .row{display:flex;justify-content:space-between;align-items:center;
+    gap:8px;padding:4px 0;border-top:1px dashed #21262d}
+  .modal-saved .row:first-child{border-top:0}
+  .modal-saved code{color:#c9d1d9;font-size:11px}
+  .modal-saved button{background:transparent;color:#ff9a94;border:0;cursor:pointer;font-size:14px}
+  .modal-ft{display:flex;justify-content:flex-end;gap:8px;
+    padding:10px 14px;border-top:1px solid #21262d}
+  .modal-ft button{padding:6px 14px;background:#21262d;color:#c9d1d9;border:1px solid #30363d;
+    border-radius:6px;cursor:pointer}
+  .modal-ft button.primary{background:#238636;border-color:#238636;color:#fff}
+  .modal-ft button:disabled{opacity:.5;cursor:not-allowed}
+  #addWorkareaBtn{background:#21262d;color:#c9d1d9;border:1px solid #30363d;
+    border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer}
+
   /* main grid */
   #main{flex:1 1 auto;display:grid;
     grid-template-columns:var(--w-left,260px) 5px 1fr 5px var(--w-right,360px);
@@ -235,6 +272,7 @@
   <div id="top">
     <div class="brand">CodeLens<small>core/fe</small></div>
     <select id="repoSel" title="Repository"></select>
+    <button id="addWorkareaBtn" title="Register a custom MODEL_ROOT workarea">＋ workarea</button>
     <div class="path" id="filePath">Select a file…</div>
     <label class="ctl" title="Open file by path (relative to repo base, or full path starting with the base)">
       path <input id="pathInput" placeholder="e.g. cte/fe_ifu_pp/fe_ifu_pp_ref.e" spellcheck="false" />
@@ -298,6 +336,32 @@
     <span id="stRepo"></span>
     <span id="stRange"></span>
     <span id="stMsg"></span>
+  </div>
+
+  <div id="waModalBg" class="modal-bg" hidden>
+    <div class="modal">
+      <div class="modal-hd">
+        <span>Add a MODEL_ROOT workarea</span>
+        <button id="waClose" title="Close">×</button>
+      </div>
+      <div class="modal-bd">
+        <p class="modal-help">
+          Enter the path you used with <code>-w &lt;path&gt;</code> when you sourced the model shell:
+        </p>
+        <pre class="modal-cmd">source /p/hdk/rtl/hdk.rc -cfg xhdk74_sles15 -model_shell -org cdg -m &lt;cluster&gt; -s &lt;stepping&gt; -b &lt;branch&gt; -w &lt;path&gt;</pre>
+        <p class="modal-help">The path must be a git repo AND have <code>intel.cluster</code> / <code>intel.stepping</code> set (both are populated by the model-shell setup).</p>
+        <label class="modal-row">
+          <span>path</span>
+          <input id="waPath" spellcheck="false" placeholder="e.g. /nfs/site/disks/&lt;user&gt;_wa/JNC_2" />
+        </label>
+        <div id="waMsg" class="modal-msg"></div>
+        <div id="waSaved" class="modal-saved"></div>
+      </div>
+      <div class="modal-ft">
+        <button id="waValidate">Validate</button>
+        <button id="waAdd" class="primary">Add &amp; open</button>
+      </div>
+    </div>
   </div>
 
 <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
@@ -1121,6 +1185,81 @@ $('#refreshBtn').addEventListener('click',()=>refreshContext(true));
     });
   });
 })();
+
+/* ---- Add-workarea modal ---- */
+function waOpen(){
+  $('#waModalBg').hidden=false;
+  $('#waMsg').textContent=""; $('#waMsg').className="modal-msg";
+  waRenderSaved();
+  setTimeout(()=>$('#waPath').focus(),20);
+}
+function waClose(){ $('#waModalBg').hidden=true; }
+async function waCheck(){
+  const p=$('#waPath').value.trim();
+  if(!p){ waSetMsg("enter a path", false); return null; }
+  const msg=$('#waMsg'); msg.textContent="validating…"; msg.className="modal-msg";
+  try{
+    const r=await fetch(`/api/repos/validate?path=${encodeURIComponent(p)}`);
+    const d=await r.json();
+    if(!d.ok){ waSetMsg(d.error||"invalid", false); return null; }
+    waSetMsg(`OK: ${d.label}  (root: ${d.root})`, true);
+    return d;
+  }catch(e){ waSetMsg("request failed: "+e.message, false); return null; }
+}
+async function waAdd(){
+  const p=$('#waPath').value.trim();
+  if(!p){ waSetMsg("enter a path", false); return; }
+  const btn=$('#waAdd'); btn.disabled=true;
+  try{
+    const r=await fetch('/api/repos/custom',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({path:p})
+    });
+    const d=await r.json();
+    if(!d.ok){ waSetMsg(d.error||"failed to add", false); return; }
+    waSetMsg(`added as ${d.key} · ${d.label}`, true);
+    // refresh repo selector and switch to the new one
+    await loadRepos();
+    const sel=$('#repoSel'); sel.value=d.key; curRepo=d.key;
+    const info=(await api('/api/repos')).repos.find(x=>x.key===curRepo);
+    curBase=info&&info.base?info.base:"";
+    $('#repoHead').textContent=info&&info.head?("@"+info.head):"";
+    $('#stRepo').textContent=info?`${info.key}: ${info.root} (base ${info.base||"."})`:"";
+    clearEditor(); await loadTree();
+    setTimeout(waClose, 500);
+  }finally{ btn.disabled=false; }
+}
+function waSetMsg(txt, ok){
+  const m=$('#waMsg'); m.textContent=txt;
+  m.className="modal-msg "+(ok?"ok":"err");
+}
+async function waRenderSaved(){
+  try{
+    const d=await api('/api/repos');
+    const rows=d.repos.filter(r=>r.key.startsWith('CUSTOM'));
+    const box=$('#waSaved');
+    if(!rows.length){ box.innerHTML=""; return; }
+    box.innerHTML='<div style="margin-bottom:4px;color:#c9d1d9">Saved workareas:</div>'
+      + rows.map(r=>`<div class="row" data-k="${esc(r.key)}">`
+        + `<code>${esc(r.key)}</code>`
+        + `<code style="flex:1;color:#8b949e;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.root||r.error||'')}</code>`
+        + `<button title="Remove">✕</button></div>`).join("");
+    box.querySelectorAll('.row button').forEach(b=>{
+      b.onclick=async()=>{
+        const key=b.closest('.row').dataset.k;
+        await fetch('/api/repos/custom?key='+encodeURIComponent(key),{method:'DELETE'});
+        await loadRepos(); waRenderSaved();
+      };
+    });
+  }catch(_){}
+}
+$('#addWorkareaBtn').addEventListener('click', waOpen);
+$('#waClose').addEventListener('click', waClose);
+$('#waModalBg').addEventListener('click', e=>{ if(e.target.id==='waModalBg') waClose(); });
+$('#waValidate').addEventListener('click', waCheck);
+$('#waAdd').addEventListener('click', waAdd);
+$('#waPath').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); waAdd(); }});
+document.addEventListener('keydown', e=>{ if(e.key==='Escape' && !$('#waModalBg').hidden) waClose(); });
 
 /* ---- init ---- */
 function normalizeOpenPath(raw){
