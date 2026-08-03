@@ -34,6 +34,7 @@
   button:hover{border-color:var(--accent)}
   label.ctl{color:var(--muted);display:flex;align-items:center;gap:5px}
   input#paneSize{width:64px}
+  input#pathInput{width:320px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 
   /* main grid */
   #main{flex:1 1 auto;display:grid;
@@ -235,6 +236,9 @@
     <div class="brand">CodeLens<small>core/fe</small></div>
     <select id="repoSel" title="Repository"></select>
     <div class="path" id="filePath">Select a file…</div>
+    <label class="ctl" title="Open file by path (relative to repo base, or full path starting with the base)">
+      path <input id="pathInput" placeholder="e.g. cte/fe_ifu_pp/fe_ifu_pp_ref.e" spellcheck="false" />
+    </label>
     <label class="ctl" title="How many lines the right pane summarizes, anchored at the top of the viewport">
       pane <input id="paneSize" value="auto" size="4" />
     </label>
@@ -401,6 +405,7 @@ async function openFile(path, node){
     // Kick off file-scope fetches in parallel; the active tab renders when data lands.
     loadFileScope(path);
     refreshContext(true);
+    try{ localStorage.setItem('codelens.lastFile', JSON.stringify({repo:curRepo, path})); }catch(_){}
   }catch(e){ setMsg(e.message,true); }
 }
 function clearEditor(){
@@ -1118,7 +1123,44 @@ $('#refreshBtn').addEventListener('click',()=>refreshContext(true));
 })();
 
 /* ---- init ---- */
-(async()=>{ try{ await loadRepos(); await loadTree(); }catch(e){ setMsg(e.message,true); } })();
+function normalizeOpenPath(raw){
+  let p=(raw||"").trim().replace(/^["']|["']$/g,'');
+  if(!p) return "";
+  p=p.replace(/\\/g,'/').replace(/^\/+/, '');
+  const base=(curBase||"core/fe").replace(/^\/+|\/+$/g,'');
+  if(base && p.startsWith(base+"/")) p=p.slice(base.length+1);
+  // strip a duplicate leading base if pasted twice
+  if(base && p.startsWith(base+"/")) p=p.slice(base.length+1);
+  return p.replace(/^\/+/, '');
+}
+async function openPathFromInput(){
+  const inp=$('#pathInput'); const p=normalizeOpenPath(inp.value);
+  if(!p){ setMsg("enter a path", true); return; }
+  inp.value=p;
+  await openFile(p, null);
+}
+$('#pathInput').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); openPathFromInput(); }});
+
+async function restoreLastFile(){
+  try{
+    const s=localStorage.getItem('codelens.lastFile'); if(!s) return;
+    const {repo, path}=JSON.parse(s);
+    if(!path) return;
+    if(repo && repo!==curRepo){
+      const sel=$('#repoSel');
+      const opt=Array.from(sel.options).find(o=>o.value===repo && !o.disabled);
+      if(!opt) return;  // saved repo not available; skip
+      sel.value=repo; curRepo=repo;
+      const a=(await api('/api/repos')).repos.find(r=>r.key===curRepo);
+      curBase=a&&a.base?a.base:"";
+      $('#repoHead').textContent=a&&a.head?("@"+a.head):"";
+      $('#stRepo').textContent=a?`${a.key}: ${a.root} (base ${a.base||"."})`:"";
+      await loadTree();
+    }
+    await openFile(path, null);
+  }catch(_){}
+}
+(async()=>{ try{ await loadRepos(); await loadTree(); await restoreLastFile(); }catch(e){ setMsg(e.message,true); } })();
 </script>
 </body>
 </html>
