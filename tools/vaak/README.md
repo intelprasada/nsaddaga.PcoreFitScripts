@@ -80,8 +80,9 @@ session is busy, **+ Add to queue** to stage items and flush them later.
 - **+ Add to queue** — stages the box as a draft for the selected session. Works
   even while that session is **busy**, so you can line up your next prompts while
   the CLI is still responding.
-- **Queue** — each item has **Copy** (to clipboard), **Send** (gated: refuses if
-  the session is busy and removes the item once sent), **↑ / ↓** to reorder, and
+- **Queue** — drag an item's **☰ handle** to reorder it directly. Each item also
+  has **Copy** (to clipboard), **Send** (gated: refuses if the session is busy
+  and removes the item once sent), **↑ / ↓** keyboard-friendly reorder fallback, and
   **✕** to delete. Copy first tries the Clipboard API and falls back to a hidden
   textarea + `execCommand('copy')` so it also works from plain HTTP LAN URLs.
 - **Send all in order** — flushes the whole queue sequentially, stopping if the
@@ -167,6 +168,7 @@ Everything below returns JSON.
 | `POST /api/drafts/update` | `{token, session, id, text}` — edit a draft. |
 | `POST /api/drafts/delete` | `{token, session, id}` — remove a draft. |
 | `POST /api/drafts/move` | `{token, session, id, dir}` — reorder (`up`/`down`). |
+| `POST /api/drafts/reorder` | `{token, session, id, to_index}` — move directly to a zero-based queue position (used by drag-and-drop). |
 | `POST /api/drafts/send` | `{token, session, id, submit?}` — send one draft (gated on ready; removed on success). |
 | `POST /api/drafts/send_all` | `{token, session, submit?}` — flush the queue in order. |
 | `POST /api/autoflush` | `{token, session, enabled}` — toggle auto-flush for a session. |

@@ -115,6 +115,30 @@ def test_draft_crud_and_persistence(drafts_tmp):
     assert D.delete_draft(sess, "nope") is False
 
 
+def test_reorder_draft_moves_directly_and_clamps(drafts_tmp):
+    sess = "reorder_sess"
+    drafts = [D.add_draft(sess, text) for text in ("a", "b", "c", "d")]
+
+    assert D.reorder_draft(sess, drafts[0]["id"], 3) is True
+    assert [d["text"] for d in D.get_drafts(sess)] == ["b", "c", "d", "a"]
+
+    assert D.reorder_draft(sess, drafts[3]["id"], 1) is True
+    assert [d["text"] for d in D.get_drafts(sess)] == ["b", "d", "c", "a"]
+
+    assert D.reorder_draft(sess, drafts[2]["id"], -50) is True
+    assert [d["text"] for d in D.get_drafts(sess)] == ["c", "b", "d", "a"]
+
+    assert D.reorder_draft(sess, drafts[2]["id"], 999) is True
+    assert [d["text"] for d in D.get_drafts(sess)] == ["b", "d", "a", "c"]
+
+
+@pytest.mark.parametrize("to_index", [None, "", "middle", object()])
+def test_reorder_draft_rejects_invalid_index(drafts_tmp, to_index):
+    draft = D.add_draft("bad_reorder", "only")
+    assert D.reorder_draft("bad_reorder", draft["id"], to_index) is False
+    assert D.reorder_draft("bad_reorder", "missing", 0) is False
+
+
 def test_drafts_reload_from_disk(drafts_tmp):
     D.add_draft("s1", "persisted")
     # simulate a fresh process reading the same file
@@ -780,3 +804,24 @@ def test_page_console_log_persistent():
     ih = p.find('id="logHead"')
     il = p.find('id="log"')
     assert 0 < ig < ih < il
+
+
+def test_page_queue_drag_and_drop_wiring():
+    p = D.PAGE
+    for marker in (
+        'class="qdrag"',
+        'draggable="true"',
+        "function wireQueueDrag(",
+        "function clearQueueDropState(",
+        "addEventListener('dragstart'",
+        "addEventListener('dragover'",
+        "addEventListener('drop'",
+        "reorderDraft(movedId,toIndex)",
+        "'/api/drafts/reorder'",
+    ):
+        assert marker in p, marker
+    # Polling must not replace the queue DOM in the middle of a drag.
+    load_idx = p.find("async function loadDrafts(")
+    render_idx = p.find("function _captureEditState(", load_idx)
+    assert load_idx > 0 and render_idx > load_idx
+    assert ".qi.dragging" in p[load_idx:render_idx]
