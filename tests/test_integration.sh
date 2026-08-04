@@ -16,7 +16,7 @@ fail() { log_info "FAIL: $1"; ((FAIL++)) || true; }
 # ---------------------------------------------------------------------------
 # 1. Directory structure checks
 # ---------------------------------------------------------------------------
-for dir in bin tools/tool-a tools/tool-b lib/python lib/perl lib/shell configs docs release tests; do
+for dir in bin tools/tool-a tools/tool-b tools/valtrak lib/python lib/perl lib/shell configs docs release tests; do
     if [ -d "${REPO_ROOT}/${dir}" ]; then
         pass "Directory exists: ${dir}"
     else
@@ -28,9 +28,12 @@ done
 # 2. Key file checks
 # ---------------------------------------------------------------------------
 for file in VERSION CHANGELOG.md Makefile .gitignore \
-            bin/tool-a bin/tool-b \
+            bin/tool-a bin/tool-b bin/valtrak \
             tools/tool-a/tool_a.py tools/tool-a/requirements.txt \
             tools/tool-b/tool_b.pl \
+            tools/valtrak/valtrak.py tools/valtrak/index.html \
+            tools/valtrak/app.js tools/valtrak/styles.css \
+            tools/valtrak/requirements.txt tools/valtrak/README.md \
             lib/python/common_utils.py lib/perl/CommonUtils.pm lib/shell/common.sh \
             configs/defaults.yaml docs/developer-guide.md docs/release-process.md \
             release/build.sh release/deploy.sh; do
@@ -44,7 +47,7 @@ done
 # ---------------------------------------------------------------------------
 # 3. bin wrappers are executable
 # ---------------------------------------------------------------------------
-for wrapper in bin/tool-a bin/tool-b; do
+for wrapper in bin/tool-a bin/tool-b bin/valtrak; do
     if [ -x "${REPO_ROOT}/${wrapper}" ]; then
         pass "Executable: ${wrapper}"
     else
@@ -78,6 +81,16 @@ if command -v perl >/dev/null 2>&1; then
     fi
 else
     log_info "SKIP: Perl not found – skipping tool-b smoke test"
+fi
+
+# ---------------------------------------------------------------------------
+# 6. ValTrak wrapper help does not start the server
+# ---------------------------------------------------------------------------
+output=$(bash "${REPO_ROOT}/bin/valtrak" --help 2>&1)
+if echo "${output}" | grep -q 'Usage: valtrak'; then
+    pass "ValTrak wrapper smoke test"
+else
+    fail "ValTrak wrapper smoke test (output: ${output})"
 fi
 
 # ---------------------------------------------------------------------------

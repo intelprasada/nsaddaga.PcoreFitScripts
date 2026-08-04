@@ -8,6 +8,8 @@ all: test
 
 ## Run all unit and integration tests
 test:
+	@echo "==> Running ValTrak tests..."
+	python -m pytest tools/valtrak/tests/ -v
 	@echo "==> Running tool-a tests..."
 	python -m pytest tools/tool-a/tests/ -v
 	@echo "==> Running tool-b tests..."
@@ -22,6 +24,10 @@ test-tool-a:
 ## Run only tool-b unit tests
 test-tool-b:
 	prove tools/tool-b/tests/
+
+## Run only ValTrak unit tests
+test-valtrak:
+	python -m pytest tools/valtrak/tests/ -v
 
 ## Run integration tests
 test-integration:

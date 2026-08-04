@@ -39,6 +39,7 @@ make test
 | [interfacespec](tools/interfacespec/README.md) | Python | RTL connectivity pipeline + GUI for generating Interface Spec documents from ICF/hier/gen files |
 | [gen-smt-todos](tools/gen-smt-todos/README.md) | Python | Scans fe/msid RTL for SMT/JNC TODO comments and emits a TSV summary |
 | [teamhub](tools/teamhub/README.md) | Python | Live team-performance dashboard (HTTP server + Chart.js UI) summarizing turnins, commits, HSDs, and pipe-time across GFC and JNC |
+| [ValTrak](tools/valtrak/README.md) | Python | Secure vManager validation-plan dashboard with readiness metrics, live refresh, and guarded status updates |
 
 ---
 
@@ -203,4 +204,3 @@ Ports (prod owns the shared URL; dev moved to the high ports):
 | Data dir | `.devdata/` | `.proddata/` |
 
 Frontend runs `vite preview` off a built `dist/` (production bundle), not the dev server.
-

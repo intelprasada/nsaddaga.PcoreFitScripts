@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# bin/valtrak - launch the ValTrak validation-plan dashboard.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    cat <<'EOF'
+Usage: valtrak
+
+Launch the ValTrak validation-plan dashboard.
+
+Configuration:
+  VALTRAK_HOST          Bind address (default: 127.0.0.1)
+  VALTRAK_PORT          HTTP port (default: 8767)
+  VALTRAK_VMGR_SERVER   vManager host:port
+  VALTRAK_PROJECT       vManager project (default: jnc)
+  VALTRAK_ROOT_PLAN     Aggregate validation plan (default: JNC All vplans)
+  VALTRAK_STATE_DIR     Runtime data directory (default: ~/.valtrak)
+
+Every bind requires token authentication. Keep the printed access URL private.
+EOF
+    exit 0
+fi
+
+if [[ $# -ne 0 ]]; then
+    echo "valtrak: unexpected argument: $1" >&2
+    echo "Run 'valtrak --help' for usage." >&2
+    exit 2
+fi
+
+if [[ -x /usr/intel/bin/python3 ]]; then
+    PYTHON=/usr/intel/bin/python3
+else
+    PYTHON="$(command -v python3)"
+fi
+
+exec "${PYTHON}" "${REPO_ROOT}/tools/valtrak/valtrak.py"

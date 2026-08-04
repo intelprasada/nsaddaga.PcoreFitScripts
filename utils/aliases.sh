@@ -14,5 +14,6 @@ alias sc="${_CORE_TOOLS_BIN}/supercsv"
 alias st="${_CORE_TOOLS_BIN}/supertracker"
 alias th="${_CORE_TOOLS_BIN}/teamhub"
 alias email="${_CORE_TOOLS_BIN}/email-sender"
+alias vt="${_CORE_TOOLS_BIN}/valtrak"
 
 unset _CORE_TOOLS_BIN
