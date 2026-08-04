@@ -303,7 +303,7 @@ function renderPlanList() {
   }).join("");
 }
 
-function renderPlanDetail() {
+function renderPlanDetail({ resetTreeState = true } = {}) {
   const stats = state.planStats.get(state.selectedPlan);
   const listed = state.plans.find((plan) => plan.vplan_name === state.selectedPlan);
   const items = stats?.items || [];
@@ -327,10 +327,12 @@ function renderPlanDetail() {
       <div class="detail-metric"><span>Open</span><strong>${formatNumber(counts.open)}</strong></div>
       <div class="detail-metric"><span>Deferred</span><strong>${formatNumber(counts.future + counts.rejected)}</strong></div>
     </div>`;
-  state.expanded.clear();
-  state.treeExpandedAll = false;
-  state.treeFocusPath = "";
-  $("#expand-tree").textContent = "Expand all";
+  if (resetTreeState) {
+    state.expanded.clear();
+    state.treeExpandedAll = false;
+    state.treeFocusPath = "";
+    $("#expand-tree").textContent = "Expand all";
+  }
   renderTree();
 }
 
@@ -772,7 +774,7 @@ function applyCompletedJob(job) {
   if (stats) stats.counts = statusCounts(stats.items);
   renderOverview();
   renderPlanList();
-  renderPlanDetail();
+  renderPlanDetail({ resetTreeState: false });
   renderItemTable();
 }
 
