@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="ValTrak validation plan dashboard">
+  <title>ValTrak</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+
+  <div id="loading-screen" class="loading-screen" role="status" aria-live="polite">
+    <div class="loading-mark">VT</div>
+    <div>
+      <strong>Loading validation intelligence</strong>
+      <span>Preparing validation plan data…</span>
+    </div>
+  </div>
+
+  <div id="app" class="app is-loading">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">VT</div>
+        <div>
+          <strong>ValTrak</strong>
+          <span>Project intelligence</span>
+        </div>
+      </div>
+
+      <nav class="primary-nav" aria-label="Primary navigation">
+        <button class="nav-item is-active" data-view="overview" aria-current="page">
+          <span class="nav-icon" aria-hidden="true">⌂</span>
+          <span>Overview</span>
+        </button>
+        <button class="nav-item" data-view="plans">
+          <span class="nav-icon" aria-hidden="true">☷</span>
+          <span>Plan explorer</span>
+        </button>
+        <button class="nav-item" data-view="items">
+          <span class="nav-icon" aria-hidden="true">◇</span>
+          <span>All items</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-note">
+        <span class="live-dot"></span>
+        <div>
+          <strong>Live vManager snapshot</strong>
+          <span id="sidebar-project">Loading project…</span>
+        </div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <button id="mobile-menu" class="icon-button mobile-only" aria-label="Open navigation">☰</button>
+        <div class="project-context">
+          <span>Project</span>
+          <button class="project-picker" id="project-picker" aria-label="Current project">
+            <span class="project-avatar" id="project-avatar">—</span>
+            <strong id="project-name">—</strong>
+            <span class="chevron" aria-hidden="true">⌄</span>
+          </button>
+        </div>
+        <div class="topbar-actions">
+          <label class="global-search">
+            <span aria-hidden="true">⌕</span>
+            <input id="global-search" type="search" placeholder="Find a plan or item" autocomplete="off">
+            <kbd>/</kbd>
+          </label>
+          <button id="jobs-button" class="jobs-button" aria-label="View background status updates">
+            <span aria-hidden="true">↻</span>
+            <span>Updates</span>
+            <span id="jobs-badge" class="jobs-badge" hidden>0</span>
+          </button>
+          <button id="help-button" class="icon-button" aria-label="Show completion methodology">?</button>
+        </div>
+      </header>
+
+      <main id="main-content">
+        <section id="overview-view" class="view is-active" data-view-panel="overview">
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">Project dashboard</p>
+              <h1>Validation readiness</h1>
+              <p class="subheading">A decision-focused view of validation-plan completion.</p>
+            </div>
+            <div class="overview-actions">
+              <button id="refresh-all-plans" class="secondary-button">
+                <span aria-hidden="true">↻</span>
+                Refresh all data
+              </button>
+              <button id="manage-monitored-plans" class="monitor-button">
+                <span aria-hidden="true">◎</span>
+                <span>Monitored plans</span>
+                <strong id="monitored-count">—</strong>
+              </button>
+              <div class="snapshot-label">
+                <span>Snapshot</span>
+                <strong id="snapshot-time">—</strong>
+              </div>
+            </div>
+          </div>
+
+          <div id="summary-cards" class="summary-grid" aria-label="Project summary"></div>
+
+          <div class="overview-grid">
+            <article class="panel completion-panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Active scope</p>
+                  <h2>Completion status</h2>
+                </div>
+                <button class="text-button methodology-link">How it’s calculated</button>
+              </div>
+              <div class="completion-content">
+                <div id="completion-ring" class="completion-ring" role="img" aria-label="Project completion"></div>
+                <div id="status-legend" class="status-legend"></div>
+              </div>
+            </article>
+
+            <article class="panel attention-panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Prioritize</p>
+                  <h2>Plans needing attention</h2>
+                </div>
+                <button class="text-button" data-go-view="plans">View all plans</button>
+              </div>
+              <div id="attention-list" class="attention-list"></div>
+            </article>
+          </div>
+
+          <article class="panel">
+            <div class="panel-heading wrap">
+              <div>
+                <p class="eyebrow">Completion composition</p>
+                <h2>Progress by item type</h2>
+                <p class="panel-description">Compare active completion across functional intent, hierarchy, and evidence ports.</p>
+              </div>
+              <div id="dimension-tabs" class="segmented-control" role="tablist" aria-label="Completion dimension">
+                <button role="tab" aria-selected="true" data-dimension="t">Functional type</button>
+                <button role="tab" aria-selected="false" data-dimension="st">Hierarchy type</button>
+                <button role="tab" aria-selected="false" data-dimension="mp">Evidence port</button>
+              </div>
+            </div>
+            <div id="type-completion" class="type-completion"></div>
+          </article>
+
+          <div class="overview-grid lower">
+            <article class="panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Portfolio</p>
+                  <h2>Plan distribution</h2>
+                </div>
+              </div>
+              <div id="portfolio-stats" class="portfolio-stats"></div>
+            </article>
+            <article class="panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Ownership</p>
+                  <h2>Largest active scopes</h2>
+                </div>
+              </div>
+              <div id="owner-list" class="owner-list"></div>
+            </article>
+          </div>
+        </section>
+
+        <section id="plans-view" class="view" data-view-panel="plans">
+          <div class="page-heading compact">
+            <div>
+              <p class="eyebrow">Plan explorer</p>
+              <h1>Validation hierarchy</h1>
+              <p class="subheading">Navigate plan structure, ownership, type, and completion without losing context.</p>
+            </div>
+          </div>
+
+          <div class="explorer-layout">
+            <aside class="plan-browser panel" aria-label="Validation plans">
+              <div class="browser-header">
+                <h2>Plans <span id="plan-count-label"></span></h2>
+                <label class="compact-search">
+                  <span aria-hidden="true">⌕</span>
+                  <input id="plan-search" type="search" placeholder="Filter plans">
+                </label>
+              </div>
+              <div id="plan-list" class="plan-list" aria-label="Choose a validation plan"></div>
+            </aside>
+
+            <article class="plan-detail panel">
+              <div id="plan-detail-header"></div>
+              <div class="detail-toolbar">
+                <label class="compact-search hierarchy-search">
+                  <span aria-hidden="true">⌕</span>
+                  <input id="hierarchy-search" type="search" placeholder="Search within this plan">
+                </label>
+                <select id="hierarchy-status" aria-label="Filter hierarchy by status">
+                  <option value="">All statuses</option>
+                  <option value="open">Open</option>
+                  <option value="complete">Complete</option>
+                  <option value="future">Future</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+                <button id="expand-tree" class="secondary-button">Expand all</button>
+              </div>
+              <div class="tree-header" aria-hidden="true">
+                <span>Plan item</span><span>Type</span><span>Owner</span><span>Status</span>
+              </div>
+              <div id="plan-tree" class="plan-tree" role="tree" aria-label="Validation plan hierarchy"></div>
+            </article>
+          </div>
+        </section>
+
+        <section id="items-view" class="view" data-view-panel="items">
+          <div class="page-heading compact">
+            <div>
+              <p class="eyebrow">Item explorer</p>
+              <h1>All validation items</h1>
+              <p class="subheading">Search and isolate actionable scope across the complete project.</p>
+            </div>
+          </div>
+
+          <article class="panel item-panel">
+            <div class="filter-bar">
+              <label class="table-search">
+                <span aria-hidden="true">⌕</span>
+                <input id="item-search" type="search" placeholder="Search name, path, owner, or team">
+              </label>
+              <select id="item-status" aria-label="Filter by status">
+                <option value="">All statuses</option>
+              </select>
+              <select id="item-type" aria-label="Filter by functional type">
+                <option value="">All functional types</option>
+              </select>
+              <select id="item-subtype" aria-label="Filter by hierarchy type">
+                <option value="">All hierarchy types</option>
+              </select>
+              <button id="clear-filters" class="secondary-button">Clear</button>
+            </div>
+            <div class="results-meta">
+              <span id="item-results-count"></span>
+              <span>Showing 100 items per page</span>
+            </div>
+            <div class="data-table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>Functional type</th>
+                    <th>Hierarchy</th>
+                    <th>Owner</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="item-table-body"></tbody>
+              </table>
+            </div>
+            <div class="pagination">
+              <button id="previous-page" class="secondary-button">Previous</button>
+              <span id="page-label"></span>
+              <button id="next-page" class="secondary-button">Next</button>
+            </div>
+          </article>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="methodology-dialog">
+    <div class="dialog-heading">
+      <div>
+        <p class="eyebrow">Methodology</p>
+        <h2>How completion is calculated</h2>
+      </div>
+      <button class="icon-button close-dialog" aria-label="Close">×</button>
+    </div>
+    <p>
+      Active completion is <strong>complete ÷ (complete + open)</strong>. Items marked
+      <strong>future</strong> or <strong>rejected</strong> remain visible but are excluded
+      from the active denominator, matching the filtering semantics used by the internal
+      coverage tooling.
+    </p>
+    <p>
+      The dashboard reflects validation-plan workflow status (<code>i_status</code>), not
+      measured test or coverage grade. The queried aggregate plan did not expose populated
+      grade values in this snapshot. Project totals are reference-weighted: when a plan is
+      referenced more than once by the aggregate, each reference instance contributes to
+      project scope. The plan detail identifies these cases explicitly.
+    </p>
+  </dialog>
+
+  <dialog id="status-dialog" class="status-dialog">
+    <form id="status-form" method="dialog">
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">Write to vManager</p>
+          <h2>Change item status</h2>
+        </div>
+        <button type="button" class="icon-button close-status-dialog" aria-label="Close">×</button>
+      </div>
+      <div id="status-item-context" class="status-item-context"></div>
+      <label class="status-field">
+        <span>New status</span>
+        <select id="new-status" required></select>
+      </label>
+      <div class="write-warning">
+        <span aria-hidden="true">!</span>
+        <p>
+          This queues a real vManager update. The service will re-read the live item,
+          reject stale changes, apply the update, and verify the resulting status.
+        </p>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="secondary-button close-status-dialog">Cancel</button>
+        <button id="queue-status-update" type="submit" class="primary-button">Queue update</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="jobs-dialog" class="jobs-dialog">
+    <div class="dialog-heading">
+      <div>
+        <p class="eyebrow">Background work</p>
+        <h2>Status updates</h2>
+      </div>
+      <button class="icon-button close-jobs-dialog" aria-label="Close">×</button>
+    </div>
+    <p class="dialog-description">Updates continue on the local service if this dialog is closed.</p>
+    <div id="jobs-list" class="jobs-list"></div>
+  </dialog>
+
+  <dialog id="monitor-dialog" class="monitor-dialog">
+    <form id="monitor-form">
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">Portfolio scope</p>
+          <h2>Choose plans to monitor</h2>
+        </div>
+        <button type="button" class="icon-button close-monitor-dialog" aria-label="Close">×</button>
+      </div>
+      <p class="dialog-description">
+        Overview metrics and charts will include only checked plans. Your selection is saved in this browser.
+      </p>
+      <label class="monitor-search">
+        <span aria-hidden="true">⌕</span>
+        <input id="monitor-search" type="search" placeholder="Search available plans or owners">
+      </label>
+      <div class="monitor-tools">
+        <span id="monitor-selection-summary"></span>
+        <div>
+          <button id="select-all-monitored" type="button" class="text-button">Select referenced</button>
+          <button id="clear-monitored" type="button" class="text-button">Clear</button>
+        </div>
+      </div>
+      <div id="monitor-plan-list" class="monitor-plan-list"></div>
+      <div class="dialog-actions">
+        <button type="button" class="secondary-button close-monitor-dialog">Cancel</button>
+        <button type="submit" class="primary-button">Apply monitored plans</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="plan-overview-dialog" class="plan-overview-dialog">
+    <div class="dialog-heading">
+      <div>
+        <p class="eyebrow">Plan dashboard</p>
+        <h2 id="plan-overview-title">Validation plan</h2>
+        <p id="plan-overview-subtitle" class="dialog-description"></p>
+      </div>
+      <button class="icon-button close-plan-overview" aria-label="Close">×</button>
+    </div>
+    <div id="plan-overview-content"></div>
+  </dialog>
+
+  <dialog id="refresh-dialog" class="refresh-dialog">
+    <form id="refresh-form">
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">vManager data</p>
+          <h2 id="refresh-title">Refresh validation data</h2>
+        </div>
+        <button type="button" class="icon-button close-refresh-dialog" aria-label="Close">×</button>
+      </div>
+      <p id="refresh-description" class="dialog-description"></p>
+      <div id="refresh-progress" class="refresh-progress" hidden aria-live="polite">
+        <span class="refresh-spinner" aria-hidden="true"></span>
+        <div>
+          <strong id="refresh-progress-title">Refreshing from vManager…</strong>
+          <span id="refresh-progress-detail">The dashboard remains available while this runs.</span>
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="secondary-button close-refresh-dialog">Cancel</button>
+        <button id="confirm-refresh" type="submit" class="primary-button">Start refresh</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="app.js" defer></script>
+</body>
+</html>

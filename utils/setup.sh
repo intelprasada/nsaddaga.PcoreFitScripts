@@ -20,6 +20,7 @@
 #   sc     ->  bin/supercsv
 #   st     ->  bin/supertracker
 #   email  ->  bin/email-sender
+#   vt     ->  bin/valtrak
 #
 # Idempotent: safe to run multiple times — already-present steps are skipped.
 
@@ -28,7 +29,7 @@ set -euo pipefail
 # Resolve repo root from this script's own location (utils/../)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-TOOL_ALIASES=(is sc st email)
+TOOL_ALIASES=(is sc st email vt)
 
 # ─── Colours ──────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; RED='\033[0;31m'; RESET='\033[0m'
@@ -224,7 +225,7 @@ fi
 # ─── Step 6: Smoke-test tools ─────────────────────────────────────────────────
 echo
 info "Smoke-testing tools via bin/ wrappers (--help) ..."
-SMOKE_TOOLS=(interfacespec supercsv supertracker email-sender)
+SMOKE_TOOLS=(interfacespec supercsv supertracker email-sender valtrak)
 SMOKE_FAILED=0
 for tool in "${SMOKE_TOOLS[@]}"; do
     wrapper="${REPO_ROOT}/bin/${tool}"

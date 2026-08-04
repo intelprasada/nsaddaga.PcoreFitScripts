@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **ValTrak** — browser-based vManager validation-plan dashboard with
+  monitored-plan metrics, live full/per-plan refresh, and verified background
+  status updates.
 - **email-sender** — Tkinter GUI for composing and sending emails with optional
   file attachments; uses Python stdlib only (smtplib, tkinter).
 - **supercsv** — Tkinter CSV viewer with column filtering, row sorting, font/theme
