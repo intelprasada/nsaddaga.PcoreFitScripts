@@ -435,6 +435,7 @@
               <th>Turnin</th>
               <th>Turnin Time</th>
               <th>Project</th>
+              <th title="Pipeline the turnin landed in (core vs fit — same distinction as sourcing hdk.rc -m core vs -m fit)">Pipe</th>
               <th>Status</th>
               <th>Comment</th>
               <th># Commits</th>
@@ -1324,7 +1325,7 @@ function toggleCommitFiles(tr, c) {
   });
 }
 
-async function showDiff(project, sha, path, commit, turninId) {
+async function showDiff(project, sha, path, commit, turninId, cluster) {
   const section = document.getElementById("diffSection");
   const title = document.getElementById("diffTitle");
   const sub   = document.getElementById("diffSub");
@@ -1332,13 +1333,15 @@ async function showDiff(project, sha, path, commit, turninId) {
   title.textContent = "Diff – " + path;
   const shaLabel = (sha||"").split(",")[0].slice(0, 12) || "(no sha)";
   const tiTag = turninId ? ` · turnin ${turninId}` : "";
-  sub.textContent = `[${project}] ${shaLabel}${tiTag}${commit ? " · " + (commit.subject||"") : ""}`;
+  const clTag = cluster ? ` · ${cluster}` : "";
+  sub.textContent = `[${project}${clTag}] ${shaLabel}${tiTag}${commit ? " · " + (commit.subject||"") : ""}`;
   body.textContent = "Loading diff…";
   section.hidden = false;
   section.scrollIntoView({ behavior: "smooth", block: "start" });
   try {
     const params = new URLSearchParams({ project, shas: sha||"", path });
     if (turninId) params.set("turnin_id", turninId);
+    if (cluster) params.set("cluster", cluster);
     const r = await fetch("/api/diff?" + params.toString(), { cache: "no-store" });
     const text = await r.text();
     body.innerHTML = colorizeDiff(text);
@@ -1671,6 +1674,16 @@ function projectBadge(p) {
   return `<span class="pill" style="background:${c}22;color:${c};border:1px solid ${c}55;">${esc(p)}</span>`;
 }
 
+// Pipe pill: which pipeline the turnin landed in. Same distinction as
+// hdk.rc -m core vs -m fit; controls which model bundle holds the commits.
+function pipeBadge(cluster) {
+  const p = String(cluster||"").toLowerCase();
+  if (p === "core")     return `<span class="pill" title="core pipe (hdk.rc -m core)" style="background:#7c3aed22;color:#c4b5fd;border:1px solid #7c3aed55;">core</span>`;
+  if (p === "fit")      return `<span class="pill" title="fit pipe (hdk.rc -m fit)"   style="background:#0ea5e922;color:#7dd3fc;border:1px solid #0ea5e955;">fit</span>`;
+  if (p)                return `<span class="pill" title="pipe" style="background:#33415522;color:#cbd5e1;border:1px solid #33415555;">${esc(p)}</span>`;
+  return `<span class="sub">–</span>`;
+}
+
 function tiMatchesOne(t, q) {
   if (!q) return true;
   if (String(t.id||"").includes(q)) return true;
@@ -1738,6 +1751,7 @@ function renderTiTable() {
           ${t.bundle_id?`<div class="sub" style="font-size:12px;">bundle ${esc(t.bundle_id)}</div>`:""}</td>
       <td>${esc(t.turnin_time)}</td>
       <td>${projectBadge(t.project)}</td>
+      <td>${pipeBadge(t.cluster)}</td>
       <td>${tiStatusBadge(t.status)}${t.stage?`<div class="sub" style="font-size:12px;">${esc(t.stage)}</div>`:""}</td>
       <td style="white-space:pre-wrap; max-width:520px; word-break:break-word; font-size:13px;">${esc(t.comments||"")}</td>
       <td>${t.n_commits}</td>
@@ -1748,7 +1762,7 @@ function renderTiTable() {
     const detail = document.createElement("tr");
     detail.className = "ti-detail";
     detail.hidden = true;
-    detail.innerHTML = `<td colspan="11" style="background:#0b1327;"></td>`;
+    detail.innerHTML = `<td colspan="12" style="background:#0b1327;"></td>`;
     tr.querySelector(".chev").addEventListener("click", (ev)=>{
       ev.stopPropagation();
       detail.hidden = !detail.hidden;
@@ -1788,7 +1802,7 @@ function renderTiDetail(t) {
     }
     const shas = shaList.join(",");
     return `<tr>
-      <td><a href="#" class="ti-file" data-project="${esc(t.project)}" data-shas="${esc(shas)}" data-turnin-id="${esc(t.id||"")}" data-path="${esc(f)}"
+      <td><a href="#" class="ti-file" data-project="${esc(t.project)}" data-shas="${esc(shas)}" data-turnin-id="${esc(t.id||"")}" data-cluster="${esc(t.cluster||"")}" data-path="${esc(f)}"
              style="color:#93c5fd; text-decoration:underline;">${esc(f)}</a></td>
     </tr>`;
   }).join("");
@@ -1812,7 +1826,7 @@ function renderTiDetail(t) {
   wrap.querySelectorAll("a.ti-file").forEach(a => {
     a.addEventListener("click", (ev)=>{
       ev.preventDefault();
-      showDiff(a.dataset.project, a.dataset.shas, a.dataset.path, null, a.dataset.turninId);
+      showDiff(a.dataset.project, a.dataset.shas, a.dataset.path, null, a.dataset.turninId, a.dataset.cluster);
     });
   });
   return wrap;
@@ -2043,7 +2057,12 @@ document.getElementById("tiReload").addEventListener("click", ()=>{
   tiData = null;
   loadTurnins();
 });
-document.getElementById("tiFilter").addEventListener("input", renderTiTable);
+document.getElementById("tiFilter").addEventListener("input", () => {
+  // A text-filter edit is an override: clear any sticky chart-bar bucket
+  // filter so results reflect only what the user typed.
+  if (tiBucketFilter) { tiBucketFilter = null; renderTiActivityChart(); }
+  renderTiTable();
+});
 ["tiChartGran","tiChartSpan","tiChartStack"].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener("change", () => { clearTiBucketFilter(false); renderTiActivityChart(); renderTiTable(); });
