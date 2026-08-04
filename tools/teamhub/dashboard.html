@@ -1324,7 +1324,7 @@ function toggleCommitFiles(tr, c) {
   });
 }
 
-async function showDiff(project, sha, path, commit, turninId) {
+async function showDiff(project, sha, path, commit, turninId, cluster) {
   const section = document.getElementById("diffSection");
   const title = document.getElementById("diffTitle");
   const sub   = document.getElementById("diffSub");
@@ -1332,13 +1332,15 @@ async function showDiff(project, sha, path, commit, turninId) {
   title.textContent = "Diff – " + path;
   const shaLabel = (sha||"").split(",")[0].slice(0, 12) || "(no sha)";
   const tiTag = turninId ? ` · turnin ${turninId}` : "";
-  sub.textContent = `[${project}] ${shaLabel}${tiTag}${commit ? " · " + (commit.subject||"") : ""}`;
+  const clTag = cluster ? ` · ${cluster}` : "";
+  sub.textContent = `[${project}${clTag}] ${shaLabel}${tiTag}${commit ? " · " + (commit.subject||"") : ""}`;
   body.textContent = "Loading diff…";
   section.hidden = false;
   section.scrollIntoView({ behavior: "smooth", block: "start" });
   try {
     const params = new URLSearchParams({ project, shas: sha||"", path });
     if (turninId) params.set("turnin_id", turninId);
+    if (cluster) params.set("cluster", cluster);
     const r = await fetch("/api/diff?" + params.toString(), { cache: "no-store" });
     const text = await r.text();
     body.innerHTML = colorizeDiff(text);
@@ -1788,7 +1790,7 @@ function renderTiDetail(t) {
     }
     const shas = shaList.join(",");
     return `<tr>
-      <td><a href="#" class="ti-file" data-project="${esc(t.project)}" data-shas="${esc(shas)}" data-turnin-id="${esc(t.id||"")}" data-path="${esc(f)}"
+      <td><a href="#" class="ti-file" data-project="${esc(t.project)}" data-shas="${esc(shas)}" data-turnin-id="${esc(t.id||"")}" data-cluster="${esc(t.cluster||"")}" data-path="${esc(f)}"
              style="color:#93c5fd; text-decoration:underline;">${esc(f)}</a></td>
     </tr>`;
   }).join("");
@@ -1812,7 +1814,7 @@ function renderTiDetail(t) {
   wrap.querySelectorAll("a.ti-file").forEach(a => {
     a.addEventListener("click", (ev)=>{
       ev.preventDefault();
-      showDiff(a.dataset.project, a.dataset.shas, a.dataset.path, null, a.dataset.turninId);
+      showDiff(a.dataset.project, a.dataset.shas, a.dataset.path, null, a.dataset.turninId, a.dataset.cluster);
     });
   });
   return wrap;
