@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lines containing both a TODO/FIXME marker and an SMT/JNC/Thread-1 keyword;
   emits a TSV report and per-file summary.  Stdlib only.
 
+### Fixed
+- **ValTrak** — preserve hierarchy expansion and focus after a successful
+  status update.
+
 ## [1.0.0] - 2026-04-14
 
 ### Added
