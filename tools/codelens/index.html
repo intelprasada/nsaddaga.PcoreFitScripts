@@ -35,6 +35,58 @@
   label.ctl{color:var(--muted);display:flex;align-items:center;gap:5px}
   input#paneSize{width:64px}
   input#pathInput{width:320px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+  input#baseInput{width:180px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+  button#basePickBtn{background:#21262d;color:#c9d1d9;border:1px solid #30363d;
+    border-radius:4px;padding:1px 6px;font-size:12px;cursor:pointer;margin-left:2px}
+  #basePop{position:absolute;background:#0d1117;border:1px solid #30363d;border-radius:6px;
+    box-shadow:0 8px 24px rgba(0,0,0,.5);padding:6px;min-width:280px;max-width:420px;
+    max-height:360px;overflow:auto;z-index:900;font-size:12px}
+  #basePop[hidden]{display:none}
+  #basePop .bp-hd{color:#8b949e;padding:2px 6px;display:flex;justify-content:space-between}
+  #basePop .bp-row{padding:3px 6px;border-radius:4px;cursor:pointer;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#c9d1d9;
+    display:flex;justify-content:space-between;align-items:center}
+  #basePop .bp-row:hover{background:#161b22}
+  #basePop .bp-row .use{color:#7ee2a8;font-size:11px;visibility:hidden}
+  #basePop .bp-row:hover .use{visibility:visible}
+  #basePop .bp-up{color:#a5b4fc}
+
+  /* --- Add-workarea modal --- */
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);
+    display:flex;align-items:center;justify-content:center;z-index:1000}
+  .modal-bg[hidden]{display:none}
+  .modal{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:8px;
+    min-width:560px;max-width:min(720px,90vw);box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  .modal-hd{display:flex;justify-content:space-between;align-items:center;
+    padding:10px 14px;border-bottom:1px solid #21262d;font-weight:600}
+  .modal-hd button{background:transparent;color:#c9d1d9;border:0;font-size:20px;cursor:pointer}
+  .modal-bd{padding:14px 18px;font-size:13px;line-height:1.5}
+  .modal-help{margin:6px 0 8px}
+  .modal-cmd{background:#0b0f19;border:1px solid #22272e;border-radius:6px;
+    padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:11px;color:#a5b4fc;overflow-x:auto;white-space:pre;margin:6px 0 10px}
+  .modal-row{display:flex;align-items:center;gap:10px;margin-top:8px}
+  .modal-row span{width:44px;color:#8b949e}
+  .modal-row input{flex:1;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:12px;background:#0b0f19;color:#c9d1d9;border:1px solid #30363d;
+    border-radius:6px;padding:6px 8px}
+  .modal-msg{margin-top:10px;font-size:12px;min-height:1.2em}
+  .modal-msg.ok{color:#7ee2a8}
+  .modal-msg.err{color:#ff9a94}
+  .modal-saved{margin-top:10px;font-size:12px;color:#8b949e}
+  .modal-saved .row{display:flex;justify-content:space-between;align-items:center;
+    gap:8px;padding:4px 0;border-top:1px dashed #21262d}
+  .modal-saved .row:first-child{border-top:0}
+  .modal-saved code{color:#c9d1d9;font-size:11px}
+  .modal-saved button{background:transparent;color:#ff9a94;border:0;cursor:pointer;font-size:14px}
+  .modal-ft{display:flex;justify-content:flex-end;gap:8px;
+    padding:10px 14px;border-top:1px solid #21262d}
+  .modal-ft button{padding:6px 14px;background:#21262d;color:#c9d1d9;border:1px solid #30363d;
+    border-radius:6px;cursor:pointer}
+  .modal-ft button.primary{background:#238636;border-color:#238636;color:#fff}
+  .modal-ft button:disabled{opacity:.5;cursor:not-allowed}
+  #addWorkareaBtn{background:#21262d;color:#c9d1d9;border:1px solid #30363d;
+    border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer}
 
   /* main grid */
   #main{flex:1 1 auto;display:grid;
@@ -235,6 +287,11 @@
   <div id="top">
     <div class="brand">CodeLens<small>core/fe</small></div>
     <select id="repoSel" title="Repository"></select>
+    <button id="addWorkareaBtn" title="Register a custom MODEL_ROOT workarea">＋ workarea</button>
+    <label class="ctl" title="Sub-path within the repo to root the file browser at (e.g. core/fe, core/fe/cte, rtl)">
+      base <input id="baseInput" placeholder="core/fe" spellcheck="false" />
+      <button id="basePickBtn" title="Browse for a base">…</button>
+    </label>
     <div class="path" id="filePath">Select a file…</div>
     <label class="ctl" title="Open file by path (relative to repo base, or full path starting with the base)">
       path <input id="pathInput" placeholder="e.g. cte/fe_ifu_pp/fe_ifu_pp_ref.e" spellcheck="false" />
@@ -300,11 +357,40 @@
     <span id="stMsg"></span>
   </div>
 
+  <div id="basePop" hidden></div>
+
+  <div id="waModalBg" class="modal-bg" hidden>
+    <div class="modal">
+      <div class="modal-hd">
+        <span>Add a MODEL_ROOT workarea</span>
+        <button id="waClose" title="Close">×</button>
+      </div>
+      <div class="modal-bd">
+        <p class="modal-help">
+          Enter the path you used with <code>-w &lt;path&gt;</code> when you sourced the model shell:
+        </p>
+        <pre class="modal-cmd">source /p/hdk/rtl/hdk.rc -cfg xhdk74_sles15 -model_shell -org cdg -m &lt;cluster&gt; -s &lt;stepping&gt; -b &lt;branch&gt; -w &lt;path&gt;</pre>
+        <p class="modal-help">The path must be a git repo AND have <code>intel.cluster</code> / <code>intel.stepping</code> set (both are populated by the model-shell setup).</p>
+        <label class="modal-row">
+          <span>path</span>
+          <input id="waPath" spellcheck="false" placeholder="e.g. /nfs/site/disks/&lt;user&gt;_wa/JNC_2" />
+        </label>
+        <div id="waMsg" class="modal-msg"></div>
+        <div id="waSaved" class="modal-saved"></div>
+      </div>
+      <div class="modal-ft">
+        <button id="waValidate">Validate</button>
+        <button id="waAdd" class="primary">Add &amp; open</button>
+      </div>
+    </div>
+  </div>
+
 <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s??"").replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let editor=null, monacoReady=false, curRepo=null, curPath=null, curLang="plaintext", curBase="";
+let defaultBase="";  // server-provided default base for the current repo
 let blameByLine={}, decorations=[], ctxTimer=null, curTotalLines=0;
 
 /* ---- author color (stable hash -> HSL) ---- */
@@ -320,9 +406,23 @@ async function api(path){
   if(!r.ok){ let j={}; try{j=await r.json()}catch(e){}; throw new Error(j.error||r.statusText); }
   return r.json();
 }
-function repoQ(){ return `repo=${encodeURIComponent(curRepo)}`; }
+function repoQ(){
+  let q=`repo=${encodeURIComponent(curRepo)}`;
+  // Always send base= so a server default that differs from the user's
+  // override doesn't win. Empty string means "browse from the repo toplevel".
+  if(curBase !== defaultBase) q += `&base=${encodeURIComponent(curBase)}`;
+  return q;
+}
 
 /* ---- repos ---- */
+function applyRepoInfo(info){
+  defaultBase = info&&info.base ? info.base : "";
+  const stored = localStorage.getItem('codelens.base.'+curRepo);
+  curBase = (stored !== null) ? stored : defaultBase;
+  $('#baseInput').value = curBase;
+  $('#repoHead').textContent = info&&info.head ? ("@"+info.head) : "";
+  $('#stRepo').textContent = info ? `${info.key}: ${info.root} (base ${curBase||"."})` : "";
+}
 async function loadRepos(){
   const d=await api('/api/repos');
   const sel=$('#repoSel'); sel.innerHTML="";
@@ -332,15 +432,13 @@ async function loadRepos(){
     o.disabled=!r.ok; sel.appendChild(o);
   });
   curRepo=d.default; sel.value=curRepo;
-  const active=d.repos.find(r=>r.key===curRepo);
-  curBase=active&&active.base?active.base:"";
-  $('#repoHead').textContent=active&&active.head?("@"+active.head):"";
-  $('#stRepo').textContent=active?`${active.key}: ${active.root} (base ${active.base||"."})`:"";
-  sel.onchange=async()=>{ curRepo=sel.value; clearEditor(); await loadTree(); 
+  applyRepoInfo(d.repos.find(r=>r.key===curRepo));
+  sel.onchange=async()=>{
+    curRepo=sel.value; clearEditor();
     const a=(await api('/api/repos')).repos.find(r=>r.key===curRepo);
-    curBase=a&&a.base?a.base:"";
-    $('#repoHead').textContent=a&&a.head?("@"+a.head):"";
-    $('#stRepo').textContent=a?`${a.key}: ${a.root} (base ${a.base||"."})`:""; };
+    applyRepoInfo(a);
+    await loadTree();
+  };
 }
 
 /* ---- file tree (lazy) ---- */
@@ -388,7 +486,7 @@ async function openFile(path, node){
   if(!monacoReady) return;
   document.querySelectorAll('.node.file.active').forEach(n=>n.classList.remove('active'));
   if(node) node.classList.add('active');
-  curPath=path; $('#filePath').innerHTML=`<b>${esc(curRepo)}</b> / core/fe / ${esc(path)}`;
+  curPath=path; $('#filePath').innerHTML=`<b>${esc(curRepo)}</b> / ${esc(curBase||".")} / ${esc(path)}`;
   setMsg("loading file…");
   try{
     const d=await api(`/api/file?${repoQ()}&path=${encodeURIComponent(path)}`);
@@ -1122,6 +1220,165 @@ $('#refreshBtn').addEventListener('click',()=>refreshContext(true));
   });
 })();
 
+/* ---- Base picker ---- */
+async function applyBaseFromInput(){
+  const raw = $('#baseInput').value.trim().replace(/^\/+|\/+$/g, '');
+  if(raw === curBase) return;
+  // Verify by asking the server to list dirs under that path — cheap & precise.
+  try{
+    await api(`/api/repos/bases?repo=${encodeURIComponent(curRepo)}&path=${encodeURIComponent(raw)}`);
+  }catch(e){
+    setMsg(`base '${raw}' invalid: ${e.message}`, true);
+    $('#baseInput').value = curBase;
+    return;
+  }
+  curBase = raw;
+  if(curBase === defaultBase) localStorage.removeItem('codelens.base.'+curRepo);
+  else localStorage.setItem('codelens.base.'+curRepo, curBase);
+  $('#stRepo').textContent = `${curRepo}: base ${curBase||"."}`;
+  clearEditor();
+  await loadTree();
+  setMsg(`base set to ${curBase||"(repo toplevel)"}`);
+}
+$('#baseInput').addEventListener('keydown', e=>{
+  if(e.key==='Enter'){ e.preventDefault(); applyBaseFromInput(); }
+});
+$('#baseInput').addEventListener('blur', applyBaseFromInput);
+
+async function bpRender(sub){
+  const pop=$('#basePop');
+  try{
+    const d=await api(`/api/repos/bases?repo=${encodeURIComponent(curRepo)}&path=${encodeURIComponent(sub||"")}`);
+    pop.dataset.parent = d.parent;
+    const parent = d.parent;
+    const up = parent ? parent.split('/').slice(0,-1).join('/') : null;
+    const head = `<div class="bp-hd"><span>${esc(parent||"(repo toplevel)")}</span>`
+      + `<span><a href="#" id="bpUse" style="color:#7ee2a8">use this ↵</a></span></div>`;
+    const upRow = up!==null
+      ? `<div class="bp-row bp-up" data-nav="${esc(up)}">↑ ${esc(up||"(repo toplevel)")}</div>`
+      : "";
+    const rows = d.dirs.map(dr=>{
+      const name = dr.split('/').pop();
+      return `<div class="bp-row" data-nav="${esc(dr)}"><span>📁 ${esc(name)}</span><span class="use">use ${esc(dr)}</span></div>`;
+    }).join("");
+    pop.innerHTML = head + upRow + rows;
+    pop.querySelector('#bpUse').onclick = (e)=>{
+      e.preventDefault();
+      $('#baseInput').value = parent; bpClose(); applyBaseFromInput();
+    };
+    pop.querySelectorAll('.bp-row').forEach(row=>{
+      row.onclick = (e)=>{
+        const nav = row.dataset.nav;
+        if(e.shiftKey || e.metaKey || e.ctrlKey){
+          $('#baseInput').value = nav; bpClose(); applyBaseFromInput();
+        }else{
+          bpRender(nav);  // drill deeper
+        }
+      };
+      row.ondblclick = ()=>{
+        $('#baseInput').value = row.dataset.nav; bpClose(); applyBaseFromInput();
+      };
+    });
+  }catch(e){
+    pop.innerHTML = `<div class="bp-hd" style="color:#ff9a94">${esc(e.message)}</div>`;
+  }
+}
+function bpOpen(){
+  const pop=$('#basePop');
+  const btn=$('#basePickBtn'); const r=btn.getBoundingClientRect();
+  pop.style.left = (r.left)+"px";
+  pop.style.top  = (r.bottom+4)+"px";
+  pop.hidden=false;
+  bpRender(curBase);
+}
+function bpClose(){ $('#basePop').hidden=true; }
+$('#basePickBtn').addEventListener('click', e=>{
+  e.stopPropagation();
+  const pop=$('#basePop');
+  if(pop.hidden) bpOpen(); else bpClose();
+});
+document.addEventListener('click', e=>{
+  const pop=$('#basePop');
+  if(pop.hidden) return;
+  if(!pop.contains(e.target) && e.target.id!=='basePickBtn') bpClose();
+});
+document.addEventListener('keydown', e=>{
+  if(e.key==='Escape' && !$('#basePop').hidden) bpClose();
+});
+
+/* ---- Add-workarea modal ---- */
+function waOpen(){
+  $('#waModalBg').hidden=false;
+  $('#waMsg').textContent=""; $('#waMsg').className="modal-msg";
+  waRenderSaved();
+  setTimeout(()=>$('#waPath').focus(),20);
+}
+function waClose(){ $('#waModalBg').hidden=true; }
+async function waCheck(){
+  const p=$('#waPath').value.trim();
+  if(!p){ waSetMsg("enter a path", false); return null; }
+  const msg=$('#waMsg'); msg.textContent="validating…"; msg.className="modal-msg";
+  try{
+    const r=await fetch(`/api/repos/validate?path=${encodeURIComponent(p)}`);
+    const d=await r.json();
+    if(!d.ok){ waSetMsg(d.error||"invalid", false); return null; }
+    waSetMsg(`OK: ${d.label}  (root: ${d.root})`, true);
+    return d;
+  }catch(e){ waSetMsg("request failed: "+e.message, false); return null; }
+}
+async function waAdd(){
+  const p=$('#waPath').value.trim();
+  if(!p){ waSetMsg("enter a path", false); return; }
+  const btn=$('#waAdd'); btn.disabled=true;
+  try{
+    const r=await fetch('/api/repos/custom',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({path:p})
+    });
+    const d=await r.json();
+    if(!d.ok){ waSetMsg(d.error||"failed to add", false); return; }
+    waSetMsg(`added as ${d.key} · ${d.label}`, true);
+    // refresh repo selector and switch to the new one
+    await loadRepos();
+    const sel=$('#repoSel'); sel.value=d.key; curRepo=d.key;
+    const info=(await api('/api/repos')).repos.find(x=>x.key===curRepo);
+    applyRepoInfo(info);
+    clearEditor(); await loadTree();
+    setTimeout(waClose, 500);
+  }finally{ btn.disabled=false; }
+}
+function waSetMsg(txt, ok){
+  const m=$('#waMsg'); m.textContent=txt;
+  m.className="modal-msg "+(ok?"ok":"err");
+}
+async function waRenderSaved(){
+  try{
+    const d=await api('/api/repos');
+    const rows=d.repos.filter(r=>r.key.startsWith('CUSTOM'));
+    const box=$('#waSaved');
+    if(!rows.length){ box.innerHTML=""; return; }
+    box.innerHTML='<div style="margin-bottom:4px;color:#c9d1d9">Saved workareas:</div>'
+      + rows.map(r=>`<div class="row" data-k="${esc(r.key)}">`
+        + `<code>${esc(r.key)}</code>`
+        + `<code style="flex:1;color:#8b949e;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.root||r.error||'')}</code>`
+        + `<button title="Remove">✕</button></div>`).join("");
+    box.querySelectorAll('.row button').forEach(b=>{
+      b.onclick=async()=>{
+        const key=b.closest('.row').dataset.k;
+        await fetch('/api/repos/custom?key='+encodeURIComponent(key),{method:'DELETE'});
+        await loadRepos(); waRenderSaved();
+      };
+    });
+  }catch(_){}
+}
+$('#addWorkareaBtn').addEventListener('click', waOpen);
+$('#waClose').addEventListener('click', waClose);
+$('#waModalBg').addEventListener('click', e=>{ if(e.target.id==='waModalBg') waClose(); });
+$('#waValidate').addEventListener('click', waCheck);
+$('#waAdd').addEventListener('click', waAdd);
+$('#waPath').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); waAdd(); }});
+document.addEventListener('keydown', e=>{ if(e.key==='Escape' && !$('#waModalBg').hidden) waClose(); });
+
 /* ---- init ---- */
 function normalizeOpenPath(raw){
   let p=(raw||"").trim().replace(/^["']|["']$/g,'');
@@ -1152,9 +1409,7 @@ async function restoreLastFile(){
       if(!opt) return;  // saved repo not available; skip
       sel.value=repo; curRepo=repo;
       const a=(await api('/api/repos')).repos.find(r=>r.key===curRepo);
-      curBase=a&&a.base?a.base:"";
-      $('#repoHead').textContent=a&&a.head?("@"+a.head):"";
-      $('#stRepo').textContent=a?`${a.key}: ${a.root} (base ${a.base||"."})`:"";
+      applyRepoInfo(a);
       await loadTree();
     }
     await openFile(path, null);

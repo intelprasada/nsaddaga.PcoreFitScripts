@@ -274,3 +274,80 @@ def test_list_file_commits_uses_follow(monkeypatch):
     called.clear()
     C.list_file_commits(_R(), "x", follow=False)
     assert "--follow" not in called["args"]
+
+
+# --- validate_model_root ---------------------------------------------------
+def test_validate_model_root_missing(tmp_path):
+    v = C.validate_model_root("")
+    assert not v["ok"] and "empty" in v["error"]
+    v = C.validate_model_root(str(tmp_path / "nope"))
+    assert not v["ok"] and "not a directory" in v["error"]
+
+
+def test_validate_model_root_not_a_git_repo(tmp_path):
+    v = C.validate_model_root(str(tmp_path))
+    assert not v["ok"] and "not a git repo" in v["error"]
+
+
+def test_validate_model_root_git_but_no_intel_config(tmp_path):
+    import subprocess as sp
+    sp.run(["git", "init", "-q", str(tmp_path)], check=True)
+    v = C.validate_model_root(str(tmp_path))
+    assert not v["ok"]
+    assert "not a MODEL_ROOT" in v["error"]
+    assert "intel.cluster" in v["error"]
+    assert "hdk.rc" in v["error"]  # actionable — points at the source command
+
+
+def test_validate_model_root_subdir_rejected(tmp_path):
+    import subprocess as sp
+    sp.run(["git", "init", "-q", str(tmp_path)], check=True)
+    sub = tmp_path / "core"; sub.mkdir()
+    v = C.validate_model_root(str(sub))
+    assert not v["ok"] and "not its toplevel" in v["error"]
+    assert v["root"]  # tells the user WHICH toplevel to pass instead
+
+
+def test_validate_model_root_ok(tmp_path):
+    import subprocess as sp
+    sp.run(["git", "init", "-q", str(tmp_path)], check=True)
+    for k, val in (("intel.cluster", "fit"), ("intel.stepping", "jnc-a0"),
+                   ("user.email", "t@e"), ("user.name", "t")):
+        sp.run(["git", "-C", str(tmp_path), "config", k, val], check=True)
+    # need at least one commit for HEAD-name to resolve
+    (tmp_path / "f").write_text("x")
+    sp.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    sp.run(["git", "-C", str(tmp_path), "commit", "-qm", "x"], check=True)
+    v = C.validate_model_root(str(tmp_path))
+    assert v["ok"] and v["cluster"] == "fit" and v["stepping"] == "jnc-a0"
+    assert v["label"].startswith("fit-jnc-a0-")
+
+
+# --- RepoInfo.with_base ----------------------------------------------------
+def test_with_base_switches_and_validates(tmp_path):
+    import subprocess as sp
+    sp.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "core").mkdir()
+    (tmp_path / "core" / "fe").mkdir()
+    (tmp_path / "core" / "fe" / "cte").mkdir()
+    (tmp_path / "rtl").mkdir()
+    r = C.RepoInfo("K", str(tmp_path))
+    # default base auto-detected to "core/fe"
+    assert r.ok and r.base == "core/fe"
+    r2 = r.with_base("core/fe/cte")
+    assert r2.base == "core/fe/cte" and r2.root == r.root
+    # Original unchanged (shallow copy).
+    assert r.base == "core/fe"
+    # Sibling roots also work.
+    assert r.with_base("rtl").base == "rtl"
+    # Empty means the toplevel.
+    assert r.with_base("").base == ""
+    # No-op when equal.
+    assert r.with_base("core/fe") is r
+    # Nonexistent path rejected.
+    import pytest as _pt
+    with _pt.raises(ValueError, match="does not exist"):
+        r.with_base("does/not/exist")
+    # Traversal rejected.
+    with _pt.raises(ValueError, match="escapes"):
+        r.with_base("../outside")
