@@ -529,6 +529,121 @@ def _pipe_stats(seconds_list: list[int]) -> dict:
     return {"n": n, "avg": avg, "p50": p50, "p90": p90, "max": xs[-1]}
 
 
+# ---------------------------------------------------------------------------
+# AI (Copilot) code-review comment counts
+# ---------------------------------------------------------------------------
+# We count review threads authored by the Copilot PR reviewer bot on a TI's PR
+# and split them into resolved vs unresolved. Runs against github.com via the
+# `gh` CLI (already authenticated by workflow.py). Cached to disk per PR URL,
+# with a short TTL for still-open PRs and a very long TTL for merged/closed
+# ones so we don't hammer the API on every dashboard refresh.
+
+_AI_REVIEW_TTL_OPEN   = 15 * 60         # 15 min for open PRs
+_AI_REVIEW_TTL_CLOSED = 30 * 24 * 3600  # 30 days for merged/closed PRs
+_AI_REVIEW_BOTS = {
+    "copilot-pull-request-reviewer",
+    "copilot-pull-request-reviewer[bot]",
+    "github-advanced-security",
+}
+_PR_URL_RE = re.compile(r"^https?://github\.com/([^/]+)/([^/]+)/pull/(\d+)")
+
+
+def _parse_pr_url(url: str) -> tuple[str, str, int] | None:
+    m = _PR_URL_RE.match(url or "")
+    if not m:
+        return None
+    try:
+        return m.group(1), m.group(2), int(m.group(3))
+    except ValueError:
+        return None
+
+
+def _fetch_ai_review_counts(url: str) -> dict | None:
+    """Return {resolved, unresolved, total, state} for the Copilot review
+    threads on a PR, or None if the URL isn't a parseable PR link or the API
+    call fails. Non-Copilot review threads are ignored."""
+    pr = _parse_pr_url(url)
+    if not pr:
+        return None
+    owner, repo, number = pr
+    q = (
+        "query($o:String!,$r:String!,$n:Int!){"
+        "repository(owner:$o,name:$r){pullRequest(number:$n){"
+        "state "
+        "reviewThreads(first:100){nodes{isResolved "
+        "comments(first:1){nodes{author{login}}}}}"
+        "}}}"
+    )
+    try:
+        r = subprocess.run(
+            ["gh", "api", "graphql", "-f", f"query={q}",
+             "-f", f"o={owner}", "-f", f"r={repo}", "-F", f"n={number}"],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+        if r.returncode != 0:
+            return None
+        d = json.loads(r.stdout)
+        pr_obj = (d.get("data") or {}).get("repository", {}).get("pullRequest")
+        if not pr_obj:
+            return None
+        state = (pr_obj.get("state") or "").upper()
+        threads = pr_obj.get("reviewThreads", {}).get("nodes", []) or []
+        resolved = 0
+        unresolved = 0
+        for t in threads:
+            cn = (t.get("comments") or {}).get("nodes") or []
+            if not cn:
+                continue
+            login = ((cn[0].get("author") or {}).get("login") or "").lower()
+            if login not in _AI_REVIEW_BOTS:
+                continue
+            if t.get("isResolved"):
+                resolved += 1
+            else:
+                unresolved += 1
+        return {
+            "resolved":   resolved,
+            "unresolved": unresolved,
+            "total":      resolved + unresolved,
+            "state":      state,
+        }
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError):
+        return None
+
+
+def _get_ai_review_counts_cached(url: str, force: bool = False) -> dict | None:
+    """Cached wrapper around _fetch_ai_review_counts. TTL depends on PR state."""
+    if not url:
+        return None
+    key = re.sub(r"[^A-Za-z0-9._-]+", "_", url)[-80:]
+    now = time.time()
+    if not force:
+        disk = _cache_read("ai_review", key)
+        if disk:
+            state = (disk.get("payload") or {}).get("state") or ""
+            ttl = _AI_REVIEW_TTL_OPEN if state == "OPEN" else _AI_REVIEW_TTL_CLOSED
+            if (now - disk.get("ts", 0)) < ttl:
+                return disk.get("payload")
+    payload = _fetch_ai_review_counts(url)
+    if payload is not None:
+        _cache_write("ai_review", key, payload)
+    return payload
+
+
+def _enrich_turnins_with_ai_review(turnins: list[dict], force: bool = False) -> None:
+    """Attach `ai_review` to each TI with a code_review_url. Fetches in parallel
+    (bounded) so a page-load enrichment for 50-100 TIs stays under a few sec."""
+    targets = [t for t in turnins if t.get("code_review_url")]
+    if not targets:
+        return
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        results = list(ex.map(lambda t: (t, _get_ai_review_counts_cached(t["code_review_url"], force=force)),
+                              targets))
+    for t, res in results:
+        if res is not None:
+            t["ai_review"] = res
+
+
 def build_turnin_report(engineer: str, project: str, window: dict, identities: dict,
                         force: bool = False) -> dict:
     ident = identities.get(engineer) or {}
@@ -541,6 +656,12 @@ def build_turnin_report(engineer: str, project: str, window: dict, identities: d
         per_project[p] = ti
         all_ti.extend(ti)
     all_ti.sort(key=lambda x: x["turnin_time"], reverse=True)
+    # Enrich with AI (Copilot) code-review comment resolution counts. Best-
+    # effort — network failures are silent per-TI (row just shows "–").
+    try:
+        _enrich_turnins_with_ai_review(all_ti, force=force)
+    except Exception:
+        pass
     # Per-engineer pipe-time stats (released → time-to-release; in-flight → current age)
     now_ep = int(time.time())
     released_secs = [t["pipe_seconds"] for t in all_ti
