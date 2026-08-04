@@ -71,6 +71,17 @@ REPOS = {
     "GFC": os.environ.get("GFC_REPO", _GFC_DEFAULT or ""),
     "JNC": os.environ.get("JNC_REPO", _JNC_DEFAULT),
 }
+# Pipe-aware baselines. A turnin's `cluster` field ("core" or "fit") picks the
+# right repo — e.g. JNC core-pipe TIs land in core-jnc-a0-master-latest, not
+# in the fit-jnc-a0-master-latest that REPOS["JNC"] historically pointed to.
+# This is the same distinction as sourcing `hdk.rc -m core` vs `-m fit`.
+_BAK = "/p/hdk/rtl/proj_data/xhdk74/bak_latest_turnins"
+REPOS_BY_PIPE = {
+    ("GFC", "core"): os.environ.get("GFC_CORE_REPO", f"{_BAK}/gfc/core/core-gfc-b0-master-latest"),
+    ("GFC", "fit"):  os.environ.get("GFC_FIT_REPO",  f"{_BAK}/gfc/fit/fit-gfc-a0-master-latest"),
+    ("JNC", "core"): os.environ.get("JNC_CORE_REPO", f"{_BAK}/jnc/core/core-jnc-a0-master-latest"),
+    ("JNC", "fit"):  os.environ.get("JNC_FIT_REPO",  f"{_BAK}/jnc/fit/fit-jnc-a0-master-latest"),
+}
 # Gatekeeper incoming areas hold the raw user_turnin bare repos (bundles the
 # engineer pushed) even for in-flight / rejected / cancelled turnins.  We fall
 # back to these when a sha is not reachable from the baseline model repo so
@@ -1326,6 +1337,10 @@ class Handler(BaseHTTPRequestHandler):
             file_path = (q.get("path", [""])[0] or "").strip()
             # Optional: turnin_id → enables bundle-repo fallback for in-flight turnins
             turnin_id_raw = (q.get("turnin_id", [""])[0] or "").strip()
+            # Optional: cluster ("core" | "fit") from the TI record — picks the
+            # correct pipe baseline so core-pipe TIs land against the core repo
+            # rather than the historically-default fit repo.
+            cluster_hint = (q.get("cluster", [""])[0] or "").strip().lower()
             if project not in REPOS:
                 self._send(400, b"bad project", "text/plain"); return
             if not candidates and not turnin_id_raw:
@@ -1374,10 +1389,35 @@ class Handler(BaseHTTPRequestHandler):
                         break
                 return body_, chosen_, tried_
 
-            # 1) Try the baseline model repo (BAK_LATEST_TURNIN)
-            baseline_repo = REPOS[project]
-            body, chosen, tried = _try_repo(baseline_repo, bare=False, label="baseline")
-            source_label = "baseline model" if body.strip() else ""
+            # 1) Try the baseline model repo(s). Order is cluster-hint-first,
+            #    then the other pipe as a fallback, then the legacy REPOS[project]
+            #    if it isn't already in the list.
+            pipe_order: list[str] = []
+            if cluster_hint in ("core", "fit"):
+                pipe_order.append(cluster_hint)
+            for p in ("core", "fit"):
+                if p not in pipe_order:
+                    pipe_order.append(p)
+            baseline_repos: list[tuple[str, str]] = []  # (path, label)
+            seen_paths: set[str] = set()
+            for pipe in pipe_order:
+                path = REPOS_BY_PIPE.get((project, pipe), "")
+                if path and path not in seen_paths:
+                    baseline_repos.append((path, f"{project} {pipe} baseline"))
+                    seen_paths.add(path)
+            legacy = REPOS[project]
+            if legacy and legacy not in seen_paths:
+                baseline_repos.append((legacy, "legacy baseline"))
+                seen_paths.add(legacy)
+
+            body, chosen, source_label = "", "", ""
+            tried: list[str] = []
+            for path, label in baseline_repos:
+                body_i, chosen_i, tried_i = _try_repo(path, bare=False, label=label)
+                tried.extend(tried_i)
+                if body_i.strip():
+                    body, chosen, source_label = body_i, chosen_i, label
+                    break
 
             # 2) Fallback: bundle repo under gatekeeper incoming/ (in-flight turnins)
             if not body.strip() and turnin_id_raw:
@@ -1410,8 +1450,9 @@ class Handler(BaseHTTPRequestHandler):
 
             if not body.strip():
                 extra = "\n".join(tried) if tried else "(none)"
+                repos_list = "\n".join(f"  {label}: {path}" for path, label in baseline_repos) or "  (none)"
                 body = ("This turnin's commits are not present locally.\n"
-                        f"Baseline repo:  {baseline_repo}\n"
+                        f"Baseline repos tried (cluster hint: {cluster_hint or 'none'}):\n{repos_list}\n"
                         f"Bundle search:  {INCOMING_GLOBS.get(project, '').format(tid=turnin_id_raw or '<id>')}\n\n"
                         f"Candidates tried:\n{extra}\n\n"
                         "This usually means the turnin was rejected/cancelled,\n"
