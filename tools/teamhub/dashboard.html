@@ -443,6 +443,7 @@
               <th title="HSD IDs added to core/common/cfg/bugs by this turnin">HSDs Added</th>
               <th title="Time this turnin spent in the pipeline (turnin → completed for settled TIs, or current age for in-flight TIs)">Pipe Age</th>
               <th>Code Review</th>
+              <th title="Copilot AI review comments on the PR: resolved / unresolved">AI Review</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -1669,6 +1670,23 @@ function crStatusBadge(status, url) {
   return url ? `<a href="${esc(url)}" target="_blank" rel="noopener" style="text-decoration:none;">${inner}</a>` : inner;
 }
 
+// AI review pill: shows resolved / unresolved Copilot review-thread counts on
+// the TI's PR. "–" when no PR URL or the API lookup didn't return data yet.
+function aiReviewCell(t) {
+  const a = t.ai_review;
+  if (!a) return `<span class="sub" title="no AI review data">–</span>`;
+  if (!a.total) return `<span class="pill" title="no Copilot review comments" style="background:#33415522;color:#94a3b8;border:1px solid #33415555;">0</span>`;
+  const inner =
+    `<span class="pill" title="${a.resolved} resolved / ${a.unresolved} unresolved (state: ${esc(a.state||"?")})" ` +
+      `style="background:#0f4a2c22;color:#a7f3d0;border:1px solid #16653455;">✓ ${a.resolved}</span>` +
+    ` <span class="pill" title="unresolved Copilot review threads" ` +
+      `style="background:${a.unresolved?'#5b1a1a22':'#33415522'};color:${a.unresolved?'#fecaca':'#94a3b8'};` +
+      `border:1px solid ${a.unresolved?'#7f1d1d55':'#33415555'};">⚠ ${a.unresolved}</span>`;
+  return t.code_review_url
+    ? `<a href="${esc(t.code_review_url)}" target="_blank" rel="noopener" style="text-decoration:none; display:inline-block;">${inner}</a>`
+    : inner;
+}
+
 function projectBadge(p) {
   const c = (p==="GFC")?"#22d3ee":(p==="JNC")?"#f59e0b":"#a5b4fc";
   return `<span class="pill" style="background:${c}22;color:${c};border:1px solid ${c}55;">${esc(p)}</span>`;
@@ -1758,11 +1776,12 @@ function renderTiTable() {
       <td>${(t.files_changed||[]).length}</td>
       <td>${hsdCell(t.hsds_added)}</td>
       <td>${pipeCell(t, thresholds)}</td>
-      <td>${crStatusBadge(t.code_review_status, t.code_review_url)}</td>`;
+      <td>${crStatusBadge(t.code_review_status, t.code_review_url)}</td>
+      <td>${aiReviewCell(t)}</td>`;
     const detail = document.createElement("tr");
     detail.className = "ti-detail";
     detail.hidden = true;
-    detail.innerHTML = `<td colspan="12" style="background:#0b1327;"></td>`;
+    detail.innerHTML = `<td colspan="13" style="background:#0b1327;"></td>`;
     tr.querySelector(".chev").addEventListener("click", (ev)=>{
       ev.stopPropagation();
       detail.hidden = !detail.hidden;
