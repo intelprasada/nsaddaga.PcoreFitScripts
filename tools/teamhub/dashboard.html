@@ -2043,12 +2043,7 @@ document.getElementById("tiReload").addEventListener("click", ()=>{
   tiData = null;
   loadTurnins();
 });
-document.getElementById("tiFilter").addEventListener("input", () => {
-  // A text-filter edit is an override: clear any sticky chart-bar bucket
-  // filter so results reflect only what the user typed.
-  if (tiBucketFilter) { tiBucketFilter = null; renderTiActivityChart(); }
-  renderTiTable();
-});
+document.getElementById("tiFilter").addEventListener("input", renderTiTable);
 ["tiChartGran","tiChartSpan","tiChartStack"].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener("change", () => { clearTiBucketFilter(false); renderTiActivityChart(); renderTiTable(); });
