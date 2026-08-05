@@ -351,3 +351,71 @@ def test_with_base_switches_and_validates(tmp_path):
     # Traversal rejected.
     with _pt.raises(ValueError, match="escapes"):
         r.with_base("../outside")
+
+
+# --- HEAD-aware cache keys -------------------------------------------------
+def _fake_repo(key="R", head="abc1234"):
+    class _R:
+        pass
+    r = _R()
+    r.key = key
+    r.head = head
+    return r
+
+
+def test_ck_includes_head(monkeypatch):
+    r = _fake_repo("JNC", "abc1234")
+    assert C._ck(r, "sha") == "JNC@abc1234_sha"
+    r2 = _fake_repo("JNC", "def5678")
+    assert C._ck(r2, "sha") != C._ck(r, "sha")
+    # No HEAD -> stable placeholder (doesn't collide with a real head).
+    assert C._ck(_fake_repo("JNC", ""), "sha") == "JNC@nohead_sha"
+
+
+def test_prune_stale_cache_removes_wrong_head_and_legacy(tmp_path,
+                                                          monkeypatch):
+    monkeypatch.setattr(C, "CACHE_DIR", tmp_path)
+    # Live entry
+    (tmp_path / "commit__JNC@aaa111_sha1.json").write_text("{}")
+    # Stale entry — HEAD moved
+    (tmp_path / "commit__JNC@bbb222_sha1.json").write_text("{}")
+    # Stale entry — different repo, no longer registered
+    (tmp_path / "ti__GONE@aaa111_1234.json").write_text("{}")
+    # Legacy pre-HEAD-aware entry (no '@' in the key)
+    (tmp_path / "commit__CUSTOM_core-jnc-a0-master_sha1.json").write_text("{}")
+    n = C._prune_stale_cache(["JNC"], {"JNC": "aaa111"})
+    survived = sorted(p.name for p in tmp_path.iterdir())
+    assert survived == ["commit__JNC@aaa111_sha1.json"]
+    assert n == 3
+
+
+# --- effective_turnins -----------------------------------------------------
+def test_effective_turnins_non_merge_uses_intro():
+    """A non-merge bug-fix commit has no intrinsic turnin id in its subject —
+    the ancestry-path introducing merge is the correct owner."""
+    info = {"is_merge": False, "turnins": [], "intro_turnins": ["7931"]}
+    assert C.effective_turnins(info) == ["7931"]
+
+
+def test_effective_turnins_non_merge_intrinsic_wins():
+    """If a non-merge commit's own subject somehow carries a turnin id, use
+    that (intrinsic beats intro)."""
+    info = {"is_merge": False, "turnins": ["9049"], "intro_turnins": ["7931"]}
+    assert C.effective_turnins(info) == ["9049"]
+
+
+def test_effective_turnins_merge_uses_intrinsic_only():
+    """The exact regression: a sync-from-master merge with no intrinsic
+    turnin must NOT inherit the ancestry-path merge's turnin. Otherwise
+    files it never touched appear in that TI's file scope (phantom TI
+    21456 on fe_ifu_pp_ref.e)."""
+    info = {"is_merge": True, "turnins": [], "intro_turnins": ["21456"]}
+    assert C.effective_turnins(info) == []
+
+
+def test_effective_turnins_merge_with_own_ti_ignores_intro():
+    """A merge that IS a legit turnin merge (e.g. integrate_bundle21163)
+    uses its own turnin — never falls through to the ancestry-path merge
+    (which would double-count)."""
+    info = {"is_merge": True, "turnins": ["21163"], "intro_turnins": ["21456"]}
+    assert C.effective_turnins(info) == ["21163"]

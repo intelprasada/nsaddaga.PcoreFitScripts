@@ -212,6 +212,47 @@ def _cache_path(kind: str, key: str) -> Path:
     return CACHE_DIR / f"{kind}__{safe}.json"
 
 
+def _head_tag(repo: "RepoInfo") -> str:
+    """Short HEAD sha for the repo, used as a cache-key component so ancestry-
+    derived fields (introducing merge, TI ancestry lookups, per-file history)
+    are automatically invalidated when the workarea's HEAD moves — e.g. when a
+    user's registered workarea rotates to a newer turnin bundle."""
+    return (repo.head or "nohead").replace("/", "_")
+
+
+def _ck(repo: "RepoInfo", *parts: str) -> str:
+    """HEAD-aware cache key: {repo.key}@{head}_{parts...}. Any HEAD movement
+    (workarea reset, new turnin bundle) transparently invalidates all keys
+    for that repo without needing an explicit purge."""
+    tail = "_".join(str(p) for p in parts)
+    return f"{repo.key}@{_head_tag(repo)}_{tail}"
+
+
+def _prune_stale_cache(repo_keys: list[str], head_tags: dict[str, str]) -> int:
+    """At startup, remove cache files whose repo-key/head-tag pair no longer
+    matches any live repo — old workareas, or entries from a previous head
+    that will never be hit again. Returns the number of files removed."""
+    removed = 0
+    live = {(k, head_tags.get(k, "")) for k in repo_keys if head_tags.get(k)}
+    # File name shape: {kind}__{repo.key}@{head}_{tail}.json
+    pat = re.compile(r"__([^@]+)@([^_]+)_")
+    for p in CACHE_DIR.glob("*.json"):
+        m = pat.search(p.name)
+        if not m:
+            # Legacy pre-HEAD-aware key — safe to remove.
+            try:
+                p.unlink(); removed += 1
+            except OSError:
+                pass
+            continue
+        if (m.group(1), m.group(2)) not in live:
+            try:
+                p.unlink(); removed += 1
+            except OSError:
+                pass
+    return removed
+
+
 def _cache_read(kind: str, key: str):
     p = _cache_path(kind, key)
     if not p.is_file():
@@ -576,30 +617,34 @@ def _extract_hsds(text: str) -> list[str]:
 
 
 def enrich_commit(repo: RepoInfo, sha: str) -> dict:
-    ck = f"{repo.key}_{sha}"
+    ck = _ck(repo, sha)
     cached = _cache_read("commit", ck)
     if cached is not None:
         return cached
     info: dict = {"sha": sha, "short": sha[:12], "author": "", "mail": "",
-                  "time": 0, "summary": "", "turnins": [], "hsds": []}
+                  "time": 0, "summary": "", "turnins": [], "hsds": [],
+                  "intro_turnins": []}
     meta = subprocess.run(
         ["git", "-C", repo.root, "--no-pager", "show", "-s",
-         "--format=%an%x00%ae%x00%at%x00%s%x00%b", sha],
+         "--format=%an%x00%ae%x00%at%x00%P%x00%s%x00%b", sha],
         capture_output=True, text=True, timeout=30, check=False)
+    is_merge = False
     if meta.returncode == 0 and meta.stdout:
         parts = meta.stdout.split("\x00")
-        if len(parts) >= 5:
+        if len(parts) >= 6:
             info["author"] = parts[0]
             info["mail"] = parts[1].strip("<>")
             info["time"] = int(parts[2] or 0)
-            info["summary"] = parts[3]
-            body = parts[4]
-            msg = f"{parts[3]}\n{body}"
+            is_merge = len((parts[3] or "").split()) >= 2
+            info["summary"] = parts[4]
+            body = parts[5]
+            msg = f"{parts[4]}\n{body}"
             info["hsds"] = _extract_hsds(msg)
             for m in _TURNIN_RE.finditer(msg):
                 t = m.group(1)
                 if t not in info["turnins"]:
                     info["turnins"].append(t)
+    info["is_merge"] = is_merge
     # Introducing merge → the OLDEST merge on the ancestry path from this
     # commit up to HEAD that identifies a turnin/bundle in its subject.
     #
@@ -609,12 +654,19 @@ def enrich_commit(repo: RepoInfo, sha: str) -> dict:
     #      turnin) instead of the oldest. Enumerate and take first-after-
     #      reverse.
     #   2. Many repos have periodic "update from latest" merges (e.g.
-    #      `Merge /p/hdk/.../fit-jnc-a0-master-latest`) with no turnin id at
-    #      all. Those merges *do* carry the commit but they aren't its
-    #      turnin. Prefer the oldest ancestry-path merge whose subject
-    #      matches _TURNIN_RE; only fall back to the very oldest merge if no
-    #      match exists at all (so introducing-merge is never empty for a
-    #      commit that has ancestry merges).
+    #      `Merge /p/hdk/.../fit-jnc-a0-master-latest`) or cross-branch
+    #      "out-of-band sync" merges with no turnin id. Those merges *do*
+    #      carry the commit but they aren't its turnin. Prefer the oldest
+    #      ancestry-path merge whose subject matches _TURNIN_RE.
+    #   3. But EVEN a turnin-tagged ancestry-path merge is only the true
+    #      introducing merge if its own second-parent range (M^1..M^2)
+    #      actually contains our sha — i.e. it landed our commit on master.
+    #      Without this guard, a sha that came in via a preceding untagged
+    #      sync merge is falsely credited to whatever turnin merge lies
+    #      further along the path. (Regression: fe_ifu_pp_ref.e's line
+    #      range showed TI 21456 for commit 7b547508, but 7b547508 was
+    #      brought in by two upstream sync merges and was never on
+    #      integrate_bundle21456's branch.)
     mrg = subprocess.run(
         ["git", "-C", repo.root, "--no-pager", "log", "--merges",
          "--ancestry-path", "--reverse",
@@ -626,24 +678,64 @@ def enrich_commit(repo: RepoInfo, sha: str) -> dict:
         pick_subj = ""
         for ln in lines:
             msha, _, msubj = ln.partition("\x00")
-            if _TURNIN_RE.search(msubj):
-                pick, pick_subj = msha, msubj
-                break
-        if not pick and lines:
-            msha, _, msubj = lines[0].partition("\x00")
+            if not _TURNIN_RE.search(msubj):
+                continue
+            # Verify this merge actually introduced our sha. A merge M
+            # introduces sha iff sha is reachable from M^2 but NOT from M^1
+            # — i.e. it came in via the second parent (the "incoming"
+            # branch). If the sha is already reachable from M^1, master
+            # had it before this merge, so M didn't introduce it.
+            r2 = subprocess.run(
+                ["git", "-C", repo.root, "merge-base", "--is-ancestor",
+                 sha, f"{msha}^2"],
+                capture_output=True, text=True, timeout=15, check=False)
+            if r2.returncode != 0:
+                continue
+            r1 = subprocess.run(
+                ["git", "-C", repo.root, "merge-base", "--is-ancestor",
+                 sha, f"{msha}^1"],
+                capture_output=True, text=True, timeout=15, check=False)
+            if r1.returncode == 0:
+                continue
             pick, pick_subj = msha, msubj
+            break
+        # Fallback: if no ancestry-path turnin merge actually introduces this
+        # sha (the sha came in via out-of-band sync merges without turnin
+        # tags), leave `merge`/`intro_turnins` empty. Better to under-attribute
+        # than to falsely credit an unrelated TI.
         if pick:
             info["merge"] = pick[:12]
             info["merge_summary"] = pick_subj
             for m in _TURNIN_RE.finditer(pick_subj):
                 t = m.group(1)
-                if t not in info["turnins"]:
-                    info["turnins"].append(t)
+                if t not in info["intro_turnins"]:
+                    info["intro_turnins"].append(t)
             for h in _extract_hsds(pick_subj):
                 if h not in info["hsds"]:
                     info["hsds"].append(h)
     _cache_write("commit", ck, info)
     return info
+
+
+def effective_turnins(info: dict) -> list[str]:
+    """Return the TIs that legitimately own this commit's changes.
+
+    Rule: if the commit is itself a MERGE, its OWN turnin-tagged subject (if
+    any) is authoritative — we deliberately do NOT fall through to the
+    ancestry-path introducing merge. Otherwise (non-merge commit), the
+    ancestry-path introducing merge is the correct owner: it's the turnin
+    that landed this commit on master.
+
+    This split is what prevents the "phantom TI 21456 on fe_ifu_pp_ref.e"
+    class of false positives: a sync-from-master merge with no intrinsic
+    turnin id used to inherit the *unrelated* integrate_bundle21456 label
+    from its ancestry-path merge, causing files it never touched to appear
+    under TI 21456's file scope.
+    """
+    if info.get("is_merge"):
+        return list(info.get("turnins") or [])
+    # Non-merge: intrinsic wins if present, otherwise fall back to intro.
+    return list(info.get("turnins") or info.get("intro_turnins") or [])
 
 
 def build_context(repo: RepoInfo, rel: str, start: int, end: int,
@@ -670,13 +762,17 @@ def build_context(repo: RepoInfo, rel: str, start: int, end: int,
     hsds: dict[str, None] = {}
     for sha in order:
         if force:
-            _cache_path("commit", f"{repo.key}_{sha}").unlink(missing_ok=True)
+            _cache_path("commit", _ck(repo, sha)).unlink(missing_ok=True)
         info = enrich_commit(repo, sha)
         info = dict(info)
         info["lines"] = line_by_sha[sha]
+        # Aggregate only the TIs that legitimately own this commit's changes.
+        # See effective_turnins() for the intrinsic-vs-ancestry split.
+        eff = effective_turnins(info)
+        info["turnins"] = eff  # what the UI shows against this commit
         commits.append(info)
         authors_seen.setdefault(info["author"], info.get("mail", ""))
-        for t in info.get("turnins", []):
+        for t in eff:
             turnins.setdefault(t, None)
         for h in info.get("hsds", []):
             hsds.setdefault(h, None)
@@ -793,7 +889,7 @@ def build_ti(repo: RepoInfo, tid: str, force: bool = False) -> dict:
     """TI lens payload: the introducing merge, the commits it brought in, the
     files it changed, referenced HSDs and contributing authors — the TeamHub
     turnin drill-down for a single turnin, derived from git."""
-    ck = f"{repo.key}_{tid}"
+    ck = _ck(repo, tid)
     if not force:
         cached = _cache_read("ti", ck)
         if cached is not None:
@@ -889,7 +985,7 @@ def build_commit(repo: RepoInfo, sha: str, force: bool = False) -> dict:
         return {"error": "commit not found", "sha": sha, "repo": repo.key,
                 "head": repo.head}
     full = rp.stdout.strip()
-    ck = f"{repo.key}_{full}"
+    ck = _ck(repo, full)
     if not force:
         cached = _cache_read("commitfull", ck)
         if cached is not None:
@@ -936,7 +1032,7 @@ def build_diff(repo: RepoInfo, sha: str, rel: str, force: bool = False) -> dict:
         return {"error": "commit not found", "sha": sha, "path": rel,
                 "repo": repo.key, "head": repo.head}
     full = rp.stdout.strip()
-    ck = f"{repo.key}_{full}_{rel}"
+    ck = _ck(repo, full, rel)
     if not force:
         cached = _cache_read("diff", ck)
         if cached is not None:
@@ -1037,12 +1133,16 @@ def build_file_commits(repo: RepoInfo, rel: str, follow: bool = True,
     authors_seen: dict[str, str] = {}
     for sha in shas:
         if force:
-            _cache_path("commit", f"{repo.key}_{sha}").unlink(missing_ok=True)
+            _cache_path("commit", _ck(repo, sha)).unlink(missing_ok=True)
         info = dict(enrich_commit(repo, sha))
         add, dele, binary = _file_numstat(repo, sha, git_path)
         info["add"] = add
         info["del"] = dele
         info["binary"] = binary
+        # Overwrite raw turnins with the effective (owner) set — same rule
+        # used by build_context. This makes Commit Scope's per-row turnins
+        # match TI Scope's aggregation exactly (round-trip C1/D3).
+        info["turnins"] = effective_turnins(info)
         commits.append(info)
         authors_seen.setdefault(info["author"], info.get("mail", ""))
     idmap = resolve_identities(list(authors_seen.items()))
@@ -1381,11 +1481,18 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     _load_saved_custom_repos()
     print(f"CodeLens serving on http://localhost:{PORT}", flush=True)
+    head_tags: dict[str, str] = {}
     for k in _REPO_SPECS:
         r = get_repo(k)
         status = f"{r.root} (base={r.base or '.'} @ {r.head})" if r.ok \
             else f"UNAVAILABLE: {r.error}"
         print(f"  [{k}] {status}", flush=True)
+        if r.ok:
+            head_tags[k] = _head_tag(r)
+    n = _prune_stale_cache(list(_REPO_SPECS.keys()), head_tags)
+    if n:
+        print(f"cache: pruned {n} stale entries "
+              f"(legacy schema or HEAD moved)", flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 
