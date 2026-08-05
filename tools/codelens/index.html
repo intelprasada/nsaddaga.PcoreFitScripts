@@ -35,21 +35,6 @@
   label.ctl{color:var(--muted);display:flex;align-items:center;gap:5px}
   input#paneSize{width:64px}
   input#pathInput{width:320px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-  input#baseInput{width:180px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-  button#basePickBtn{background:#21262d;color:#c9d1d9;border:1px solid #30363d;
-    border-radius:4px;padding:1px 6px;font-size:12px;cursor:pointer;margin-left:2px}
-  #basePop{position:absolute;background:#0d1117;border:1px solid #30363d;border-radius:6px;
-    box-shadow:0 8px 24px rgba(0,0,0,.5);padding:6px;min-width:280px;max-width:420px;
-    max-height:360px;overflow:auto;z-index:900;font-size:12px}
-  #basePop[hidden]{display:none}
-  #basePop .bp-hd{color:#8b949e;padding:2px 6px;display:flex;justify-content:space-between}
-  #basePop .bp-row{padding:3px 6px;border-radius:4px;cursor:pointer;
-    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#c9d1d9;
-    display:flex;justify-content:space-between;align-items:center}
-  #basePop .bp-row:hover{background:#161b22}
-  #basePop .bp-row .use{color:#7ee2a8;font-size:11px;visibility:hidden}
-  #basePop .bp-row:hover .use{visibility:visible}
-  #basePop .bp-up{color:#a5b4fc}
 
   /* --- Add-workarea modal --- */
   .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);
@@ -288,10 +273,6 @@
     <div class="brand">CodeLens<small>core/fe</small></div>
     <select id="repoSel" title="Repository"></select>
     <button id="addWorkareaBtn" title="Register a custom MODEL_ROOT workarea">＋ workarea</button>
-    <label class="ctl" title="Sub-path within the repo to root the file browser at (e.g. core/fe, core/fe/cte, rtl)">
-      base <input id="baseInput" placeholder="core/fe" spellcheck="false" />
-      <button id="basePickBtn" title="Browse for a base">…</button>
-    </label>
     <div class="path" id="filePath">Select a file…</div>
     <label class="ctl" title="Open file by path (relative to repo base, or full path starting with the base)">
       path <input id="pathInput" placeholder="e.g. cte/fe_ifu_pp/fe_ifu_pp_ref.e" spellcheck="false" />
@@ -357,8 +338,6 @@
     <span id="stMsg"></span>
   </div>
 
-  <div id="basePop" hidden></div>
-
   <div id="waModalBg" class="modal-bg" hidden>
     <div class="modal">
       <div class="modal-hd">
@@ -390,7 +369,6 @@
 const $ = s => document.querySelector(s);
 const esc = s => String(s??"").replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let editor=null, monacoReady=false, curRepo=null, curPath=null, curLang="plaintext", curBase="";
-let defaultBase="";  // server-provided default base for the current repo
 let blameByLine={}, decorations=[], ctxTimer=null, curTotalLines=0;
 
 /* ---- author color (stable hash -> HSL) ---- */
@@ -406,23 +384,9 @@ async function api(path){
   if(!r.ok){ let j={}; try{j=await r.json()}catch(e){}; throw new Error(j.error||r.statusText); }
   return r.json();
 }
-function repoQ(){
-  let q=`repo=${encodeURIComponent(curRepo)}`;
-  // Always send base= so a server default that differs from the user's
-  // override doesn't win. Empty string means "browse from the repo toplevel".
-  if(curBase !== defaultBase) q += `&base=${encodeURIComponent(curBase)}`;
-  return q;
-}
+function repoQ(){ return `repo=${encodeURIComponent(curRepo)}`; }
 
 /* ---- repos ---- */
-function applyRepoInfo(info){
-  defaultBase = info&&info.base ? info.base : "";
-  const stored = localStorage.getItem('codelens.base.'+curRepo);
-  curBase = (stored !== null) ? stored : defaultBase;
-  $('#baseInput').value = curBase;
-  $('#repoHead').textContent = info&&info.head ? ("@"+info.head) : "";
-  $('#stRepo').textContent = info ? `${info.key}: ${info.root} (base ${curBase||"."})` : "";
-}
 async function loadRepos(){
   const d=await api('/api/repos');
   const sel=$('#repoSel'); sel.innerHTML="";
@@ -432,13 +396,15 @@ async function loadRepos(){
     o.disabled=!r.ok; sel.appendChild(o);
   });
   curRepo=d.default; sel.value=curRepo;
-  applyRepoInfo(d.repos.find(r=>r.key===curRepo));
-  sel.onchange=async()=>{
-    curRepo=sel.value; clearEditor();
+  const active=d.repos.find(r=>r.key===curRepo);
+  curBase=active&&active.base?active.base:"";
+  $('#repoHead').textContent=active&&active.head?("@"+active.head):"";
+  $('#stRepo').textContent=active?`${active.key}: ${active.root} (base ${active.base||"."})`:"";
+  sel.onchange=async()=>{ curRepo=sel.value; clearEditor(); await loadTree(); 
     const a=(await api('/api/repos')).repos.find(r=>r.key===curRepo);
-    applyRepoInfo(a);
-    await loadTree();
-  };
+    curBase=a&&a.base?a.base:"";
+    $('#repoHead').textContent=a&&a.head?("@"+a.head):"";
+    $('#stRepo').textContent=a?`${a.key}: ${a.root} (base ${a.base||"."})`:""; };
 }
 
 /* ---- file tree (lazy) ---- */
@@ -486,7 +452,7 @@ async function openFile(path, node){
   if(!monacoReady) return;
   document.querySelectorAll('.node.file.active').forEach(n=>n.classList.remove('active'));
   if(node) node.classList.add('active');
-  curPath=path; $('#filePath').innerHTML=`<b>${esc(curRepo)}</b> / ${esc(curBase||".")} / ${esc(path)}`;
+  curPath=path; $('#filePath').innerHTML=`<b>${esc(curRepo)}</b> / core/fe / ${esc(path)}`;
   setMsg("loading file…");
   try{
     const d=await api(`/api/file?${repoQ()}&path=${encodeURIComponent(path)}`);
@@ -1220,92 +1186,6 @@ $('#refreshBtn').addEventListener('click',()=>refreshContext(true));
   });
 })();
 
-/* ---- Base picker ---- */
-async function applyBaseFromInput(){
-  const raw = $('#baseInput').value.trim().replace(/^\/+|\/+$/g, '');
-  if(raw === curBase) return;
-  // Verify by asking the server to list dirs under that path — cheap & precise.
-  try{
-    await api(`/api/repos/bases?repo=${encodeURIComponent(curRepo)}&path=${encodeURIComponent(raw)}`);
-  }catch(e){
-    setMsg(`base '${raw}' invalid: ${e.message}`, true);
-    $('#baseInput').value = curBase;
-    return;
-  }
-  curBase = raw;
-  if(curBase === defaultBase) localStorage.removeItem('codelens.base.'+curRepo);
-  else localStorage.setItem('codelens.base.'+curRepo, curBase);
-  $('#stRepo').textContent = `${curRepo}: base ${curBase||"."}`;
-  clearEditor();
-  await loadTree();
-  setMsg(`base set to ${curBase||"(repo toplevel)"}`);
-}
-$('#baseInput').addEventListener('keydown', e=>{
-  if(e.key==='Enter'){ e.preventDefault(); applyBaseFromInput(); }
-});
-$('#baseInput').addEventListener('blur', applyBaseFromInput);
-
-async function bpRender(sub){
-  const pop=$('#basePop');
-  try{
-    const d=await api(`/api/repos/bases?repo=${encodeURIComponent(curRepo)}&path=${encodeURIComponent(sub||"")}`);
-    pop.dataset.parent = d.parent;
-    const parent = d.parent;
-    const up = parent ? parent.split('/').slice(0,-1).join('/') : null;
-    const head = `<div class="bp-hd"><span>${esc(parent||"(repo toplevel)")}</span>`
-      + `<span><a href="#" id="bpUse" style="color:#7ee2a8">use this ↵</a></span></div>`;
-    const upRow = up!==null
-      ? `<div class="bp-row bp-up" data-nav="${esc(up)}">↑ ${esc(up||"(repo toplevel)")}</div>`
-      : "";
-    const rows = d.dirs.map(dr=>{
-      const name = dr.split('/').pop();
-      return `<div class="bp-row" data-nav="${esc(dr)}"><span>📁 ${esc(name)}</span><span class="use">use ${esc(dr)}</span></div>`;
-    }).join("");
-    pop.innerHTML = head + upRow + rows;
-    pop.querySelector('#bpUse').onclick = (e)=>{
-      e.preventDefault();
-      $('#baseInput').value = parent; bpClose(); applyBaseFromInput();
-    };
-    pop.querySelectorAll('.bp-row').forEach(row=>{
-      row.onclick = (e)=>{
-        const nav = row.dataset.nav;
-        if(e.shiftKey || e.metaKey || e.ctrlKey){
-          $('#baseInput').value = nav; bpClose(); applyBaseFromInput();
-        }else{
-          bpRender(nav);  // drill deeper
-        }
-      };
-      row.ondblclick = ()=>{
-        $('#baseInput').value = row.dataset.nav; bpClose(); applyBaseFromInput();
-      };
-    });
-  }catch(e){
-    pop.innerHTML = `<div class="bp-hd" style="color:#ff9a94">${esc(e.message)}</div>`;
-  }
-}
-function bpOpen(){
-  const pop=$('#basePop');
-  const btn=$('#basePickBtn'); const r=btn.getBoundingClientRect();
-  pop.style.left = (r.left)+"px";
-  pop.style.top  = (r.bottom+4)+"px";
-  pop.hidden=false;
-  bpRender(curBase);
-}
-function bpClose(){ $('#basePop').hidden=true; }
-$('#basePickBtn').addEventListener('click', e=>{
-  e.stopPropagation();
-  const pop=$('#basePop');
-  if(pop.hidden) bpOpen(); else bpClose();
-});
-document.addEventListener('click', e=>{
-  const pop=$('#basePop');
-  if(pop.hidden) return;
-  if(!pop.contains(e.target) && e.target.id!=='basePickBtn') bpClose();
-});
-document.addEventListener('keydown', e=>{
-  if(e.key==='Escape' && !$('#basePop').hidden) bpClose();
-});
-
 /* ---- Add-workarea modal ---- */
 function waOpen(){
   $('#waModalBg').hidden=false;
@@ -1342,7 +1222,9 @@ async function waAdd(){
     await loadRepos();
     const sel=$('#repoSel'); sel.value=d.key; curRepo=d.key;
     const info=(await api('/api/repos')).repos.find(x=>x.key===curRepo);
-    applyRepoInfo(info);
+    curBase=info&&info.base?info.base:"";
+    $('#repoHead').textContent=info&&info.head?("@"+info.head):"";
+    $('#stRepo').textContent=info?`${info.key}: ${info.root} (base ${info.base||"."})`:"";
     clearEditor(); await loadTree();
     setTimeout(waClose, 500);
   }finally{ btn.disabled=false; }
@@ -1409,7 +1291,9 @@ async function restoreLastFile(){
       if(!opt) return;  // saved repo not available; skip
       sel.value=repo; curRepo=repo;
       const a=(await api('/api/repos')).repos.find(r=>r.key===curRepo);
-      applyRepoInfo(a);
+      curBase=a&&a.base?a.base:"";
+      $('#repoHead').textContent=a&&a.head?("@"+a.head):"";
+      $('#stRepo').textContent=a?`${a.key}: ${a.root} (base ${a.base||"."})`:"";
       await loadTree();
     }
     await openFile(path, null);

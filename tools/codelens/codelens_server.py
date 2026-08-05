@@ -411,31 +411,6 @@ class RepoInfo:
                 "head": self.head, "ok": self.ok, "error": self.error,
                 "label": Path(self.root).name if self.root else self.spec}
 
-    def with_base(self, new_base: str | None) -> "RepoInfo":
-        """Return a shallow-copy of self rooted at ``new_base`` (relative to
-        the repo toplevel). Validates that the resulting directory exists
-        inside the repo. Empty / None ``new_base`` means "browse from the repo
-        toplevel". Path-traversal escapes (``..``) are rejected.
-        """
-        if new_base is None:
-            return self
-        cand = new_base.strip().strip("/")
-        if cand == self.base:
-            return self
-        # Compute target and check it resolves under the repo root.
-        root_r = Path(self.root).resolve()
-        tgt = (Path(self.root) / cand).resolve() if cand else root_r
-        try:
-            tgt.relative_to(root_r)
-        except ValueError as exc:
-            raise ValueError(f"base '{cand}' escapes the repo root") from exc
-        if not tgt.is_dir():
-            raise ValueError(f"base '{cand}' does not exist in {self.root}")
-        import copy as _copy
-        new = _copy.copy(self)
-        new.base = cand
-        return new
-
 
 @lru_cache(maxsize=8)
 def get_repo(key: str) -> RepoInfo:
@@ -1135,10 +1110,6 @@ def build_file_tis(repo: RepoInfo, rel: str, follow: bool = True,
 # --------------------------------------------------------------------------
 # HTTP server
 # --------------------------------------------------------------------------
-class _BadBase(ValueError):
-    """Raised when a client-supplied ?base= is invalid."""
-
-
 class Handler(BaseHTTPRequestHandler):
     server_version = "CodeLens/1.0"
 
@@ -1162,18 +1133,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _repo_from(self, q: dict) -> RepoInfo:
         key = (q.get("repo", [None])[0] or default_repo_key())
-        r = get_repo(key)
-        base_q = q.get("base", [None])[0]
-        if base_q is not None and r.ok:
-            try:
-                r = r.with_base(base_q)
-            except ValueError as e:
-                raise _BadBase(str(e)) from e
-        return r
+        return get_repo(key)
 
     def do_GET(self) -> None:  # noqa: N802
         u = urlparse(self.path)
-        q = parse_qs(u.query, keep_blank_values=True)
+        q = parse_qs(u.query)
         path = u.path
 
         if path in ("/", "/index.html"):
@@ -1200,41 +1164,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(v, 200 if v["ok"] else 400)
             return
 
-        if path == "/api/repos/bases":
-            # List candidate base sub-paths inside the repo. When ?path= is
-            # given, list its subdirectories (for a walkable picker); otherwise
-            # a short curated list (repo toplevel + common code roots).
-            key = (q.get("repo", [None])[0] or default_repo_key())
-            r = get_repo(key)
-            if not r.ok:
-                self._json({"error": r.error}, 503); return
-            sub = q.get("path", [""])[0].strip("/")
-            try:
-                sub_dir = (Path(r.root) / sub).resolve()
-                sub_dir.relative_to(Path(r.root).resolve())
-            except ValueError:
-                self._json({"error": "path escapes repo root"}, 400); return
-            if not sub_dir.is_dir():
-                self._json({"error": "not a directory"}, 404); return
-            dirs = []
-            try:
-                for e in sorted(sub_dir.iterdir(), key=lambda p: p.name.lower()):
-                    if e.name in _TREE_SKIP or e.name.startswith("."):
-                        continue
-                    if e.is_dir():
-                        rel = str(e.relative_to(Path(r.root)))
-                        dirs.append(rel)
-            except OSError as e:
-                self._json({"error": str(e)}, 500); return
-            self._json({"root": r.root, "current_base": r.base,
-                        "parent": sub, "dirs": dirs})
-            return
-
-        try:
-            repo = self._repo_from(q)
-        except _BadBase as e:
-            self._json({"error": str(e)}, 400)
-            return
+        repo = self._repo_from(q)
         if not repo.ok:
             self._json({"error": f"repo '{repo.key}' unavailable: {repo.error}"},
                        503)
@@ -1361,7 +1291,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:  # noqa: N802
         u = urlparse(self.path)
-        q = parse_qs(u.query, keep_blank_values=True)
+        q = parse_qs(u.query)
         if u.path == "/api/repos/custom":
             key = (q.get("key", [""])[0] or "").strip()
             if not key or not key.startswith("CUSTOM"):
