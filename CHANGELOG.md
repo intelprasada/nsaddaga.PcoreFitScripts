@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   status update.
 - **ValTrak refreshes** — retain the top-level plan identity across nested
   references and reject empty responses that would erase an existing subtree.
+- **ValTrak explorer** — retain valid hierarchy expansion and focus state after
+  refreshes and status updates.
 
 ## [1.0.0] - 2026-04-14
 

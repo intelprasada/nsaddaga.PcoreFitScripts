@@ -23,6 +23,7 @@ const state = {
   itemFilters: { query: "", status: "", type: "", subtype: "" },
   expanded: new Set(),
   treeExpandedAll: false,
+  treeInitialized: false,
   treeFocusPath: "",
 };
 
@@ -421,6 +422,7 @@ function renderPlanDetail({ resetTreeState = true } = {}) {
   if (resetTreeState) {
     state.expanded.clear();
     state.treeExpandedAll = false;
+    state.treeInitialized = false;
     state.treeFocusPath = "";
     $("#expand-tree").textContent = "Expand all";
   }
@@ -577,6 +579,42 @@ function openRefreshDialog(scope, plan = null) {
   $("#refresh-dialog").showModal();
 }
 
+function saveTreeStateForReload() {
+  sessionStorage.setItem("valtrak-tree-state-v1", JSON.stringify({
+    selectedPlan: state.selectedPlan,
+    expanded: [...state.expanded],
+    treeExpandedAll: state.treeExpandedAll,
+    treeFocusPath: state.treeFocusPath,
+  }));
+}
+
+function restoreTreeStateAfterReload() {
+  const saved = sessionStorage.getItem("valtrak-tree-state-v1");
+  sessionStorage.removeItem("valtrak-tree-state-v1");
+  if (!saved) return false;
+  try {
+    const value = JSON.parse(saved);
+    const stats = state.planStats.get(value.selectedPlan);
+    if (!stats) return false;
+    const availablePaths = new Set(stats.items.map((item) => item.p));
+    state.selectedPlan = value.selectedPlan;
+    state.expanded = new Set(
+      Array.isArray(value.expanded)
+        ? value.expanded.filter((path) => availablePaths.has(path))
+        : []
+    );
+    state.treeExpandedAll = Boolean(value.treeExpandedAll);
+    state.treeInitialized = true;
+    state.treeFocusPath = availablePaths.has(value.treeFocusPath)
+      ? value.treeFocusPath
+      : "";
+    $("#expand-tree").textContent = state.treeExpandedAll ? "Collapse all" : "Expand all";
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function pollRefreshJob(jobId) {
   if (state.refreshPoller === jobId) return;
   state.refreshPoller = jobId;
@@ -590,6 +628,7 @@ function pollRefreshJob(jobId) {
           "vplan-refresh-message",
           `${scope} refreshed successfully.`
         );
+        saveTreeStateForReload();
         location.reload();
         return;
       }
@@ -710,7 +749,10 @@ function renderTree() {
     return;
   }
 
-  if (!state.expanded.size) roots.forEach((root) => state.expanded.add(root.item.p));
+  if (!state.treeInitialized) {
+    roots.forEach((root) => state.expanded.add(root.item.p));
+    state.treeInitialized = true;
+  }
   const visible = [];
   function walk(nodes, depth) {
     nodes.forEach((node) => {
@@ -1250,10 +1292,11 @@ async function init() {
     const preferred = [...state.planStats.values()]
       .sort((a, b) => b.counts.active - a.counts.active)[0]?.name;
     state.selectedPlan = preferred || state.plans[0]?.vplan_name || "";
+    const restoredTreeState = restoreTreeStateAfterReload();
 
     renderOverview();
     renderPlanList();
-    renderPlanDetail();
+    renderPlanDetail({ resetTreeState: !restoredTreeState });
     populateFilters();
     renderItemTable();
     bindEvents();
