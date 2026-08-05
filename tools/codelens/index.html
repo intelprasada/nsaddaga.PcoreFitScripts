@@ -234,8 +234,11 @@
     align-items:flex-start;justify-content:center;padding:5vh 16px}
   #lensOv.open{display:flex}
   .lens{background:var(--panel);border:1px solid var(--border);border-radius:12px;
-    width:min(940px,96vw);max-height:88vh;display:flex;flex-direction:column;
-    box-shadow:0 18px 60px #000a;overflow:hidden;animation:lensIn .14s ease-out}
+    width:min(940px,96vw);height:auto;max-height:88vh;
+    min-width:420px;min-height:220px;max-width:98vw;
+    resize:both;overflow:hidden;
+    display:flex;flex-direction:column;
+    box-shadow:0 18px 60px #000a;animation:lensIn .14s ease-out}
   @keyframes lensIn{from{opacity:0;transform:translateY(8px) scale(.99)}to{opacity:1;transform:none}}
   .lens-hd{display:flex;align-items:center;gap:10px;padding:11px 16px;
     border-bottom:1px solid var(--border);background:var(--panel2);flex:0 0 auto}
@@ -297,7 +300,7 @@
   .diffbox{border:1px solid var(--border);border-radius:6px;background:#0b1120;
     font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.45;
     overflow:auto;max-height:none}
-  .dl{padding:0 8px;white-space:pre;min-height:1.45em}
+  .dl{padding:0 8px;white-space:pre;min-height:1.45em;min-width:max-content}
   .dl.meta{color:#8b949e;background:#111827}
   .dl.head{color:#c9d1d9;background:#0f172a;font-weight:600}
   .dl.hunk{color:#a5b4fc;background:#151f37}
