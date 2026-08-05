@@ -324,6 +324,7 @@
       pane <input id="paneSize" value="auto" size="4" />
     </label>
     <button id="refreshBtn" title="Re-fetch context (bypass cache)">⟳</button>
+    <span id="tidbBadge" class="ctl mono" style="font-size:11px;color:var(--muted);cursor:pointer" title="Gatekeeper TI database — click to refresh"></span>
   </div>
 
   <div id="main">
@@ -453,7 +454,31 @@ function applyRepoInfo(info){
   $('#baseInput').value = curBase;
   $('#repoHead').textContent = info&&info.head ? ("@"+info.head) : "";
   $('#stRepo').textContent = info ? `${info.key}: ${info.root} (base ${curBase||"."})` : "";
+  refreshTidbBadge();
 }
+async function refreshTidbBadge(){
+  const el=$('#tidbBadge'); if(!el) return;
+  el.textContent='TIs …';
+  try{
+    const s=await fetch(`/api/tidb/status?${repoQ()}`).then(r=>r.json());
+    if(!s || s.error){ el.textContent = s&&s.error ? '' : '' ; return; }
+    const asOf = s.as_of_epoch ? new Date(s.as_of_epoch*1000) : null;
+    const when = asOf ? asOf.toISOString().slice(0,16).replace('T',' ') : 'never';
+    el.textContent = `⚑ TIs: ${s.n_tis||0} · ${when} 🔄`;
+    el.title = `Gatekeeper: ${s.cluster||'?'}/${s.stepping||'?'}/${s.branch||'?'} — click to refresh (may take 30–70s)`;
+  }catch(e){ el.textContent=''; }
+}
+document.addEventListener('click', async (ev)=>{
+  const el=ev.target.closest && ev.target.closest('#tidbBadge');
+  if(!el) return;
+  if(el.dataset.busy==='1') return;
+  el.dataset.busy='1'; const orig=el.textContent; el.textContent='⚑ refreshing TIs…';
+  try{
+    await fetch(`/api/tidb/refresh?${repoQ()}`,{method:'POST'});
+    await refreshTidbBadge();
+  }catch(e){ el.textContent=orig; }
+  finally{ el.dataset.busy=''; }
+});
 async function loadRepos(){
   const d=await api('/api/repos');
   const sel=$('#repoSel'); sel.innerHTML="";
@@ -683,9 +708,9 @@ function filesTable(files, sha){
 }
 function commitsTable(commits){
   if(!commits||!commits.length) return `<div class="lens-empty">no commits</div>`;
-  const rows=commits.map(c=>`<tr>
+  const rows=commits.map(c=>`<tr${c.orphan?' style="opacity:.7"':''}>
     <td><span class="clink mono" data-sha="${esc(c.sha)}">${esc(c.short)}</span></td>
-    <td>${c.merge?'<span class="badge merge">merge</span>':''}</td>
+    <td>${c.merge?'<span class="badge merge">merge</span>':''}${c.orphan?' <span class="badge" title="No Gatekeeper turnin found">orphan</span>':''}</td>
     <td>${esc(c.summary||"")}</td>
     <td class="num sub">${esc(c.author||"")}${c.idsid?` · <span class="mono">${esc(c.idsid)}</span>`:''}</td>
     <td class="num sub">${dstr(c.time)}</td>
@@ -769,12 +794,20 @@ async function renderLensTop(){
 }
 function basename(p){ const i=String(p||"").lastIndexOf('/'); return i<0?String(p||""):p.slice(i+1); }
 function tiLensHtml(d){
-  const m=d.merge||{}, st=d.stat||{files:0,add:0,del:0};
+  const m=d.merge||{}, st=d.stat||{files:0,add:0,del:0}, gk=d.gk||null;
   let h=`<div class="lens-meta">`;
-  h+=`<div><div class="k">Status</div><div class="v"><span class="badge ${d.tag?'model':'merged'}">${esc(d.status||'')}</span></div></div>`;
+  h+=`<div><div class="k">Status</div><div class="v"><span class="badge ${d.tag?'model':'merged'}">${esc(gk&&gk.status||d.status||'')}</span>${gk&&gk.stage?` <span class="sub">${esc(gk.stage)}</span>`:''}</div></div>`;
+  if(gk&&gk.user) h+=`<div><div class="k">Owner</div><div class="v mono">${esc(gk.user)}</div></div>`;
   h+=`<div><div class="k">Introducing merge</div><div class="v"><span class="clink mono" data-sha="${esc(m.sha)}">${esc(m.short)}</span></div></div>`;
   h+=`<div><div class="k">Merged</div><div class="v num">${dstr(m.time)||'—'}</div></div>`;
+  if(gk&&gk.completed_time) h+=`<div><div class="k">Completed</div><div class="v num">${esc(gk.completed_time)}</div></div>`;
+  if(gk&&(gk.cluster||gk.stepping||gk.branch)) h+=`<div><div class="k">Target</div><div class="v mono">${esc([gk.cluster,gk.stepping,gk.branch].filter(Boolean).join('/'))}</div></div>`;
   if(d.incoming) h+=`<div><div class="k">Bundle</div><div class="v mono">${esc(d.incoming)}</div></div>`;
+  else if(gk&&gk.bundle_id) h+=`<div><div class="k">Bundle</div><div class="v mono">${esc(gk.bundle_id)}</div></div>`;
+  if(gk&&gk.code_review_url){
+    const cs=gk.code_review_status?` <span class="badge">${esc(gk.code_review_status)}</span>`:'';
+    h+=`<div><div class="k">Code review</div><div class="v"><a href="${esc(gk.code_review_url)}" target="_blank" rel="noopener">open</a>${cs}</div></div>`;
+  }
   if(d.tag) h+=`<div><div class="k">Tag</div><div class="v mono">${esc(d.tag)}</div></div>`;
   h+=`</div>`;
   h+=`<div class="lens-stat"><span><b>${d.n_commits}</b> commit${d.n_commits==1?'':'s'}</span>`+
@@ -782,6 +815,10 @@ function tiLensHtml(d){
      `<span class="add">+${nfmt(st.add)}</span><span class="del">-${nfmt(st.del)}</span></div>`;
   const auth=(d.authors||[]).filter(a=>a.commits>0);
   if(auth.length) h+=`<h4>Authors</h4>`+auth.map(a=>`<span class="chip">${esc(a.name)}<span class="id mono">${a.idsid?esc(a.idsid):'—'}</span>${a.commits?` · ${a.commits}`:''}</span>`).join("");
+  if(gk&&gk.bugs){
+    const bugs=(''+gk.bugs).split(/[,\s]+/).map(s=>s.trim()).filter(Boolean);
+    if(bugs.length) h+=`<h4>Bugs <span class="sub">${bugs.length}</span></h4>`+bugs.map(b=>`<a class="chip" href="https://hsdes.intel.com/appstore/article/#/${esc(b)}" target="_blank" rel="noopener">${esc(b)}</a>`).join("");
+  }
   h+=`<h4>HSDs <span class="sub">${(d.hsds||[]).length}</span></h4>`+
      ((d.hsds||[]).length?d.hsds.map(hsdLinkL).join(""):`<span class="lens-empty">none referenced</span>`);
   h+=`<h4>Commits <span class="sub">${(d.commits||[]).length}</span></h4>`+commitsTable(d.commits);

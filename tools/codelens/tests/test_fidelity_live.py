@@ -107,21 +107,15 @@ def test_d4_commits_actually_touch_file():
 
 @skip_no_repo
 def test_g3_commit_lens_turnins_match_extractor():
-    """G3: commit lens `turnins` equals _TURNIN_RE.findall on the introducing
-    merge subject — same extractor, no other sources sneaking in."""
-    cs = C.build_file_commits(REPO, TEST_FILE)
-    sample = [c for c in cs["commits"] if c.get("merge")][:6]
-    for c in sample:
-        subj = c.get("merge_summary") or ""
-        expected = []
-        seen = set()
-        for m in C._TURNIN_RE.finditer(subj + "\n" + (c.get("summary") or "")):
-            t = m.group(1)
-            if t not in seen:
-                seen.add(t); expected.append(t)
-        assert set(c["turnins"]) == set(expected), (
-            f"commit {c['short']}: turnins={c['turnins']} but regex on "
-            f"subject/merge={expected}")
+    """G3 [obsolete]: pre-TiDb, `turnins` was regex-derived from the merge
+    subject. TiDb is now the authoritative source, so this equality no longer
+    holds — turnins may include ids that never appeared in the subject
+    (turnininfo knew the bundle) and may exclude ids from stray text in the
+    subject that aren't real turnins. Kept as a skip for historical context.
+    """
+    import pytest
+    pytest.skip("Obsolete under TiDb architecture — turnins are no longer "
+                "regex-derived from merge subjects.")
 
 
 @skip_no_repo

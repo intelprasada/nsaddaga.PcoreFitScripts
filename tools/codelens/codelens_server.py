@@ -41,6 +41,49 @@ from urllib.parse import parse_qs, quote, urlparse
 
 HERE = Path(__file__).resolve().parent
 
+# ti_db (sibling module) — authoritative Turnin index from `turnininfo`.
+import sys as _sys
+if str(HERE) not in _sys.path:
+    _sys.path.insert(0, str(HERE))
+import ti_db as _ti_db_mod  # noqa: E402
+
+
+# --------------------------------------------------------------------------
+# TiDb registry — one TiDb per (cluster, stepping, branch, repo_root) tuple.
+# Populated lazily on first query; refreshable from the UI.
+# --------------------------------------------------------------------------
+_TIDB_REG: dict[tuple[str, str, str, str], "_ti_db_mod.TiDb"] = {}
+
+
+def _tidb_for_repo(repo: "RepoInfo", auto_refresh: bool = True):
+    """Return a TiDb bound to this repo's cluster/stepping/branch, loading
+    from disk (or refreshing if stale/missing) on first access."""
+    if not (repo.cluster and repo.stepping and repo.branch):
+        return None
+    key = (repo.cluster, repo.stepping, repo.branch, repo.root)
+    db = _TIDB_REG.get(key)
+    if db is None:
+        db = _ti_db_mod.TiDb(
+            repo.cluster, repo.stepping, repo.branch, repo.root,
+            merge_set_fn=lambda root, msha: _merge_introduced_set(
+                _RootRepo(root), msha),
+        )
+        if auto_refresh:
+            db.load_or_refresh()
+        else:
+            db._load_disk()
+        _TIDB_REG[key] = db
+    return db
+
+
+class _RootRepo:
+    """Adapter to reuse _merge_introduced_set which expects a repo-like
+    object with a .root attribute."""
+    __slots__ = ("root",)
+    def __init__(self, root: str):
+        self.root = root
+
+
 # --------------------------------------------------------------------------
 # Repo discovery — mirrors setGFC / setJNCfit resolution (see tools/teamhub).
 # --------------------------------------------------------------------------
@@ -419,6 +462,9 @@ class RepoInfo:
         self.root = ""
         self.base = ""          # base sub-path relative to root, e.g. "core/fe"
         self.head = ""
+        self.cluster = ""       # git config intel.cluster (e.g. "core")
+        self.stepping = ""      # git config intel.stepping (e.g. "jnc-a0")
+        self.branch = ""        # current branch (usually "master")
         self.error = ""
         self._resolve()
 
@@ -454,6 +500,16 @@ class RepoInfo:
                     break
         h = self._git("rev-parse", "--short", "HEAD", timeout=15)
         self.head = h.stdout.strip() if h.returncode == 0 else ""
+        # Gatekeeper coords for TiDb — written into git config by the
+        # `source hdk.rc -model_shell` flow.
+        for k, attr in (("intel.cluster", "cluster"),
+                        ("intel.stepping", "stepping")):
+            r = self._git("config", "--get", k, timeout=10)
+            if r.returncode == 0:
+                setattr(self, attr, r.stdout.strip())
+        br = self._git("rev-parse", "--abbrev-ref", "HEAD", timeout=10)
+        if br.returncode == 0:
+            self.branch = br.stdout.strip()
 
     @property
     def ok(self) -> bool:
@@ -649,11 +705,22 @@ def _extract_hsds(text: str) -> list[str]:
     return out
 
 
-def enrich_commit(repo: RepoInfo, sha: str) -> dict:
-    ck = _ck(repo, sha)
-    cached = _cache_read("commit", ck)
-    if cached is not None:
-        return cached
+def enrich_commit(repo: RepoInfo, sha: str, *, skip_intro: bool = False) -> dict:
+    """Return metadata + turnin attribution for `sha`.
+
+    When `skip_intro=True`, the caller commits to computing the ancestry-path
+    introducing merge itself in a batched pass (see resolve_intro_merges).
+    That skips the per-sha `git log --merges --ancestry-path sha..HEAD` call,
+    which scales with distance to HEAD and is the dominant cost when many
+    blame shas share the same file. skip_intro=True results are NOT cached
+    on disk (they're incomplete); the caller must fill in intro fields
+    before persisting via _finalize_intro().
+    """
+    if not skip_intro:
+        ck = _ck(repo, sha)
+        cached = _cache_read("commit", ck)
+        if cached is not None:
+            return cached
     info: dict = {"sha": sha, "short": sha[:12], "author": "", "mail": "",
                   "time": 0, "summary": "", "turnins": [], "hsds": [],
                   "intro_turnins": []}
@@ -678,68 +745,116 @@ def enrich_commit(repo: RepoInfo, sha: str) -> dict:
                 if t not in info["turnins"]:
                     info["turnins"].append(t)
     info["is_merge"] = is_merge
-    # Introducing merge → the OLDEST merge on the ancestry path from this
-    # commit up to HEAD that identifies a turnin/bundle in its subject.
-    #
-    # Two footguns:
-    #   1. `git log -n1 --reverse` applies the count *before* the reverse, so
-    #      it returns the NEWEST merge on the path (≈ HEAD, i.e. the latest
-    #      turnin) instead of the oldest. Enumerate and take first-after-
-    #      reverse.
-    #   2. Many repos have periodic "update from latest" merges (e.g.
-    #      `Merge /p/hdk/.../fit-jnc-a0-master-latest`) or cross-branch
-    #      "out-of-band sync" merges with no turnin id. Those merges *do*
-    #      carry the commit but they aren't its turnin. Prefer the oldest
-    #      ancestry-path merge whose subject matches _TURNIN_RE.
-    #   3. But EVEN a turnin-tagged ancestry-path merge is only the true
-    #      introducing merge if its own second-parent range (M^1..M^2)
-    #      actually contains our sha — i.e. it landed our commit on master.
-    #      Without this guard, a sha that came in via a preceding untagged
-    #      sync merge is falsely credited to whatever turnin merge lies
-    #      further along the path. (Regression: fe_ifu_pp_ref.e's line
-    #      range showed TI 21456 for commit 7b547508, but 7b547508 was
-    #      brought in by two upstream sync merges and was never on
-    #      integrate_bundle21456's branch.)
+    if skip_intro:
+        return info
+    # Fallback path (single-shot callers e.g. /api/commit lens): enumerate the
+    # ancestry-path merges from sha..HEAD ourselves. This is O(distance-to-
+    # HEAD) per call and is intentionally NOT used by build_context /
+    # build_file_commits — those use the batched resolve_intro_merges().
+    _apply_ancestry_intro(repo, sha, info)
+    _cache_write("commit", ck, info)
+    return info
+
+
+def _apply_ancestry_intro(repo: RepoInfo, sha: str, info: dict) -> None:
+    """Populate info['merge'/'merge_summary'/'intro_turnins'/'hsds'] by
+    walking sha..HEAD merges. See enrich_commit docstring for context."""
     mrg = subprocess.run(
         ["git", "-C", repo.root, "--no-pager", "log", "--merges",
          "--ancestry-path", "--reverse",
          "--format=%H%x00%s", f"{sha}..HEAD"],
         capture_output=True, text=True, timeout=60, check=False)
-    if mrg.returncode == 0 and mrg.stdout:
-        lines = [ln for ln in mrg.stdout.splitlines() if ln]
-        pick = ""
-        pick_subj = ""
-        for ln in lines:
-            msha, _, msubj = ln.partition("\x00")
-            if not _TURNIN_RE.search(msubj):
-                continue
-            # Verify this merge actually introduced our sha via its second
-            # parent (i.e. sha ∈ M^1..M^2). We look this up in a per-merge
-            # in-process cache of "shas M brought in" so we don't fork
-            # `git merge-base` twice per (blame-sha, candidate-merge) pair.
-            # Files with many blame shas share the same candidate merges,
-            # so cache reuse across the enrichment batch is significant.
-            introduced = _merge_introduced_set(repo, msha)
-            if sha not in introduced:
-                continue
-            pick, pick_subj = msha, msubj
+    if mrg.returncode != 0 or not mrg.stdout:
+        return
+    for ln in mrg.stdout.splitlines():
+        if not ln:
+            continue
+        msha, _, msubj = ln.partition("\x00")
+        if not _TURNIN_RE.search(msubj):
+            continue
+        if sha not in _merge_introduced_set(repo, msha):
+            continue
+        info["merge"] = msha[:12]
+        info["merge_summary"] = msubj
+        for m in _TURNIN_RE.finditer(msubj):
+            t = m.group(1)
+            if t not in info["intro_turnins"]:
+                info["intro_turnins"].append(t)
+        for h in _extract_hsds(msubj):
+            if h not in info["hsds"]:
+                info["hsds"].append(h)
+        return
+
+
+def resolve_intro_merges(repo: RepoInfo, shas: list[str],
+                         path: str) -> dict[str, dict]:
+    """Batched intro-merge resolver, keyed by sha.
+
+    Uses `git log HEAD --first-parent --merges -- <path>` to get the SHORT
+    list of merges that landed changes to this file on master. Only those
+    merges could possibly have introduced our blame shas. For each such
+    merge M, materialize its introduced-sha set once (M^1..M^2), then
+    scan oldest-first and assign each unassigned sha to the first merge
+    whose set contains it. Cost: O(file-touching-merges), independent of
+    the number of blame shas.
+
+    Returns { sha: {merge, merge_summary, intro_turnins, hsds} }. Shas
+    that no first-parent merge introduces are absent from the map (their
+    caller should leave intro fields empty).
+    """
+    if not shas:
+        return {}
+    git_path = repo.to_git_path(path) if path else ""
+    args = ["git", "-C", repo.root, "--no-pager", "log", "HEAD",
+            "--first-parent", "--merges", "--format=%H%x00%s"]
+    if git_path:
+        args += ["--", git_path]
+    r = subprocess.run(args, capture_output=True, text=True,
+                       timeout=60, check=False)
+    if r.returncode != 0 or not r.stdout:
+        return {}
+    # Newest-first from git log; reverse for oldest-first assignment.
+    merges = [ln for ln in r.stdout.splitlines() if ln]
+    merges.reverse()
+    todo = set(shas)
+    out: dict[str, dict] = {}
+    for ln in merges:
+        if not todo:
             break
-        # Fallback: if no ancestry-path turnin merge actually introduces this
-        # sha (the sha came in via out-of-band sync merges without turnin
-        # tags), leave `merge`/`intro_turnins` empty. Better to under-attribute
-        # than to falsely credit an unrelated TI.
-        if pick:
-            info["merge"] = pick[:12]
-            info["merge_summary"] = pick_subj
-            for m in _TURNIN_RE.finditer(pick_subj):
-                t = m.group(1)
-                if t not in info["intro_turnins"]:
-                    info["intro_turnins"].append(t)
-            for h in _extract_hsds(pick_subj):
-                if h not in info["hsds"]:
-                    info["hsds"].append(h)
-    _cache_write("commit", ck, info)
-    return info
+        msha, _, msubj = ln.partition("\x00")
+        if not _TURNIN_RE.search(msubj):
+            continue
+        introduced = _merge_introduced_set(repo, msha)
+        if not introduced:
+            continue
+        hit = todo & introduced
+        if not hit:
+            continue
+        intro_ti = []
+        for m in _TURNIN_RE.finditer(msubj):
+            t = m.group(1)
+            if t not in intro_ti:
+                intro_ti.append(t)
+        intro_hsds = _extract_hsds(msubj)
+        for s in hit:
+            out[s] = {"merge": msha[:12], "merge_summary": msubj,
+                      "intro_turnins": intro_ti, "hsds": intro_hsds}
+        todo -= hit
+    return out
+
+
+def _apply_intro_from_map(info: dict, intro: dict) -> None:
+    info["merge"] = intro["merge"]
+    info["merge_summary"] = intro["merge_summary"]
+    for t in intro["intro_turnins"]:
+        if t not in info["intro_turnins"]:
+            info["intro_turnins"].append(t)
+    for h in intro["hsds"]:
+        if h not in info["hsds"]:
+            info["hsds"].append(h)
+
+
+
 
 
 def effective_turnins(info: dict) -> list[str]:
@@ -788,21 +903,51 @@ def build_context(repo: RepoInfo, rel: str, start: int, end: int,
     if force:
         for sha in order:
             _cache_path("commit", _ck(repo, sha)).unlink(missing_ok=True)
-    # Enrichment is git-subprocess-bound → parallelize across unique blame
-    # shas. The disk cache and the in-process merge-introduced-set cache
-    # (see _merge_introduced_set) both stay valid across threads.
+    # Cheap metadata pass (git show) in parallel. Skip the ancestry-path
+    # intro lookup — TiDb is authoritative for TI attribution when available.
     infos: dict[str, dict] = {}
     max_workers = min(16, max(4, len(order)))
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        for sha, info in zip(order, ex.map(lambda s: enrich_commit(repo, s), order)):
+        for sha, info in zip(order, ex.map(
+                lambda s: enrich_commit(repo, s, skip_intro=True), order)):
             infos[sha] = info
+
+    tidb = _tidb_for_repo(repo)
+    git_path_full = repo.to_git_path(rel)
+    if tidb is not None and not tidb.error:
+        # Authoritative: TiDb.attribute_shas maps each blame sha to the TI
+        # whose bundle_commit^1..^2 range contains it — falsifiable and
+        # rooted in Gatekeeper metadata, not in guess-parsed merge subjects.
+        sha2ti = tidb.attribute_shas(order, git_path_full)
+    else:
+        # Fallback (workarea without model-shell config, or TiDb unavailable):
+        # use the git-side ancestry-path picker.
+        sha2ti = {}
+        intro_map = resolve_intro_merges(repo, order, rel)
+        for s in order:
+            im = intro_map.get(s)
+            if im and im.get("intro_turnins"):
+                sha2ti[s] = im["intro_turnins"][0]
     for sha in order:
         info = dict(infos[sha])
         info["lines"] = line_by_sha[sha]
-        # Aggregate only the TIs that legitimately own this commit's changes.
-        # See effective_turnins() for the intrinsic-vs-ancestry split.
+        ti_id = sha2ti.get(sha)
+        info["orphan"] = False
+        if ti_id:
+            info["intro_turnins"] = [ti_id]
+            info["merge_summary"] = ""
+            if tidb is not None:
+                ti_rec = tidb.ti(ti_id)
+                if ti_rec:
+                    info["merge"] = (ti_rec.get("bundle_commit") or "")[:12]
+                    info["merge_summary"] = (
+                        (ti_rec.get("comments") or "").strip().split("\n")[0][:120]
+                    )
+        elif not info["turnins"]:
+            info["orphan"] = True
+        _cache_write("commit", _ck(repo, sha), info)
         eff = effective_turnins(info)
-        info["turnins"] = eff  # what the UI shows against this commit
+        info["turnins"] = eff
         commits.append(info)
         authors_seen.setdefault(info["author"], info.get("mail", ""))
         for t in eff:
@@ -1006,6 +1151,30 @@ def build_ti(repo: RepoInfo, tid: str, force: bool = False) -> dict:
         "hsds": hsds,
         "authors": authors,
     }
+    # Overlay authoritative Gatekeeper fields when TiDb knows this TI.
+    tidb = _tidb_for_repo(repo, auto_refresh=False)
+    if tidb is not None:
+        tirec = tidb.ti(tid)
+        if tirec:
+            payload["gk"] = {
+                "user": tirec.get("user"),
+                "status": tirec.get("status"),
+                "stage": tirec.get("stage"),
+                "cluster": tirec.get("cluster"),
+                "stepping": tirec.get("stepping"),
+                "branch": tirec.get("branch"),
+                "bundle_id": tirec.get("bundle_id"),
+                "bundle_commit": tirec.get("bundle_commit"),
+                "bugs": tirec.get("bugs"),
+                "ecos": tirec.get("ecos"),
+                "comments": (tirec.get("comments") or "").strip(),
+                "code_review_url": tirec.get("code_review_url"),
+                "code_review_status": tirec.get("code_review_status"),
+                "completed_time": tirec.get("completed_time"),
+                "completed_time_epoch": tirec.get("completed_time_epoch"),
+                "turnin_time": tirec.get("turnin_time"),
+                "n_files": len(tirec.get("files_changed") or []),
+            }
     _cache_write("ti", ck, payload)
     return payload
 
@@ -1167,21 +1336,46 @@ def build_file_commits(repo: RepoInfo, rel: str, follow: bool = True,
     if force:
         for sha in shas:
             _cache_path("commit", _ck(repo, sha)).unlink(missing_ok=True)
-    # Parallelize enrichment + numstat lookups across commits (both are
-    # git-subprocess-bound). Same caching invariants as build_context.
+    # Cheap metadata pass (git show only) in parallel; intro merge attribution
+    # is done once batched via resolve_intro_merges().
     def _one(sha: str) -> dict:
-        info = dict(enrich_commit(repo, sha))
+        info = dict(enrich_commit(repo, sha, skip_intro=True))
         add, dele, binary = _file_numstat(repo, sha, git_path)
         info["add"] = add
         info["del"] = dele
         info["binary"] = binary
-        info["turnins"] = effective_turnins(info)
         return info
     max_workers = min(16, max(4, len(shas))) if shas else 1
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        for info in ex.map(_one, shas):
-            commits.append(info)
-            authors_seen.setdefault(info["author"], info.get("mail", ""))
+        raw = list(ex.map(_one, shas))
+    tidb = _tidb_for_repo(repo)
+    if tidb is not None and not tidb.error:
+        sha2ti = tidb.attribute_shas(shas, git_path)
+    else:
+        sha2ti = {}
+        intro_map = resolve_intro_merges(repo, shas, rel)
+        for s in shas:
+            im = intro_map.get(s)
+            if im and im.get("intro_turnins"):
+                sha2ti[s] = im["intro_turnins"][0]
+    for sha, info in zip(shas, raw):
+        ti_id = sha2ti.get(sha)
+        info["orphan"] = False
+        if ti_id:
+            info["intro_turnins"] = [ti_id]
+            if tidb is not None:
+                ti_rec = tidb.ti(ti_id)
+                if ti_rec:
+                    info["merge"] = (ti_rec.get("bundle_commit") or "")[:12]
+                    info["merge_summary"] = (
+                        (ti_rec.get("comments") or "").strip().split("\n")[0][:120]
+                    )
+        elif not info["turnins"]:
+            info["orphan"] = True
+        _cache_write("commit", _ck(repo, sha), info)
+        info["turnins"] = effective_turnins(info)
+        commits.append(info)
+        authors_seen.setdefault(info["author"], info.get("mail", ""))
     idmap = resolve_identities(list(authors_seen.items()))
     for c in commits:
         c["idsid"] = idmap.get(c["author"], {}).get("idsid", "")
@@ -1380,6 +1574,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/tree":
             self._json(list_tree(repo, q.get("path", [""])[0]))
             return
+        if path == "/api/tidb/status":
+            tidb = _tidb_for_repo(repo, auto_refresh=False)
+            if tidb is None:
+                self._json({"error": "repo has no intel.cluster/stepping — "
+                                     "not a MODEL_ROOT?"}, 200)
+                return
+            self._json(tidb.status())
+            return
         if path == "/api/file":
             rel = q.get("path", [""])[0]
             if not rel:
@@ -1473,6 +1675,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         u = urlparse(self.path)
+        q = parse_qs(u.query, keep_blank_values=True)
+        if u.path == "/api/tidb/refresh":
+            try:
+                repo = self._repo_from(q)
+            except _BadBase as e:
+                self._json({"error": str(e)}, 400); return
+            if not repo.ok:
+                self._json({"error": repo.error}, 503); return
+            tidb = _tidb_for_repo(repo, auto_refresh=False)
+            if tidb is None:
+                self._json({"error": "repo not a MODEL_ROOT"}, 400); return
+            tidb.refresh()
+            self._json(tidb.status())
+            return
         if u.path == "/api/repos/custom":
             body = self._read_json_body()
             raw = (body.get("path") or "").strip()
