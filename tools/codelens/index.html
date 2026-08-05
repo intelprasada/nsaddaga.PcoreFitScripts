@@ -210,6 +210,23 @@
   .fscope-toolbar input{flex:1;font-size:12px;padding:3px 8px}
   .fscope-toolbar .cnt{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;
     white-space:nowrap}
+  .fsearch{display:flex;gap:6px;align-items:center;padding:4px 10px 6px;
+    border-bottom:1px solid #ffffff0d;background:var(--panel)}
+  .fsearch input{flex:1;font-size:12px;padding:3px 8px;background:var(--panel2);
+    color:var(--fg);border:1px solid var(--border);border-radius:5px}
+  .fsearch input:focus{outline:none;border-color:var(--accent)}
+  .fsearch .cnt{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;
+    white-space:nowrap}
+  .fsearch button{background:none;border:none;color:var(--muted);cursor:pointer;
+    font-size:12px;padding:2px 4px;border-radius:3px}
+  .fsearch button:hover{background:var(--panel2);color:var(--fg)}
+  .fsearch.hidden{display:none}
+  .fsr-hit{cursor:pointer;padding:2px 6px;font-size:12.5px;display:flex;
+    align-items:baseline;gap:6px;border-radius:4px}
+  .fsr-hit:hover{background:#ffffff10}
+  .fsr-hit .nm{color:var(--fg)}
+  .fsr-hit .dir{color:var(--muted);font-size:11px}
+  .fsr-hit mark{background:#3a2f12;color:#fbd57e;padding:0 1px;border-radius:2px}
   table.st{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
   table.st th{position:sticky;top:34px;background:var(--panel);z-index:1;
     text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.5px;
@@ -333,6 +350,11 @@
   <div id="main">
     <div class="col" id="tree">
       <h3>Files <span id="repoHead" class="mono"></span></h3>
+      <div class="fsearch">
+        <input id="fileSearch" placeholder="Search files (Ctrl+P)…" spellcheck="false" autocomplete="off" />
+        <span id="fileSearchCnt" class="cnt"></span>
+        <button id="fileSearchX" title="Clear">✕</button>
+      </div>
       <div class="scroll"><div id="treeRoot"></div></div>
     </div>
 
@@ -506,7 +528,69 @@ async function loadTree(){
   try{
     const d=await api(`/api/tree?${repoQ()}&path=`);
     root.innerHTML=""; root.appendChild(renderLevel(d.entries));
+    _treeCached=true;
   }catch(e){ root.innerHTML=`<div class="node"><span class="nm err">${esc(e.message)}</span></div>`; }
+}
+
+/* ---- file search ---- */
+let _treeCached=false, _searchTimer=null, _searchSeq=0;
+function _hlite(s, q){
+  if(!q) return esc(s);
+  const i=s.toLowerCase().indexOf(q.toLowerCase());
+  if(i<0) return esc(s);
+  return esc(s.slice(0,i))+`<mark>${esc(s.slice(i,i+q.length))}</mark>`+esc(s.slice(i+q.length));
+}
+async function runFileSearch(q){
+  const root=$('#treeRoot'), cnt=$('#fileSearchCnt');
+  q=(q||"").trim();
+  if(!q){ cnt.textContent=""; await loadTree(); return; }
+  const mySeq=++_searchSeq;
+  cnt.textContent="…";
+  root.innerHTML='<div class="node"><span class="nm sub">searching…</span></div>';
+  try{
+    const d=await api(`/api/tree/search?${repoQ()}&q=${encodeURIComponent(q)}`);
+    if(mySeq!==_searchSeq) return;
+    if(d.error){ root.innerHTML=`<div class="node"><span class="nm err">${esc(d.error)}</span></div>`; cnt.textContent=""; return; }
+    const hits=d.entries||[];
+    cnt.textContent = d.truncated ? `${hits.length}/${d.total}` : `${hits.length}`;
+    if(!hits.length){ root.innerHTML='<div class="node"><span class="nm sub">no matches</span></div>'; return; }
+    const frag=document.createDocumentFragment();
+    hits.forEach(h=>{
+      const dir=h.path.includes("/") ? h.path.slice(0, h.path.lastIndexOf("/")) : "";
+      const row=document.createElement('div');
+      row.className='fsr-hit'; row.dataset.path=h.path;
+      row.innerHTML=`<span class="nm">${_hlite(h.name, q)}</span>${dir?`<span class="dir mono">${_hlite(dir, q)}</span>`:''}`;
+      row.onclick=()=>{ openFile(h.path, null); };
+      frag.appendChild(row);
+    });
+    root.innerHTML=""; root.appendChild(frag);
+  }catch(e){
+    if(mySeq!==_searchSeq) return;
+    root.innerHTML=`<div class="node"><span class="nm err">${esc(e.message)}</span></div>`;
+    cnt.textContent="";
+  }
+}
+function _wireFileSearch(){
+  const inp=$('#fileSearch'); if(!inp) return;
+  inp.addEventListener('input', ()=>{
+    clearTimeout(_searchTimer);
+    const v=inp.value;
+    _searchTimer=setTimeout(()=>runFileSearch(v), 180);
+  });
+  inp.addEventListener('keydown', (e)=>{
+    if(e.key==='Escape'){ inp.value=''; runFileSearch(''); inp.blur(); }
+    else if(e.key==='Enter'){
+      const first=$('#treeRoot .fsr-hit');
+      if(first){ openFile(first.dataset.path, null); }
+    }
+  });
+  $('#fileSearchX').onclick=()=>{ inp.value=''; runFileSearch(''); inp.focus(); };
+  // Ctrl+P (or Cmd+P) focuses the search box.
+  document.addEventListener('keydown', (e)=>{
+    if((e.ctrlKey||e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase()==='p'){
+      e.preventDefault(); inp.focus(); inp.select();
+    }
+  });
 }
 function renderLevel(entries){
   const frag=document.createDocumentFragment();
@@ -1491,7 +1575,7 @@ async function restoreLastFile(){
     await openFile(path, null);
   }catch(_){}
 }
-(async()=>{ try{ await loadRepos(); await loadTree(); await restoreLastFile(); }catch(e){ setMsg(e.message,true); } })();
+(async()=>{ try{ _wireFileSearch(); await loadRepos(); await loadTree(); await restoreLastFile(); }catch(e){ setMsg(e.message,true); } })();
 </script>
 </body>
 </html>

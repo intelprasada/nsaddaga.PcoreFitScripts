@@ -611,6 +611,54 @@ def list_tree(repo: RepoInfo, rel: str) -> dict:
     return {"path": rel, "entries": dirs + files}
 
 
+def search_files(repo: RepoInfo, query: str, limit: int = 200) -> dict:
+    """Fuzzy-ish substring file search under the repo base, via `git ls-files`.
+
+    Query is case-insensitive. Matches on either the basename or the full
+    relative path. Basename hits rank above path-only hits. Results are
+    capped at `limit`.
+    """
+    q = (query or "").strip().lower()
+    if not q:
+        return {"query": query, "entries": [], "truncated": False}
+    # git ls-files honors sparse-checkout and .gitignore; runs at repo root.
+    # We restrict to the current base via pathspec.
+    args = ["ls-files", "-z"]
+    if repo.base:
+        args += ["--", repo.base]
+    r = repo._git(*args, timeout=20)
+    if r.returncode != 0:
+        return {"error": r.stderr.strip() or "git ls-files failed",
+                "query": query, "entries": []}
+    base_prefix = (repo.base.rstrip("/") + "/") if repo.base else ""
+    hits_name: list[dict] = []
+    hits_path: list[dict] = []
+    for full in r.stdout.split("\x00"):
+        if not full:
+            continue
+        # Strip the base prefix so `path` is relative to the browser root.
+        rel = full[len(base_prefix):] if base_prefix and full.startswith(base_prefix) else full
+        name = rel.rsplit("/", 1)[-1]
+        nl = name.lower(); pl = rel.lower()
+        if q in nl:
+            hits_name.append({"name": name, "path": rel, "type": "file",
+                              "lang": _LANG_BY_EXT.get(Path(name).suffix.lower(),
+                                                       "plaintext")})
+        elif q in pl:
+            hits_path.append({"name": name, "path": rel, "type": "file",
+                              "lang": _LANG_BY_EXT.get(Path(name).suffix.lower(),
+                                                       "plaintext")})
+        if len(hits_name) + len(hits_path) >= limit * 4:
+            break
+    hits_name.sort(key=lambda x: (len(x["name"]), x["name"].lower()))
+    hits_path.sort(key=lambda x: (len(x["path"]), x["path"].lower()))
+    entries = (hits_name + hits_path)[:limit]
+    total = len(hits_name) + len(hits_path)
+    return {"query": query, "entries": entries,
+            "n": len(entries), "total": total,
+            "truncated": total > len(entries)}
+
+
 def read_file(repo: RepoInfo, rel: str) -> dict:
     target = repo.safe_fs_path(rel)
     if target is None or not target.is_file():
@@ -1573,6 +1621,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/tree":
             self._json(list_tree(repo, q.get("path", [""])[0]))
+            return
+        if path == "/api/tree/search":
+            qs = q.get("q", [""])[0]
+            try:
+                lim = int(q.get("limit", ["200"])[0])
+            except ValueError:
+                lim = 200
+            self._json(search_files(repo, qs, limit=max(1, min(1000, lim))))
             return
         if path == "/api/tidb/status":
             tidb = _tidb_for_repo(repo, auto_refresh=False)
