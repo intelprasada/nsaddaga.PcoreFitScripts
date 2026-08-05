@@ -30,7 +30,7 @@ const numberFormatter = new Intl.NumberFormat("en-US");
 const formatNumber = (value) => numberFormatter.format(value);
 const formatPercent = (value) => `${Math.round(value * 100)}%`;
 const completionCountsLabel = (counts) =>
-  `${formatNumber(counts.open)} open / ${formatNumber(counts.complete)} completed`;
+  `${formatNumber(counts.open)}/${formatNumber(counts.complete)}`;
 const completionLabel = (counts) =>
   `${formatPercent(counts.completion)} · ${completionCountsLabel(counts)}`;
 const safe = (value, fallback = "—") => value || fallback;
