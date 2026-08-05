@@ -7,6 +7,8 @@ const state = {
   planStats: new Map(),
   monitoredPlans: new Set(),
   monitorDraft: new Set(),
+  projectIncludedTypes: new Set(),
+  planIncludedTypes: new Map(),
   refreshRequest: null,
   refreshPoller: null,
   apiConfig: null,
@@ -14,6 +16,7 @@ const state = {
   pollers: new Set(),
   editingItemPath: null,
   selectedPlan: "",
+  planOverviewName: "",
   dimension: "t",
   itemPage: 0,
   itemPageSize: 100,
@@ -115,8 +118,83 @@ function loadMonitoredPlans() {
   }
 }
 
+function functionalType(item) {
+  return item.t || "Unclassified";
+}
+
+function availableFunctionalTypes(items = state.items) {
+  return [...new Set(items.map(functionalType))].sort();
+}
+
+function loadTypeInclusions() {
+  const available = new Set(availableFunctionalTypes());
+  const savedProject = localStorage.getItem("valtrak-project-types-v1");
+  try {
+    const values = savedProject === null ? [...available] : JSON.parse(savedProject);
+    state.projectIncludedTypes = new Set(
+      Array.isArray(values) ? values.filter((type) => available.has(type)) : [...available]
+    );
+  } catch {
+    state.projectIncludedTypes = new Set(available);
+  }
+
+  try {
+    const savedPlans = JSON.parse(localStorage.getItem("valtrak-plan-types-v1") || "{}");
+    Object.entries(savedPlans).forEach(([planName, values]) => {
+      if (Array.isArray(values)) {
+        state.planIncludedTypes.set(
+          planName,
+          new Set(values.filter((type) => available.has(type)))
+        );
+      }
+    });
+  } catch {
+    state.planIncludedTypes.clear();
+  }
+}
+
+function planTypeSelection(planName, items) {
+  if (!state.planIncludedTypes.has(planName)) {
+    state.planIncludedTypes.set(planName, new Set(availableFunctionalTypes(items)));
+  }
+  return state.planIncludedTypes.get(planName);
+}
+
+function renderTypeInclusionControl(container, types, included, scope) {
+  const allIncluded = types.length > 0 && types.every((type) => included.has(type));
+  const includedCount = types.filter((type) => included.has(type)).length;
+  container.innerHTML = `
+    <div class="type-inclusion-heading">
+      <div>
+        <strong>Included item types</strong>
+        <span>${formatNumber(includedCount)} of ${formatNumber(types.length)} types included</span>
+      </div>
+      <button type="button" class="text-button" data-include-all-types="${scope}">
+        ${allIncluded ? "Clear all" : "Include all"}
+      </button>
+    </div>
+    <div class="type-inclusion-chips">
+      ${types.map((type) => `
+        <button type="button" class="type-inclusion-chip ${included.has(type) ? "is-included" : ""}"
+          data-type-scope="${scope}" data-item-type="${escapeAttribute(type)}"
+          aria-pressed="${included.has(type)}">${escapeHtml(type)}</button>
+      `).join("")}
+    </div>`;
+}
+
+function renderProjectTypeInclusions() {
+  renderTypeInclusionControl(
+    $("#project-type-inclusions"),
+    availableFunctionalTypes(),
+    state.projectIncludedTypes,
+    "project"
+  );
+}
+
 function overviewItems() {
-  return state.items.filter((item) => state.monitoredPlans.has(item.cp));
+  return state.items.filter(
+    (item) => state.monitoredPlans.has(item.cp) && state.projectIncludedTypes.has(functionalType(item))
+  );
 }
 
 function mostCommon(values) {
@@ -137,11 +215,17 @@ function summaryCard(label, value, detail, progress, icon) {
 
 function renderOverview() {
   const scopedItems = overviewItems();
-  const scopedPlans = [...state.planStats.values()].filter((plan) => state.monitoredPlans.has(plan.name));
+  const scopedPlans = [...state.planStats.values()]
+    .filter((plan) => state.monitoredPlans.has(plan.name))
+    .map((plan) => {
+      const items = plan.items.filter((item) => state.projectIncludedTypes.has(functionalType(item)));
+      return { ...plan, items, counts: statusCounts(items) };
+    });
   const counts = statusCounts(scopedItems);
   const planCount = scopedPlans.length;
   const owned = scopedPlans.filter((plan) => plan.owner !== "Unassigned").length;
   $("#monitored-count").textContent = state.monitoredPlans.size;
+  renderProjectTypeInclusions();
 
   $("#summary-cards").innerHTML = [
     summaryCard("Active completion", formatPercent(counts.completion), completionCountsLabel(counts), counts.completion, "✓"),
@@ -409,7 +493,10 @@ function renderPlanOverview(planName) {
   const stats = state.planStats.get(planName);
   if (!stats) return;
   const listed = state.plans.find((plan) => plan.vplan_name === planName);
-  const { counts, items } = stats;
+  const included = planTypeSelection(planName, stats.items);
+  const items = stats.items.filter((item) => included.has(functionalType(item)));
+  const counts = statusCounts(items);
+  state.planOverviewName = planName;
   const ownerGroups = new Map();
   items.filter((item) => item.o).forEach((item) => {
     if (!ownerGroups.has(item.o)) ownerGroups.set(item.o, []);
@@ -423,6 +510,12 @@ function renderPlanOverview(planName) {
   $("#plan-overview-title").textContent = planName;
   $("#plan-overview-subtitle").textContent =
     `${listed?.owner || stats.owner || "Unassigned"} · ${formatNumber(stats.references)} reference${stats.references === 1 ? "" : "s"} · ${formatNumber(counts.active)} active items`;
+  renderTypeInclusionControl(
+    $("#plan-type-inclusions"),
+    availableFunctionalTypes(stats.items),
+    included,
+    "plan"
+  );
   $("#plan-overview-content").innerHTML = `
     <div class="plan-overview-hero">
       <div class="plan-score" style="--plan-score:${counts.completion * 100}%">
@@ -649,14 +742,15 @@ function treeRow(item, depth, hasChildren, expanded, rollup) {
           aria-label="${expanded ? "Collapse" : "Expand"} ${escapeAttribute(item.n)}">${expanded ? "▾" : "▸"}</button>
         <span class="tree-label" title="${escapeAttribute(item.p)}">
           ${escapeHtml(item.n)}
-          <span class="tree-kind">
-            ${escapeHtml(item.st || item.k || "")}
-            <span class="tree-rollup">· ${completionCountsLabel(counts)} · ${itemContributionLabel(counts)}</span>
-          </span>
+          <span class="tree-kind">${escapeHtml(item.st || item.k || "")}</span>
         </span>
       </div>
       <span>${item.t ? `<span class="type-chip">${escapeHtml(item.t)}</span>` : "—"}</span>
       <span class="owner-cell" title="${escapeAttribute(item.o || "")}">${escapeHtml(item.o || "—")}</span>
+      <span class="tree-rollup" title="${formatNumber(counts.complete)} completed of ${formatNumber(counts.active)} active items">
+        <strong>${completionCountsLabel(counts)}</strong>
+        <small>${itemContributionLabel(counts)}</small>
+      </span>
       ${statusControl(item)}
     </div>`;
 }
@@ -902,6 +996,22 @@ function bindEvents() {
     $$("#dimension-tabs button").forEach((item) => item.setAttribute("aria-selected", item === button));
     renderTypeCompletion();
   });
+  $("#project-type-inclusions").addEventListener("click", (event) => {
+    const typeButton = event.target.closest("[data-item-type]");
+    const allButton = event.target.closest("[data-include-all-types]");
+    if (!typeButton && !allButton) return;
+    if (typeButton) {
+      const type = typeButton.dataset.itemType;
+      if (state.projectIncludedTypes.has(type)) state.projectIncludedTypes.delete(type);
+      else state.projectIncludedTypes.add(type);
+    } else {
+      const types = availableFunctionalTypes();
+      const allIncluded = types.every((type) => state.projectIncludedTypes.has(type));
+      state.projectIncludedTypes = new Set(allIncluded ? [] : types);
+    }
+    localStorage.setItem("valtrak-project-types-v1", JSON.stringify([...state.projectIncludedTypes]));
+    renderOverview();
+  });
 
   $("#attention-list").addEventListener("click", (event) => {
     const button = event.target.closest("[data-open-plan]");
@@ -1053,6 +1163,28 @@ function bindEvents() {
     if (event.target === $("#monitor-dialog")) $("#monitor-dialog").close();
   });
   $(".close-plan-overview").addEventListener("click", () => $("#plan-overview-dialog").close());
+  $("#plan-type-inclusions").addEventListener("click", (event) => {
+    const typeButton = event.target.closest("[data-item-type]");
+    const allButton = event.target.closest("[data-include-all-types]");
+    if (!typeButton && !allButton) return;
+    const stats = state.planStats.get(state.planOverviewName);
+    if (!stats) return;
+    const included = planTypeSelection(state.planOverviewName, stats.items);
+    if (typeButton) {
+      const type = typeButton.dataset.itemType;
+      if (included.has(type)) included.delete(type);
+      else included.add(type);
+    } else {
+      const types = availableFunctionalTypes(stats.items);
+      const allIncluded = types.every((type) => included.has(type));
+      state.planIncludedTypes.set(state.planOverviewName, new Set(allIncluded ? [] : types));
+    }
+    const saved = Object.fromEntries(
+      [...state.planIncludedTypes].map(([planName, values]) => [planName, [...values]])
+    );
+    localStorage.setItem("valtrak-plan-types-v1", JSON.stringify(saved));
+    renderPlanOverview(state.planOverviewName);
+  });
   $("#plan-overview-dialog").addEventListener("click", (event) => {
     if (event.target === $("#plan-overview-dialog")) $("#plan-overview-dialog").close();
   });
@@ -1114,6 +1246,7 @@ async function init() {
     });
     buildPlanStats();
     loadMonitoredPlans();
+    loadTypeInclusions();
     const preferred = [...state.planStats.values()]
       .sort((a, b) => b.counts.active - a.counts.active)[0]?.name;
     state.selectedPlan = preferred || state.plans[0]?.vplan_name || "";

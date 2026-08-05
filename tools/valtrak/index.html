@@ -103,6 +103,8 @@
             </div>
           </div>
 
+          <div id="project-type-inclusions" class="type-inclusion-control" aria-label="Project item type inclusion"></div>
+
           <div id="summary-cards" class="summary-grid" aria-label="Project summary"></div>
 
           <div class="overview-grid">
@@ -208,7 +210,7 @@
                 <button id="expand-tree" class="secondary-button">Expand all</button>
               </div>
               <div class="tree-header" aria-hidden="true">
-                <span>Plan item · hierarchy rollup</span><span>Type</span><span>Owner</span><span>Status</span>
+                <span>Plan item</span><span>Type</span><span>Owner</span><span>Rollup</span><span>Status</span>
               </div>
               <div id="plan-tree" class="plan-tree" role="tree" aria-label="Validation plan hierarchy"></div>
             </article>
@@ -283,6 +285,10 @@
       <strong>future</strong> or <strong>rejected</strong> remain visible but are excluded
       from the active denominator, matching the filtering semantics used by the internal
       coverage tooling.
+    </p>
+    <p>
+      Item-type inclusion is scoped independently: project selections recalculate the
+      project dashboard, while each plan overview keeps its own browser-saved selection.
     </p>
     <p>
       The dashboard reflects validation-plan workflow status (<code>i_status</code>), not
@@ -373,6 +379,7 @@
       </div>
       <button class="icon-button close-plan-overview" aria-label="Close">×</button>
     </div>
+    <div id="plan-type-inclusions" class="type-inclusion-control" aria-label="Plan item type inclusion"></div>
     <div id="plan-overview-content"></div>
   </dialog>
 

@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   status updates.
 - **ValTrak hierarchy rollups** — show open/completed descendant totals at
   every hierarchy level and alongside completion percentages.
+- **ValTrak item-type scopes** — independently include or exclude functional
+  item types from project and per-plan overview statistics.
 - **email-sender** — Tkinter GUI for composing and sending emails with optional
   file attachments; uses Python stdlib only (smtplib, tkinter).
 - **supercsv** — Tkinter CSV viewer with column filtering, row sorting, font/theme
