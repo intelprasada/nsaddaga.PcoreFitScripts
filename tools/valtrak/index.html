@@ -103,6 +103,8 @@
             </div>
           </div>
 
+          <div id="project-type-inclusions" class="type-inclusion-control" aria-label="Project item type inclusion"></div>
+
           <div id="summary-cards" class="summary-grid" aria-label="Project summary"></div>
 
           <div class="overview-grid">
@@ -285,6 +287,10 @@
       coverage tooling.
     </p>
     <p>
+      Item-type inclusion is scoped independently: project selections recalculate the
+      project dashboard, while each plan overview keeps its own browser-saved selection.
+    </p>
+    <p>
       The dashboard reflects validation-plan workflow status (<code>i_status</code>), not
       measured test or coverage grade. The queried aggregate plan did not expose populated
       grade values in this snapshot. Project totals are reference-weighted: when a plan is
@@ -373,6 +379,7 @@
       </div>
       <button class="icon-button close-plan-overview" aria-label="Close">×</button>
     </div>
+    <div id="plan-type-inclusions" class="type-inclusion-control" aria-label="Plan item type inclusion"></div>
     <div id="plan-overview-content"></div>
   </dialog>
 
