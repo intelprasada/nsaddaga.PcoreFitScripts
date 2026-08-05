@@ -26,6 +26,7 @@ Environment knobs (all optional):
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import glob as _glob
 import json
 import os
@@ -261,6 +262,38 @@ def _cache_read(kind: str, key: str):
         return json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+
+
+# In-process cache: merge_sha -> frozenset(shas M brought in via its second
+# parent). Populated on first access with a single `git rev-list M^1..M^2`
+# call. Keyed by (repo.root, msha). Files with many blame shas share the
+# same candidate merges, so this cache turns O(shas × merges) subprocess
+# spawns into O(unique merges) — a big win when the on-disk enrichment
+# cache is cold.
+_MERGE_INTRO_CACHE: dict[tuple[str, str], frozenset[str]] = {}
+
+def _merge_introduced_set(repo: "RepoInfo", msha: str) -> frozenset[str]:
+    key = (repo.root, msha)
+    hit = _MERGE_INTRO_CACHE.get(key)
+    if hit is not None:
+        return hit
+    r = subprocess.run(
+        ["git", "-C", repo.root, "--no-pager", "rev-list",
+         f"{msha}^1..{msha}^2"],
+        capture_output=True, text=True, timeout=30, check=False)
+    shas: frozenset[str]
+    if r.returncode == 0 and r.stdout:
+        shas = frozenset(ln.strip() for ln in r.stdout.splitlines() if ln.strip())
+    else:
+        shas = frozenset()
+    # Bound memory: cap at 8k entries, LRU-ish (dict insertion order).
+    if len(_MERGE_INTRO_CACHE) >= 8000:
+        try:
+            _MERGE_INTRO_CACHE.pop(next(iter(_MERGE_INTRO_CACHE)))
+        except StopIteration:
+            pass
+    _MERGE_INTRO_CACHE[key] = shas
+    return shas
 
 
 def _cache_write(kind: str, key: str, payload) -> None:
@@ -680,22 +713,14 @@ def enrich_commit(repo: RepoInfo, sha: str) -> dict:
             msha, _, msubj = ln.partition("\x00")
             if not _TURNIN_RE.search(msubj):
                 continue
-            # Verify this merge actually introduced our sha. A merge M
-            # introduces sha iff sha is reachable from M^2 but NOT from M^1
-            # — i.e. it came in via the second parent (the "incoming"
-            # branch). If the sha is already reachable from M^1, master
-            # had it before this merge, so M didn't introduce it.
-            r2 = subprocess.run(
-                ["git", "-C", repo.root, "merge-base", "--is-ancestor",
-                 sha, f"{msha}^2"],
-                capture_output=True, text=True, timeout=15, check=False)
-            if r2.returncode != 0:
-                continue
-            r1 = subprocess.run(
-                ["git", "-C", repo.root, "merge-base", "--is-ancestor",
-                 sha, f"{msha}^1"],
-                capture_output=True, text=True, timeout=15, check=False)
-            if r1.returncode == 0:
+            # Verify this merge actually introduced our sha via its second
+            # parent (i.e. sha ∈ M^1..M^2). We look this up in a per-merge
+            # in-process cache of "shas M brought in" so we don't fork
+            # `git merge-base` twice per (blame-sha, candidate-merge) pair.
+            # Files with many blame shas share the same candidate merges,
+            # so cache reuse across the enrichment batch is significant.
+            introduced = _merge_introduced_set(repo, msha)
+            if sha not in introduced:
                 continue
             pick, pick_subj = msha, msubj
             break
@@ -760,11 +785,19 @@ def build_context(repo: RepoInfo, rel: str, start: int, end: int,
     commits, authors_seen = [], {}
     turnins: dict[str, None] = {}
     hsds: dict[str, None] = {}
-    for sha in order:
-        if force:
+    if force:
+        for sha in order:
             _cache_path("commit", _ck(repo, sha)).unlink(missing_ok=True)
-        info = enrich_commit(repo, sha)
-        info = dict(info)
+    # Enrichment is git-subprocess-bound → parallelize across unique blame
+    # shas. The disk cache and the in-process merge-introduced-set cache
+    # (see _merge_introduced_set) both stay valid across threads.
+    infos: dict[str, dict] = {}
+    max_workers = min(16, max(4, len(order)))
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        for sha, info in zip(order, ex.map(lambda s: enrich_commit(repo, s), order)):
+            infos[sha] = info
+    for sha in order:
+        info = dict(infos[sha])
         info["lines"] = line_by_sha[sha]
         # Aggregate only the TIs that legitimately own this commit's changes.
         # See effective_turnins() for the intrinsic-vs-ancestry split.
@@ -1131,20 +1164,24 @@ def build_file_commits(repo: RepoInfo, rel: str, follow: bool = True,
     shas = list_file_commits(repo, rel, follow=follow)
     commits: list[dict] = []
     authors_seen: dict[str, str] = {}
-    for sha in shas:
-        if force:
+    if force:
+        for sha in shas:
             _cache_path("commit", _ck(repo, sha)).unlink(missing_ok=True)
+    # Parallelize enrichment + numstat lookups across commits (both are
+    # git-subprocess-bound). Same caching invariants as build_context.
+    def _one(sha: str) -> dict:
         info = dict(enrich_commit(repo, sha))
         add, dele, binary = _file_numstat(repo, sha, git_path)
         info["add"] = add
         info["del"] = dele
         info["binary"] = binary
-        # Overwrite raw turnins with the effective (owner) set — same rule
-        # used by build_context. This makes Commit Scope's per-row turnins
-        # match TI Scope's aggregation exactly (round-trip C1/D3).
         info["turnins"] = effective_turnins(info)
-        commits.append(info)
-        authors_seen.setdefault(info["author"], info.get("mail", ""))
+        return info
+    max_workers = min(16, max(4, len(shas))) if shas else 1
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        for info in ex.map(_one, shas):
+            commits.append(info)
+            authors_seen.setdefault(info["author"], info.get("mail", ""))
     idmap = resolve_identities(list(authors_seen.items()))
     for c in commits:
         c["idsid"] = idmap.get(c["author"], {}).get("idsid", "")
