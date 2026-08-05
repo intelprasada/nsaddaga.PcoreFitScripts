@@ -381,7 +381,7 @@ h2 { margin-bottom: 0; font-size: 1.08rem; letter-spacing: -0.015em; }
 .attention-row strong, .attention-row span, .owner-row strong, .owner-row span { display: block; }
 .attention-row strong, .owner-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.84rem; }
 .attention-row span, .owner-row span { margin-top: 0.1rem; color: var(--muted); font-size: 0.7rem; }
-.completion-badge { min-width: 50px; padding: 0.3rem 0.45rem; border-radius: 8px; background: var(--open-soft); color: #a55c13; text-align: center; font-size: 0.76rem; font-weight: 800; }
+.completion-badge { min-width: 50px; padding: 0.3rem 0.45rem; border-radius: 8px; background: var(--open-soft); color: #a55c13; text-align: center; font-size: 0.76rem; font-weight: 800; white-space: nowrap; }
 
 .segmented-control { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
 .segmented-control button { padding: 0.45rem 0.7rem; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 0.75rem; }
@@ -389,7 +389,7 @@ h2 { margin-bottom: 0; font-size: 1.08rem; letter-spacing: -0.015em; }
 .type-completion { display: grid; gap: 0.7rem; }
 .type-row {
   display: grid;
-  grid-template-columns: minmax(125px, 0.65fr) minmax(180px, 2.2fr) 64px 88px;
+  grid-template-columns: minmax(125px, 0.65fr) minmax(180px, 2.2fr) 64px 180px;
   align-items: center;
   gap: 0.8rem;
 }
@@ -436,6 +436,8 @@ h2 { margin-bottom: 0; font-size: 1.08rem; letter-spacing: -0.015em; }
 .plan-list-item strong, .plan-list-item span { display: block; }
 .plan-list-item strong { overflow: hidden; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; font-size: 0.82rem; }
 .plan-list-meta { display: flex !important; justify-content: space-between; gap: 0.5rem; margin-top: 0.25rem; color: var(--muted); font-size: 0.67rem; }
+.plan-list-meta span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-list-meta span:last-child { flex: 0 0 auto; white-space: nowrap; }
 .plan-detail { display: flex; flex-direction: column; }
 #plan-detail-header { padding: 1.15rem 1.2rem 0.9rem; border-bottom: 1px solid var(--line); }
 .detail-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
@@ -499,6 +501,7 @@ select, .secondary-button {
 .tree-expander.is-empty { visibility: hidden; }
 .tree-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-kind { display: block; color: var(--muted); font-size: 0.62rem; }
+.tree-rollup { color: #53627d; font-weight: 750; white-space: nowrap; }
 .owner-cell { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 
 .status-pill {
@@ -688,8 +691,9 @@ dialog p { color: var(--muted); }
 .plan-overview-section { padding: 1rem; border: 1px solid var(--line); border-radius: 13px; }
 .plan-overview-section h3 { margin-bottom: 0.75rem; font-size: 0.88rem; }
 .plan-breakdown { display: grid; gap: 0.55rem; }
-.plan-breakdown-row { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(100px, 1.4fr) 55px; align-items: center; gap: 0.6rem; font-size: 0.7rem; }
+.plan-breakdown-row { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(100px, 1.4fr) minmax(170px, auto); align-items: center; gap: 0.6rem; font-size: 0.7rem; }
 .plan-breakdown-row > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-breakdown-row strong { text-align: right; white-space: nowrap; }
 .plan-owner-list { display: grid; gap: 0.45rem; }
 .plan-owner-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--line); font-size: 0.72rem; }
 .plan-owner-row:last-child { border-bottom: 0; }

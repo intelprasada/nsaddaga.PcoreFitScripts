@@ -29,6 +29,10 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const numberFormatter = new Intl.NumberFormat("en-US");
 const formatNumber = (value) => numberFormatter.format(value);
 const formatPercent = (value) => `${Math.round(value * 100)}%`;
+const completionCountsLabel = (counts) =>
+  `${formatNumber(counts.open)} open / ${formatNumber(counts.complete)} completed`;
+const completionLabel = (counts) =>
+  `${formatPercent(counts.completion)} · ${completionCountsLabel(counts)}`;
 const safe = (value, fallback = "—") => value || fallback;
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
   month: "short",
@@ -137,7 +141,7 @@ function renderOverview() {
   $("#monitored-count").textContent = state.monitoredPlans.size;
 
   $("#summary-cards").innerHTML = [
-    summaryCard("Active completion", formatPercent(counts.completion), `${formatNumber(counts.active)} active items`, counts.completion, "✓"),
+    summaryCard("Active completion", formatPercent(counts.completion), completionCountsLabel(counts), counts.completion, "✓"),
     summaryCard("Validation plans", formatNumber(state.monitoredPlans.size), `${planCount} linked · ${owned} owned`, planCount ? owned / planCount : 0, "☷"),
     summaryCard("Complete items", formatNumber(counts.complete), `${formatNumber(counts.open)} remain open`, counts.active ? counts.complete / counts.active : 0, "●"),
     summaryCard("Active scope share", formatPercent(scopedItems.length ? counts.active / scopedItems.length : 0), `${formatNumber(counts.future + counts.rejected)} deferred · ${formatNumber(counts.none)} unclassified`, scopedItems.length ? counts.active / scopedItems.length : 0, "↗"),
@@ -145,8 +149,8 @@ function renderOverview() {
 
   const ring = $("#completion-ring");
   ring.style.setProperty("--completion", `${counts.completion * 100}%`);
-  ring.innerHTML = `<div class="ring-label"><strong>${formatPercent(counts.completion)}</strong><span>active complete</span></div>`;
-  ring.setAttribute("aria-label", `${formatPercent(counts.completion)} active completion`);
+  ring.innerHTML = `<div class="ring-label"><strong>${formatPercent(counts.completion)}</strong><span>${completionCountsLabel(counts)}</span></div>`;
+  ring.setAttribute("aria-label", `${formatPercent(counts.completion)} active completion, ${completionCountsLabel(counts)}`);
 
   const legend = [
     ["Complete", counts.complete, "var(--complete)"],
@@ -171,7 +175,7 @@ function renderOverview() {
         <strong>${escapeHtml(plan.name)}</strong>
         <span>${formatNumber(plan.counts.open)} open · ${escapeHtml(plan.owner)}</span>
       </button>
-      <span class="completion-badge">${formatPercent(plan.counts.completion)}</span>
+      <span class="completion-badge">${completionLabel(plan.counts)}</span>
     </div>`).join("") : `<div class="empty-state">No monitored plans currently need attention.</div>`;
 
   const ownerGroups = new Map();
@@ -188,7 +192,7 @@ function renderOverview() {
     <div class="owner-row">
       <div>
         <strong>${escapeHtml(owner.name)}</strong>
-        <span>${formatNumber(owner.count)} active items · ${formatPercent(owner.counts.completion)} complete</span>
+        <span>${completionLabel(owner.counts)}</span>
         <div class="owner-meter"><span style="width:${owner.count / maxOwnerCount * 100}%"></span></div>
       </div>
       <strong>${formatNumber(owner.counts.open)} open</strong>
@@ -240,7 +244,7 @@ function renderTypeCompletion(items = overviewItems()) {
           <span class="progress-open" style="width:${openWidth}%"></span>
         </div>
         <span class="type-score">${Math.round(completeWidth)}%</span>
-        <span class="type-count">${formatNumber(row.counts.complete)} / ${formatNumber(row.counts.active)}</span>
+        <span class="type-count">${completionCountsLabel(row.counts)}</span>
       </div>`;
   }).join("") : `<div class="empty-state">Choose at least one monitored plan to see completion breakdowns.</div>`;
 }
@@ -292,7 +296,7 @@ function renderPlanList() {
   $("#plan-count-label").textContent = `${plans.length} shown`;
   $("#plan-list").innerHTML = plans.map((plan) => {
     const stats = state.planStats.get(plan.vplan_name);
-    const completion = stats ? formatPercent(stats.counts.completion) : "Not linked";
+    const completion = stats ? completionLabel(stats.counts) : "Not linked";
     return `
       <button class="plan-list-item ${plan.vplan_name === state.selectedPlan ? "is-selected" : ""}"
         data-plan="${escapeAttribute(plan.vplan_name)}"
@@ -318,7 +322,7 @@ function renderPlanDetail({ resetTreeState = true } = {}) {
       ${items.length ? `<div class="detail-title-actions">
         <button type="button" class="secondary-button" id="refresh-plan-data">Refresh data</button>
         <button type="button" class="secondary-button" id="open-plan-overview">Plan overview</button>
-        <span class="completion-badge">${formatPercent(counts.completion)} complete</span>
+        <span class="completion-badge">${completionLabel(counts)}</span>
       </div>` : ""}
     </div>
     <div class="detail-metrics">
@@ -352,7 +356,7 @@ function renderMonitorPlans() {
   $("#monitor-plan-list").innerHTML = plans.length ? plans.map((plan) => {
     const stats = state.planStats.get(plan.vplan_name);
     const detail = stats
-      ? `${formatNumber(stats.items.length)} items · ${formatPercent(stats.counts.completion)} complete`
+      ? `${formatNumber(stats.items.length)} items · ${completionLabel(stats.counts)}`
       : "Not referenced in aggregate snapshot";
     return `
       <label class="monitor-plan-row ${stats ? "" : "is-unlinked"}">
@@ -393,7 +397,7 @@ function breakdownRows(items, key, fallback, limit = 8) {
           <span class="progress-complete" style="width:${percent}%"></span>
           <span class="progress-open" style="width:${100 - percent}%"></span>
         </div>
-        <strong>${Math.round(percent)}%</strong>
+        <strong>${Math.round(percent)}% · ${completionCountsLabel(row.counts)}</strong>
       </div>`;
     }).join("") || `<div class="empty-state">No active items in this category.</div>`;
 }
@@ -419,7 +423,7 @@ function renderPlanOverview(planName) {
   $("#plan-overview-content").innerHTML = `
     <div class="plan-overview-hero">
       <div class="plan-score" style="--plan-score:${counts.completion * 100}%">
-        <div><strong>${formatPercent(counts.completion)}</strong><span>active complete</span></div>
+        <div><strong>${formatPercent(counts.completion)}</strong><span>${completionCountsLabel(counts)}</span></div>
       </div>
       <div class="plan-status-grid">
         ${[
@@ -448,7 +452,7 @@ function renderPlanOverview(planName) {
         <div class="plan-owner-list">
           ${owners.length ? owners.map((owner) => `<div class="plan-owner-row">
             <span>${escapeHtml(owner.name)}</span>
-            <strong>${formatNumber(owner.counts.open)} open · ${formatPercent(owner.counts.completion)}</strong>
+            <strong>${completionLabel(owner.counts)}</strong>
           </div>`).join("") : `<div class="empty-state">No owners are assigned in this plan.</div>`}
         </div>
       </section>
@@ -559,6 +563,26 @@ function buildTree(items) {
   return roots;
 }
 
+function buildHierarchyRollups(roots) {
+  const rollups = new Map();
+  function visit(node) {
+    const counts = node.children.length
+      ? node.children.map(visit).reduce((total, child) => {
+        ["complete", "open", "future", "rejected", "none"].forEach((key) => {
+          total[key] += child[key];
+        });
+        total.active = total.complete + total.open;
+        total.completion = total.active ? total.complete / total.active : 0;
+        return total;
+      }, statusCounts([]))
+      : statusCounts([node.item]);
+    rollups.set(node.item.p, counts);
+    return counts;
+  }
+  roots.forEach(visit);
+  return rollups;
+}
+
 function renderTree() {
   const stats = state.planStats.get(state.selectedPlan);
   if (!stats) {
@@ -567,6 +591,8 @@ function renderTree() {
   }
   const query = $("#hierarchy-search").value.trim().toLowerCase();
   const status = $("#hierarchy-status").value;
+  const roots = buildTree(stats.items);
+  const rollups = buildHierarchyRollups(roots);
   const filtered = stats.items.filter((item) => {
     const matchesStatus = !status || item.s === status;
     const matchesQuery = !query || `${item.n} ${item.p} ${item.o || ""} ${item.t || ""}`.toLowerCase().includes(query);
@@ -577,7 +603,9 @@ function renderTree() {
     const limit = 1000;
     const rendered = filtered.slice(0, limit);
     if (!rendered.some((item) => item.p === state.treeFocusPath)) state.treeFocusPath = rendered[0]?.p || "";
-    const rows = rendered.map((item) => treeRow(item, Math.max(0, item.p.split("/").length - 2), false, false)).join("");
+    const rows = rendered.map((item) =>
+      treeRow(item, Math.max(0, item.p.split("/").length - 2), false, false, rollups.get(item.p))
+    ).join("");
     const note = filtered.length > limit
       ? `<div class="tree-limit">Showing ${formatNumber(limit)} of ${formatNumber(filtered.length)} matches. Refine your search.</div>`
       : "";
@@ -586,7 +614,6 @@ function renderTree() {
     return;
   }
 
-  const roots = buildTree(stats.items);
   if (!state.expanded.size) roots.forEach((root) => state.expanded.add(root.item.p));
   const visible = [];
   function walk(nodes, depth) {
@@ -600,7 +627,7 @@ function renderTree() {
   const rendered = visible.slice(0, limit);
   if (!rendered.some(({ node }) => node.item.p === state.treeFocusPath)) state.treeFocusPath = rendered[0]?.node.item.p || "";
   const rows = rendered.map(({ node, depth }) =>
-    treeRow(node.item, depth, node.children.length > 0, state.expanded.has(node.item.p))
+    treeRow(node.item, depth, node.children.length > 0, state.expanded.has(node.item.p), rollups.get(node.item.p))
   ).join("");
   const note = visible.length > limit
     ? `<div class="tree-limit">Showing ${formatNumber(limit)} of ${formatNumber(visible.length)} visible items. Collapse branches or search within the plan.</div>`
@@ -608,7 +635,7 @@ function renderTree() {
   $("#plan-tree").innerHTML = rows + note;
 }
 
-function treeRow(item, depth, hasChildren, expanded) {
+function treeRow(item, depth, hasChildren, expanded, rollup) {
   const expandedAttribute = hasChildren ? ` aria-expanded="${expanded}"` : "";
   return `
     <div class="tree-row" role="treeitem" tabindex="${item.p === state.treeFocusPath ? "0" : "-1"}"
@@ -618,7 +645,10 @@ function treeRow(item, depth, hasChildren, expanded) {
           aria-label="${expanded ? "Collapse" : "Expand"} ${escapeAttribute(item.n)}">${expanded ? "▾" : "▸"}</button>
         <span class="tree-label" title="${escapeAttribute(item.p)}">
           ${escapeHtml(item.n)}
-          <span class="tree-kind">${escapeHtml(item.st || item.k || "")}</span>
+          <span class="tree-kind">
+            ${escapeHtml(item.st || item.k || "")}
+            <span class="tree-rollup">· ${completionCountsLabel(rollup || statusCounts([item]))}</span>
+          </span>
         </span>
       </div>
       <span>${item.t ? `<span class="type-chip">${escapeHtml(item.t)}</span>` : "—"}</span>
