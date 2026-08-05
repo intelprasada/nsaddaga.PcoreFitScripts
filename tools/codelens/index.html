@@ -127,6 +127,29 @@
     justify-content:center;color:var(--muted);background:var(--bg);z-index:5}
   .blame-bar{width:4px !important;margin-left:2px}
 
+  /* top progress bar — visible whenever any api() call is in flight */
+  #topbar{position:fixed;top:0;left:0;right:0;height:3px;z-index:99999;
+    background:transparent;pointer-events:none;overflow:hidden}
+  #topbar.on::before{content:"";display:block;width:40%;height:100%;
+    background:linear-gradient(90deg, transparent, #4ea1ff 40%, #4ea1ff 60%, transparent);
+    animation:topbar-slide 1.1s linear infinite}
+  @keyframes topbar-slide{
+    0%  {transform:translateX(-100%)}
+    100%{transform:translateX(350%)}
+  }
+  /* generic loading placeholder */
+  .loading{display:flex;align-items:center;gap:8px;padding:14px 12px;
+    color:var(--muted);font-size:12px}
+  .loading .sp{width:12px;height:12px;border:2px solid var(--border);
+    border-top-color:#4ea1ff;border-radius:50%;animation:sp 0.8s linear infinite;
+    display:inline-block}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .loading-veil{position:relative}
+  .loading-veil::after{content:"loading…";position:absolute;inset:0;
+    background:rgba(20,22,28,0.55);color:#cbd5e1;font-size:12px;
+    display:flex;align-items:center;justify-content:center;
+    backdrop-filter:blur(1px);z-index:5}
+
   /* context pane */
   #ctxBody{padding:10px 12px}
   .sec{margin-bottom:16px}
@@ -284,6 +307,7 @@
 </style>
 </head>
 <body>
+<div id="topbar" aria-hidden="true"></div>
   <div id="top">
     <div class="brand">CodeLens<small>core/fe</small></div>
     <select id="repoSel" title="Repository"></select>
@@ -401,11 +425,18 @@ function authColor(key){
 }
 
 /* ---- API ---- */
+let _inflight=0;
+function _busyPlus(){ _inflight++; if(_inflight===1) document.getElementById('topbar').classList.add('on'); }
+function _busyMinus(){ _inflight=Math.max(0,_inflight-1); if(_inflight===0) document.getElementById('topbar').classList.remove('on'); }
 async function api(path){
-  const r=await fetch(path);
-  if(!r.ok){ let j={}; try{j=await r.json()}catch(e){}; throw new Error(j.error||r.statusText); }
-  return r.json();
+  _busyPlus();
+  try{
+    const r=await fetch(path);
+    if(!r.ok){ let j={}; try{j=await r.json()}catch(e){}; throw new Error(j.error||r.statusText); }
+    return await r.json();
+  } finally { _busyMinus(); }
 }
+const LOAD_HTML='<div class="loading"><span class="sp"></span><span>loading…</span></div>';
 function repoQ(){
   let q=`repo=${encodeURIComponent(curRepo)}`;
   // Always send base= so a server default that differs from the user's
@@ -500,6 +531,8 @@ async function openFile(path, node){
     $('#ctxPath').textContent=path;
     fileScopeCache={ti:null,cm:null,path:path};
     $('#tabCntTi').textContent="…"; $('#tabCntCm').textContent="…";
+    $('#tiScopeBody').innerHTML=LOAD_HTML;
+    $('#cmScopeBody').innerHTML=LOAD_HTML;
     // Kick off file-scope fetches in parallel; the active tab renders when data lands.
     loadFileScope(path);
     refreshContext(true);
@@ -536,6 +569,9 @@ async function refreshContext(force){
   const [start,end]=visibleRange();
   $('#ctxRangeHead').textContent=`lines ${start}–${end}`;
   $('#stRange').textContent=`visible ${start}–${end} (${end-start+1} lines)`;
+  // Replace stale context immediately so users don't see wrong data while
+  // the new range is being fetched.
+  $('#ctxBody').innerHTML=LOAD_HTML;
   try{
     const [bl,ctx]=await Promise.all([
       api(`/api/blame?${repoQ()}&path=${encodeURIComponent(curPath)}&start=${start}&end=${end}`),
