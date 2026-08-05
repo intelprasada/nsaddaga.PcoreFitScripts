@@ -316,16 +316,26 @@ def fetch_plan_rows(session, plan_name, allow_empty=False):
 
 def compact_aggregate_rows(rows):
     items = []
-    group = None
+    top_level_references = []
     for row in rows:
         item = compact_item(row)
         if not item.get("p") or not item.get("id") or not item.get("k"):
             raise RuntimeError("Aggregate refresh returned a row without path, ID, or kind")
-        if item["k"] == "Reference":
-            group = item.get("n")
-        if not group:
+        top_level = next(
+            (
+                reference
+                for reference in top_level_references
+                if item["p"] == reference["p"]
+                or item["p"].startswith(reference["p"] + "/")
+            ),
+            None,
+        )
+        if top_level is None and item["k"] == "Reference":
+            top_level = {"p": item["p"], "g": item.get("n")}
+            top_level_references.append(top_level)
+        if not top_level or not top_level.get("g"):
             raise RuntimeError("Aggregate hierarchy contains items before the first reference")
-        item["g"] = group
+        item["g"] = top_level["g"]
         items.append(item)
     if not any(item["k"] == "Reference" for item in items):
         raise RuntimeError("Aggregate refresh returned no plan references")
@@ -350,7 +360,6 @@ def project_plan_rows(plan_name, rows, reference):
             raise RuntimeError("Plan refresh returned a row without ID or kind")
         item["p"] = f"{reference['p']}/{direct_path[len(root_prefix):]}"
         if kind == "Reference":
-            group = item.get("n")
             item["k"] = kind
         else:
             item["k"] = kind if kind.startswith("Referenced ") else f"Referenced {kind}"
@@ -359,6 +368,20 @@ def project_plan_rows(plan_name, rows, reference):
         item["g"] = group
         projected.append(item)
     return projected
+
+
+def reject_destructive_empty_refresh(plan_name, rows, current_items, references):
+    if rows:
+        return
+    if any(
+        item.get("p", "").startswith(reference["p"] + "/")
+        for item in current_items
+        for reference in references
+    ):
+        raise RuntimeError(
+            f"vManager returned an empty hierarchy for '{plan_name}'; "
+            "the existing snapshot was preserved"
+        )
 
 
 def atomic_json_write(path, payload, mode=0o600):
@@ -759,6 +782,7 @@ def process_refresh_job(job_id):
         )
 
     rows = fetch_plan_rows(session, plan_name, allow_empty=True)
+    reject_destructive_empty_refresh(plan_name, rows, current_items, references)
     replacements = {
         reference["p"]: project_plan_rows(plan_name, rows, reference)
         for reference in references

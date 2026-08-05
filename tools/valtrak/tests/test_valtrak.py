@@ -54,6 +54,98 @@ def test_projects_native_rows_under_aggregate_reference(monkeypatch, tmp_path):
     assert projected[1]["g"] == "Plan A"
 
 
+def test_nested_references_keep_top_level_plan_group(monkeypatch, tmp_path):
+    module = load_valtrak(monkeypatch, tmp_path)
+    reference = {
+        "id": "reference-id",
+        "n": "Plan A",
+        "p": "Root/Plan A",
+        "k": "Reference",
+        "g": "Plan A",
+    }
+    rows = [
+        {
+            "element_id": "nested-reference-id",
+            "name": "Nested Plan",
+            "full_path": "Plan A/Nested Plan",
+            "vplan_element_kind": "Reference",
+        },
+        {
+            "element_id": "section-id",
+            "name": "Nested Feature",
+            "full_path": "Plan A/Nested Plan/Nested Feature",
+            "vplan_element_kind": "Section",
+        },
+    ]
+
+    projected = module.project_plan_rows("Plan A", rows, reference)
+
+    assert projected[1]["k"] == "Reference"
+    assert projected[1]["g"] == "Plan A"
+    assert projected[2]["k"] == "Referenced Section"
+    assert projected[2]["g"] == "Plan A"
+
+
+def test_aggregate_nested_references_keep_top_level_plan_group(monkeypatch, tmp_path):
+    module = load_valtrak(monkeypatch, tmp_path)
+    rows = [
+        {
+            "element_id": "plan-a-id",
+            "name": "Plan A",
+            "full_path": "Root/Plan A",
+            "vplan_element_kind": "Reference",
+        },
+        {
+            "element_id": "nested-id",
+            "name": "Nested Plan",
+            "full_path": "Root/Plan A/Nested Plan",
+            "vplan_element_kind": "Reference",
+        },
+        {
+            "element_id": "feature-id",
+            "name": "Feature",
+            "full_path": "Root/Plan A/Nested Plan/Feature",
+            "vplan_element_kind": "Referenced Section",
+        },
+        {
+            "element_id": "plan-b-id",
+            "name": "Plan B",
+            "full_path": "Root/Plan B",
+            "vplan_element_kind": "Reference",
+        },
+    ]
+
+    compacted = module.compact_aggregate_rows(rows)
+
+    assert [item["g"] for item in compacted] == [
+        "Plan A",
+        "Plan A",
+        "Plan A",
+        "Plan B",
+    ]
+
+
+def test_empty_refresh_preserves_existing_subtree(monkeypatch, tmp_path):
+    module = load_valtrak(monkeypatch, tmp_path)
+    references = [{"p": "Root/Plan A"}]
+    current_items = [
+        {"p": "Root/Plan A"},
+        {"p": "Root/Plan A/Feature"},
+    ]
+
+    try:
+        module.reject_destructive_empty_refresh(
+            "Plan A",
+            [],
+            current_items,
+            references,
+        )
+    except RuntimeError as error:
+        assert "existing snapshot was preserved" in str(error)
+    else:
+        raise AssertionError("empty refresh replaced a populated subtree")
+
+
 def test_rejects_direct_rows_from_another_plan(monkeypatch, tmp_path):
     module = load_valtrak(monkeypatch, tmp_path)
     reference = {
