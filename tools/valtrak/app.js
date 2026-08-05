@@ -742,14 +742,15 @@ function treeRow(item, depth, hasChildren, expanded, rollup) {
           aria-label="${expanded ? "Collapse" : "Expand"} ${escapeAttribute(item.n)}">${expanded ? "▾" : "▸"}</button>
         <span class="tree-label" title="${escapeAttribute(item.p)}">
           ${escapeHtml(item.n)}
-          <span class="tree-kind">
-            ${escapeHtml(item.st || item.k || "")}
-            <span class="tree-rollup">· ${completionCountsLabel(counts)} · ${itemContributionLabel(counts)}</span>
-          </span>
+          <span class="tree-kind">${escapeHtml(item.st || item.k || "")}</span>
         </span>
       </div>
       <span>${item.t ? `<span class="type-chip">${escapeHtml(item.t)}</span>` : "—"}</span>
       <span class="owner-cell" title="${escapeAttribute(item.o || "")}">${escapeHtml(item.o || "—")}</span>
+      <span class="tree-rollup" title="${formatNumber(counts.complete)} completed of ${formatNumber(counts.active)} active items">
+        <strong>${completionCountsLabel(counts)}</strong>
+        <small>${itemContributionLabel(counts)}</small>
+      </span>
       ${statusControl(item)}
     </div>`;
 }

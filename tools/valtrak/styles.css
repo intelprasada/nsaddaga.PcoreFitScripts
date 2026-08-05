@@ -484,7 +484,7 @@ select, .secondary-button {
 .secondary-button:hover { border-color: #b6c4e8; background: #f6f8ff; color: var(--brand); }
 .tree-header, .tree-row {
   display: grid;
-  grid-template-columns: minmax(280px, 1.7fr) minmax(100px, 0.55fr) minmax(100px, 0.5fr) 90px;
+  grid-template-columns: minmax(280px, 1.7fr) minmax(100px, 0.55fr) minmax(100px, 0.5fr) 130px 90px;
   gap: 0.75rem;
   align-items: center;
 }
@@ -524,7 +524,10 @@ select, .secondary-button {
 .tree-expander.is-empty { visibility: hidden; }
 .tree-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-kind { display: block; color: var(--muted); font-size: 0.62rem; }
-.tree-rollup { color: #53627d; font-weight: 750; white-space: nowrap; }
+.tree-rollup { color: #53627d; white-space: nowrap; }
+.tree-rollup strong, .tree-rollup small { display: block; }
+.tree-rollup strong { font-size: 0.72rem; }
+.tree-rollup small { margin-top: 0.08rem; color: var(--muted); font-size: 0.61rem; }
 .owner-cell { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 
 .status-pill {
@@ -789,7 +792,7 @@ dialog p { color: var(--muted); }
   .summary-grid { grid-template-columns: repeat(2, 1fr); }
   .overview-grid, .overview-grid.lower { grid-template-columns: 1fr; }
   .explorer-layout { grid-template-columns: 280px minmax(0, 1fr); }
-  .tree-header, .tree-row { grid-template-columns: minmax(260px, 1.7fr) minmax(90px, 0.55fr) 80px; }
+  .tree-header, .tree-row { grid-template-columns: minmax(220px, 1.7fr) minmax(80px, 0.55fr) 105px 74px; }
   .tree-header span:nth-child(3), .tree-row > :nth-child(3) { display: none; }
 }
 
@@ -826,6 +829,7 @@ dialog p { color: var(--muted); }
   .type-count { display: none; }
   .segmented-control { width: 100%; overflow-x: auto; }
   .segmented-control button { flex: 1; white-space: nowrap; }
-  .tree-header, .tree-row { grid-template-columns: minmax(210px, 1fr) 74px; }
-  .tree-header span:nth-child(2), .tree-row > :nth-child(2) { display: none; }
+  .tree-header, .tree-row { grid-template-columns: minmax(210px, 1fr) 110px 74px; }
+  .tree-header span:nth-child(2), .tree-header span:nth-child(3),
+  .tree-row > :nth-child(2), .tree-row > :nth-child(3) { display: none; }
 }
