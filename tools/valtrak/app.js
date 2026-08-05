@@ -27,10 +27,13 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
 const numberFormatter = new Intl.NumberFormat("en-US");
+const contributionFormatter = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 3 });
 const formatNumber = (value) => numberFormatter.format(value);
 const formatPercent = (value) => `${Math.round(value * 100)}%`;
 const completionCountsLabel = (counts) =>
-  `${formatNumber(counts.open)}/${formatNumber(counts.complete)}`;
+  `${formatNumber(counts.complete)}/${formatNumber(counts.active)}`;
+const itemContributionLabel = (counts) =>
+  `${counts.active ? contributionFormatter.format(100 / counts.active) : "0"}% each`;
 const completionLabel = (counts) =>
   `${formatPercent(counts.completion)} · ${completionCountsLabel(counts)}`;
 const safe = (value, fallback = "—") => value || fallback;
@@ -637,6 +640,7 @@ function renderTree() {
 
 function treeRow(item, depth, hasChildren, expanded, rollup) {
   const expandedAttribute = hasChildren ? ` aria-expanded="${expanded}"` : "";
+  const counts = rollup || statusCounts([item]);
   return `
     <div class="tree-row" role="treeitem" tabindex="${item.p === state.treeFocusPath ? "0" : "-1"}"
       aria-level="${depth + 1}"${expandedAttribute} data-path="${escapeAttribute(item.p)}">
@@ -647,7 +651,7 @@ function treeRow(item, depth, hasChildren, expanded, rollup) {
           ${escapeHtml(item.n)}
           <span class="tree-kind">
             ${escapeHtml(item.st || item.k || "")}
-            <span class="tree-rollup">· ${completionCountsLabel(rollup || statusCounts([item]))}</span>
+            <span class="tree-rollup">· ${completionCountsLabel(counts)} · ${itemContributionLabel(counts)}</span>
           </span>
         </span>
       </div>
