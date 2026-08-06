@@ -23,6 +23,7 @@ const state = {
   itemFilters: { query: "", status: "", type: "", subtype: "" },
   expanded: new Set(),
   treeExpandedAll: false,
+  treeInitialized: false,
   treeFocusPath: "",
 };
 
@@ -31,6 +32,7 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
 const numberFormatter = new Intl.NumberFormat("en-US");
 const contributionFormatter = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 3 });
+const structuralSubtypes = new Set(["TCD", "TPF"]);
 const formatNumber = (value) => numberFormatter.format(value);
 const formatPercent = (value) => `${Math.round(value * 100)}%`;
 const completionCountsLabel = (counts) =>
@@ -52,12 +54,17 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
 function statusCounts(items) {
   const counts = { complete: 0, open: 0, future: 0, rejected: 0, none: 0 };
   items.forEach((item) => {
+    if (!itemHasStatus(item)) return;
     const key = Object.hasOwn(counts, item.s) ? item.s : "none";
     counts[key] += 1;
   });
   counts.active = counts.complete + counts.open;
   counts.completion = counts.active ? counts.complete / counts.active : 0;
   return counts;
+}
+
+function itemHasStatus(item) {
+  return !structuralSubtypes.has(item.st);
 }
 
 function normalizedPlanCandidates(name) {
@@ -252,21 +259,39 @@ function renderOverview() {
       <strong>${formatNumber(count)}</strong>
     </div>`).join("");
 
-  const attention = scopedPlans
-    .filter((plan) => plan.counts.open > 0 && plan.counts.active >= 10)
-    .sort((a, b) => a.counts.completion - b.counts.completion || b.counts.open - a.counts.open)
-    .slice(0, 6);
-  $("#attention-list").innerHTML = attention.length ? attention.map((plan) => `
+  const scopedPlansByName = new Map(scopedPlans.map((plan) => [plan.name, plan]));
+  const selectedPlans = [...state.monitoredPlans]
+    .map((name) => {
+      const linked = scopedPlansByName.get(name);
+      if (linked) return linked;
+      const catalogPlan = state.plans.find((plan) => plan.vplan_name === name);
+      return {
+        name,
+        owner: catalogPlan?.owner || "Unassigned",
+        counts: null,
+      };
+    })
+    .sort((a, b) => {
+      if (Boolean(a.counts) !== Boolean(b.counts)) return a.counts ? -1 : 1;
+      if (a.counts && b.counts) {
+        const completionOrder = a.counts.completion - b.counts.completion;
+        if (completionOrder) return completionOrder;
+      }
+      return a.name.localeCompare(b.name);
+    });
+  $("#attention-list").innerHTML = selectedPlans.length ? selectedPlans.map((plan) => `
     <div class="attention-row">
       <button data-open-plan="${escapeAttribute(plan.name)}">
         <strong>${escapeHtml(plan.name)}</strong>
-        <span>${formatNumber(plan.counts.open)} open · ${escapeHtml(plan.owner)}</span>
+        <span>${plan.counts ? `${formatNumber(plan.counts.open)} open · ` : "Catalog only · "}${escapeHtml(plan.owner)}</span>
       </button>
-      <span class="completion-badge">${completionLabel(plan.counts)}</span>
-    </div>`).join("") : `<div class="empty-state">No monitored plans currently need attention.</div>`;
+      <span class="completion-badge ${plan.counts ? "" : "is-unlinked"}">${plan.counts ? completionLabel(plan.counts) : "Not linked"}</span>
+    </div>`).join("") : `<div class="empty-state">No validation plans are selected for monitoring.</div>`;
 
   const ownerGroups = new Map();
-  scopedItems.filter((item) => item.o && (item.s === "open" || item.s === "complete")).forEach((item) => {
+  scopedItems.filter((item) =>
+    itemHasStatus(item) && item.o && (item.s === "open" || item.s === "complete")
+  ).forEach((item) => {
     if (!ownerGroups.has(item.o)) ownerGroups.set(item.o, []);
     ownerGroups.get(item.o).push(item);
   });
@@ -352,6 +377,7 @@ function statusPill(status) {
 }
 
 function itemIsEditable(item) {
+  if (!itemHasStatus(item)) return false;
   if (!state.apiConfig?.writesEnabled) return false;
   if (!state.apiConfig.statuses.includes(item.s)) return false;
   if (!state.catalogPlans.has(item.cp)) return false;
@@ -359,6 +385,9 @@ function itemIsEditable(item) {
 }
 
 function statusControl(item) {
+  if (!itemHasStatus(item)) {
+    return `<span class="status-not-applicable" aria-label="Structural header; status not applicable">—</span>`;
+  }
   const pill = statusPill(item.s);
   if (!itemIsEditable(item)) return pill;
   return `
@@ -421,6 +450,7 @@ function renderPlanDetail({ resetTreeState = true } = {}) {
   if (resetTreeState) {
     state.expanded.clear();
     state.treeExpandedAll = false;
+    state.treeInitialized = false;
     state.treeFocusPath = "";
     $("#expand-tree").textContent = "Expand all";
   }
@@ -498,7 +528,7 @@ function renderPlanOverview(planName) {
   const counts = statusCounts(items);
   state.planOverviewName = planName;
   const ownerGroups = new Map();
-  items.filter((item) => item.o).forEach((item) => {
+  items.filter((item) => itemHasStatus(item) && item.o).forEach((item) => {
     if (!ownerGroups.has(item.o)) ownerGroups.set(item.o, []);
     ownerGroups.get(item.o).push(item);
   });
@@ -540,10 +570,6 @@ function renderPlanOverview(planName) {
         <div class="plan-breakdown">${breakdownRows(items, "st", "No hierarchy type")}</div>
       </section>
       <section class="plan-overview-section">
-        <h3>Evidence-port completion</h3>
-        <div class="plan-breakdown">${breakdownRows(items, "mp", "No evidence port")}</div>
-      </section>
-      <section class="plan-overview-section">
         <h3>Top owners</h3>
         <div class="plan-owner-list">
           ${owners.length ? owners.map((owner) => `<div class="plan-owner-row">
@@ -577,6 +603,42 @@ function openRefreshDialog(scope, plan = null) {
   $("#refresh-dialog").showModal();
 }
 
+function saveTreeStateForReload() {
+  sessionStorage.setItem("valtrak-tree-state-v1", JSON.stringify({
+    selectedPlan: state.selectedPlan,
+    expanded: [...state.expanded],
+    treeExpandedAll: state.treeExpandedAll,
+    treeFocusPath: state.treeFocusPath,
+  }));
+}
+
+function restoreTreeStateAfterReload() {
+  const saved = sessionStorage.getItem("valtrak-tree-state-v1");
+  sessionStorage.removeItem("valtrak-tree-state-v1");
+  if (!saved) return false;
+  try {
+    const value = JSON.parse(saved);
+    const stats = state.planStats.get(value.selectedPlan);
+    if (!stats) return false;
+    const availablePaths = new Set(stats.items.map((item) => item.p));
+    state.selectedPlan = value.selectedPlan;
+    state.expanded = new Set(
+      Array.isArray(value.expanded)
+        ? value.expanded.filter((path) => availablePaths.has(path))
+        : []
+    );
+    state.treeExpandedAll = Boolean(value.treeExpandedAll);
+    state.treeInitialized = true;
+    state.treeFocusPath = availablePaths.has(value.treeFocusPath)
+      ? value.treeFocusPath
+      : "";
+    $("#expand-tree").textContent = state.treeExpandedAll ? "Collapse all" : "Expand all";
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function pollRefreshJob(jobId) {
   if (state.refreshPoller === jobId) return;
   state.refreshPoller = jobId;
@@ -590,6 +652,7 @@ function pollRefreshJob(jobId) {
           "vplan-refresh-message",
           `${scope} refreshed successfully.`
         );
+        saveTreeStateForReload();
         location.reload();
         return;
       }
@@ -690,7 +753,7 @@ function renderTree() {
   const roots = buildTree(stats.items);
   const rollups = buildHierarchyRollups(roots);
   const filtered = stats.items.filter((item) => {
-    const matchesStatus = !status || item.s === status;
+    const matchesStatus = !status || (itemHasStatus(item) && item.s === status);
     const matchesQuery = !query || `${item.n} ${item.p} ${item.o || ""} ${item.t || ""}`.toLowerCase().includes(query);
     return matchesStatus && matchesQuery;
   });
@@ -710,7 +773,10 @@ function renderTree() {
     return;
   }
 
-  if (!state.expanded.size) roots.forEach((root) => state.expanded.add(root.item.p));
+  if (!state.treeInitialized) {
+    roots.forEach((root) => state.expanded.add(root.item.p));
+    state.treeInitialized = true;
+  }
   const visible = [];
   function walk(nodes, depth) {
     nodes.forEach((node) => {
@@ -766,7 +832,7 @@ function filteredItems() {
   const { query, status, type, subtype } = state.itemFilters;
   const normalized = query.trim().toLowerCase();
   return state.items.filter((item) => {
-    if (status && item.s !== status) return false;
+    if (status && (!itemHasStatus(item) || item.s !== status)) return false;
     if (type && item.t !== type) return false;
     if (subtype && item.st !== subtype) return false;
     return !normalized || `${item.n} ${item.p} ${item.o || ""} ${item.team || ""}`.toLowerCase().includes(normalized);
@@ -1250,10 +1316,11 @@ async function init() {
     const preferred = [...state.planStats.values()]
       .sort((a, b) => b.counts.active - a.counts.active)[0]?.name;
     state.selectedPlan = preferred || state.plans[0]?.vplan_name || "";
+    const restoredTreeState = restoreTreeStateAfterReload();
 
     renderOverview();
     renderPlanList();
-    renderPlanDetail();
+    renderPlanDetail({ resetTreeState: !restoredTreeState });
     populateFilters();
     renderItemTable();
     bindEvents();

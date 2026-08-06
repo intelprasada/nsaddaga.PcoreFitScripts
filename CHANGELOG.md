@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every hierarchy level and alongside completion percentages.
 - **ValTrak item-type scopes** — independently include or exclude functional
   item types from project and per-plan overview statistics.
+- **ValTrak monitored scope** — show the complete selected validation-plan list
+  on the overview, including catalog-only plans.
 - **email-sender** — Tkinter GUI for composing and sending emails with optional
   file attachments; uses Python stdlib only (smtplib, tkinter).
 - **supercsv** — Tkinter CSV viewer with column filtering, row sorting, font/theme
@@ -33,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **ValTrak** — preserve hierarchy expansion and focus after a successful
   status update.
+- **ValTrak refreshes** — retain the top-level plan identity across nested
+  references and reject empty responses that would erase an existing subtree.
+- **ValTrak explorer** — retain valid hierarchy expansion and focus state after
+  refreshes and status updates.
+- **ValTrak structural headers** — treat TCD and TPF rows as non-status-bearing
+  hierarchy nodes and exclude them from status and unclassified totals.
 
 ## [1.0.0] - 2026-04-14
 
