@@ -347,13 +347,14 @@ def compact_aggregate_rows(rows):
     return items
 
 
-def project_plan_rows(plan_name, rows, reference):
+def project_plan_rows(plan_name, rows, reference, source_plan_name=None):
     projected = [reference]
-    root_prefix = f"{plan_name}/"
+    source_plan_name = source_plan_name or plan_name
+    root_prefix = f"{source_plan_name}/"
     group = reference["g"]
     for row in rows:
         direct_path = row.get("full_path", "")
-        if direct_path == plan_name:
+        if direct_path == source_plan_name:
             continue
         if not direct_path.startswith(root_prefix):
             raise RuntimeError(
@@ -373,6 +374,48 @@ def project_plan_rows(plan_name, rows, reference):
         item["g"] = group
         projected.append(item)
     return projected
+
+
+def resolve_refresh_root(plan_name, rows, current_items, references):
+    roots = {
+        row.get("full_path", "").split("/", 1)[0]
+        for row in rows
+        if row.get("full_path")
+    }
+    if not roots:
+        return plan_name
+    if len(roots) != 1:
+        raise RuntimeError(
+            f"vManager returned multiple hierarchy roots while refreshing '{plan_name}'"
+        )
+    source_plan_name = roots.pop()
+    if source_plan_name == plan_name:
+        return plan_name
+
+    current_ids = {
+        item.get("id")
+        for item in current_items
+        if item.get("id")
+        and any(
+            item.get("p", "").startswith(reference["p"] + "/")
+            for reference in references
+        )
+    }
+    incoming_ids = {
+        row.get("element_id")
+        for row in rows
+        if row.get("element_id")
+    }
+    if not current_ids.intersection(incoming_ids):
+        first_path = next(
+            row.get("full_path", "")
+            for row in rows
+            if row.get("full_path")
+        )
+        raise RuntimeError(
+            f"Unexpected path '{first_path}' while refreshing '{plan_name}'"
+        )
+    return source_plan_name
 
 
 def reject_destructive_empty_refresh(plan_name, rows, current_items, references):
@@ -788,8 +831,19 @@ def process_refresh_job(job_id):
 
     rows = fetch_plan_rows(session, plan_name, allow_empty=True)
     reject_destructive_empty_refresh(plan_name, rows, current_items, references)
+    source_plan_name = resolve_refresh_root(
+        plan_name,
+        rows,
+        current_items,
+        references,
+    )
     replacements = {
-        reference["p"]: project_plan_rows(plan_name, rows, reference)
+        reference["p"]: project_plan_rows(
+            plan_name,
+            rows,
+            reference,
+            source_plan_name,
+        )
         for reference in references
     }
     refreshed_items = []
