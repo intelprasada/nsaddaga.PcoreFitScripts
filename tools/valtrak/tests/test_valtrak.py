@@ -146,6 +146,15 @@ def test_empty_refresh_preserves_existing_subtree(monkeypatch, tmp_path):
         raise AssertionError("empty refresh replaced a populated subtree")
 
 
+def test_structural_headers_do_not_have_status(monkeypatch, tmp_path):
+    module = load_valtrak(monkeypatch, tmp_path)
+
+    assert not module.item_has_status({"st": "TCD", "s": "open"})
+    assert not module.item_has_status({"st": "TPF", "s": "complete"})
+    assert module.item_has_status({"st": "TC", "s": "open"})
+    assert module.item_has_status({"k": "Referenced Section", "s": "open"})
+
+
 def test_rejects_direct_rows_from_another_plan(monkeypatch, tmp_path):
     module = load_valtrak(monkeypatch, tmp_path)
     reference = {

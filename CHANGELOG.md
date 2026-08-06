@@ -39,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   references and reject empty responses that would erase an existing subtree.
 - **ValTrak explorer** — retain valid hierarchy expansion and focus state after
   refreshes and status updates.
+- **ValTrak structural headers** — treat TCD and TPF rows as non-status-bearing
+  hierarchy nodes and exclude them from status and unclassified totals.
 
 ## [1.0.0] - 2026-04-14
 

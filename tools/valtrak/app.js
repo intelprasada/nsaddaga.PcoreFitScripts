@@ -32,6 +32,7 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
 const numberFormatter = new Intl.NumberFormat("en-US");
 const contributionFormatter = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 3 });
+const structuralSubtypes = new Set(["TCD", "TPF"]);
 const formatNumber = (value) => numberFormatter.format(value);
 const formatPercent = (value) => `${Math.round(value * 100)}%`;
 const completionCountsLabel = (counts) =>
@@ -53,12 +54,17 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
 function statusCounts(items) {
   const counts = { complete: 0, open: 0, future: 0, rejected: 0, none: 0 };
   items.forEach((item) => {
+    if (!itemHasStatus(item)) return;
     const key = Object.hasOwn(counts, item.s) ? item.s : "none";
     counts[key] += 1;
   });
   counts.active = counts.complete + counts.open;
   counts.completion = counts.active ? counts.complete / counts.active : 0;
   return counts;
+}
+
+function itemHasStatus(item) {
+  return !structuralSubtypes.has(item.st);
 }
 
 function normalizedPlanCandidates(name) {
@@ -283,7 +289,9 @@ function renderOverview() {
     </div>`).join("") : `<div class="empty-state">No validation plans are selected for monitoring.</div>`;
 
   const ownerGroups = new Map();
-  scopedItems.filter((item) => item.o && (item.s === "open" || item.s === "complete")).forEach((item) => {
+  scopedItems.filter((item) =>
+    itemHasStatus(item) && item.o && (item.s === "open" || item.s === "complete")
+  ).forEach((item) => {
     if (!ownerGroups.has(item.o)) ownerGroups.set(item.o, []);
     ownerGroups.get(item.o).push(item);
   });
@@ -369,6 +377,7 @@ function statusPill(status) {
 }
 
 function itemIsEditable(item) {
+  if (!itemHasStatus(item)) return false;
   if (!state.apiConfig?.writesEnabled) return false;
   if (!state.apiConfig.statuses.includes(item.s)) return false;
   if (!state.catalogPlans.has(item.cp)) return false;
@@ -376,6 +385,9 @@ function itemIsEditable(item) {
 }
 
 function statusControl(item) {
+  if (!itemHasStatus(item)) {
+    return `<span class="status-not-applicable" aria-label="Structural header; status not applicable">—</span>`;
+  }
   const pill = statusPill(item.s);
   if (!itemIsEditable(item)) return pill;
   return `
@@ -516,7 +528,7 @@ function renderPlanOverview(planName) {
   const counts = statusCounts(items);
   state.planOverviewName = planName;
   const ownerGroups = new Map();
-  items.filter((item) => item.o).forEach((item) => {
+  items.filter((item) => itemHasStatus(item) && item.o).forEach((item) => {
     if (!ownerGroups.has(item.o)) ownerGroups.set(item.o, []);
     ownerGroups.get(item.o).push(item);
   });
@@ -745,7 +757,7 @@ function renderTree() {
   const roots = buildTree(stats.items);
   const rollups = buildHierarchyRollups(roots);
   const filtered = stats.items.filter((item) => {
-    const matchesStatus = !status || item.s === status;
+    const matchesStatus = !status || (itemHasStatus(item) && item.s === status);
     const matchesQuery = !query || `${item.n} ${item.p} ${item.o || ""} ${item.t || ""}`.toLowerCase().includes(query);
     return matchesStatus && matchesQuery;
   });
@@ -824,7 +836,7 @@ function filteredItems() {
   const { query, status, type, subtype } = state.itemFilters;
   const normalized = query.trim().toLowerCase();
   return state.items.filter((item) => {
-    if (status && item.s !== status) return false;
+    if (status && (!itemHasStatus(item) || item.s !== status)) return false;
     if (type && item.t !== type) return false;
     if (subtype && item.st !== subtype) return false;
     return !normalized || `${item.n} ${item.p} ${item.o || ""} ${item.team || ""}`.toLowerCase().includes(normalized);

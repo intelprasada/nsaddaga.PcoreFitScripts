@@ -47,6 +47,7 @@ SERVER = os.environ.get("VALTRAK_VMGR_SERVER", "scygrnit337.sc.intel.com:8090")
 PROJECT = os.environ.get("VALTRAK_PROJECT", "jnc")
 ROOT_PLAN = os.environ.get("VALTRAK_ROOT_PLAN", "JNC All vplans")
 ALLOWED_STATUSES = {"open", "complete", "future", "rejected"}
+STRUCTURAL_SUBTYPES = {"TCD", "TPF"}
 CSRF_TOKEN = secrets.token_urlsafe(32)
 ACCESS_TOKEN = ""
 REQUIRE_AUTH = False
@@ -217,6 +218,10 @@ def effective_status(item):
     with OVERRIDES_LOCK:
         override = STATUS_OVERRIDES.get(item["p"])
     return override["status"] if override else item.get("s")
+
+
+def item_has_status(item):
+    return item.get("st") not in STRUCTURAL_SUBTYPES
 
 
 def record_verified_status(item, plan_name, status):
@@ -1096,6 +1101,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             item = ITEMS_BY_PATH.get(item_path)
         if item is None:
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "Unknown validation item"})
+            return
+        if not item_has_status(item):
+            self.send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": f"{item.get('st')} structural headers do not have status"},
+            )
             return
         if target_status not in ALLOWED_STATUSES:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": "Unsupported target status"})
