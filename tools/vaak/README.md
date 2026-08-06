@@ -75,8 +75,9 @@ session is busy, **+ Add to queue** to stage items and flush them later.
 - **Left nav bar** — one row per tmux session, with a busy/ready status dot and
   a badge showing how many drafts are queued for it. Click to select; it
   auto-rescans every few seconds. Sessions not started inside tmux don't appear.
-- **Send now →** — types the box into the selected session and (optionally)
-  presses Enter immediately.
+- **Send now →** — when the selected session is ready, types the box and always
+  presses Enter. When it is busy, adds the prompt to that session's queue
+  instead of typing into an active response.
 - **+ Add to queue** — stages the box as a draft for the selected session. Works
   even while that session is **busy**, so you can line up your next prompts while
   the CLI is still responding.
@@ -111,8 +112,8 @@ survive a Vaak restart and re-associate with the same session.
 | **⧉ Copy attach command** | Header button and per-row shortcut copy `tmux attach -t <session>` to the clipboard so you can attach from any Linux terminal in a couple of keystrokes. |
 | **🕓 History** | Header button opens a modal listing the last N prompts you sent from Vaak (direct sends, broadcasts, queue flushes, autoflush). N is configurable in the modal (persisted in this browser) and capped by `VAAK_HISTORY_MAX`. Each entry has **Use** (load into the prompt box), **+ Queue**, **Send now**, and **Copy**. A search box filters client-side; a "Only current session" toggle scopes the fetch server-side. |
 | **Resizable panes** | Drag the labeled handle directly below the prompt to resize the prompt, or the thin gutters beside the sidebar, below the terminal mirror, and above the log. Double-click a gutter to reset it. Sizes are persisted in this browser (`vaakMsgH`, `vaakNavW`, `vaakPaneH`, `vaakLogH`), so they survive tab reloads and Vaak restarts. |
-| **Enter = send now** | Enter sends the box to the selected session immediately (Shift+Enter inserts a newline). |
-| **Submit in CLI** | Off = only type the text into the CLI, don't press Enter — lets you stitch several dictations into one prompt, then submit manually. |
+| **Enter = send now** | Enter uses the same behavior as the button: ready → type + Enter; busy → add to queue. Shift+Enter inserts a newline. |
+| **Submit queued / broadcast** | Controls whether queue flushes and broadcasts press Enter after typing. **Send now** always presses Enter when ready. |
 | **^C / Esc** | Send a real Ctrl-C (interrupt) or Escape key press to the selected session — e.g. to cancel a running command or stop the CLI's current action. |
 | **Keep focus** | Refocus the box after sending so you can immediately dictate again. |
 | **Alert when ready** | Flash title + beep + toast when a watched session changes busy → ready. Persisted in this browser. |
@@ -164,6 +165,7 @@ Everything below returns JSON.
 | `POST /api/history/clear` | Body `{token}` — deletes every recorded prompt (in-memory + on-disk). |
 | `POST /api/broadcast` | Body `{token, text, targets:[names], submit?}` — sends `text` to every target; returns per-target results. |
 | `POST /api/send` | `{token, text, target?, submit?}` — types `text` into `target` now. |
+| `POST /api/send_now` | `{token, text, target?}` — if ready, types `text` and always presses Enter; if busy, adds it to that session's queue. |
 | `POST /api/drafts/add` | `{token, session, text}` — enqueue a draft. |
 | `POST /api/drafts/update` | `{token, session, id, text}` — edit a draft. |
 | `POST /api/drafts/delete` | `{token, session, id}` — remove a draft. |
@@ -223,9 +225,10 @@ messages, PRs, chat logs outside this repo, or anywhere public.
 - The **token gates every send**, so someone on the network can't inject into
   your terminal without the URL. Treat the URL like a password; set a strong
   `VAAK_TOKEN`.
-- Keys are sent with `tmux send-keys -l` (**literal**), so spoken words like
-  "enter" or "control c" are typed as text, never interpreted as key presses —
-  only the explicit submit option presses Enter.
+- Prompt text is sent with `tmux send-keys -l` (**literal**), so spoken words
+  like "enter" or "control c" are typed as text, never interpreted as key
+  presses. **Send now** emits one explicit Enter after the text when ready;
+  queue/broadcast Enter behavior follows their checkbox.
 - Queued sends clear the current input line with `C-u` before typing each draft,
   then wait for a busy marker (or a pane change for plain shell targets) before
   sending the next draft. This prevents auto-flush / send-all items from

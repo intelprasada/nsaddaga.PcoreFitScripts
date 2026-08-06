@@ -520,6 +520,29 @@ def inject(target: str, text: str, submit: bool) -> tuple[bool, str]:
     return True, flat
 
 
+def send_now_or_queue(target: str, text: str) -> dict:
+    """Submit immediately when ready; queue the prompt when the target is busy."""
+    if not text.strip():
+        return {"ok": False, "error": "empty text"}
+    status = session_status(target)
+    if status == "gone":
+        return {"ok": False, "error": f"tmux target '{target}' not found"}
+    if status == "busy":
+        item = add_draft(target, text)
+        return {
+            "ok": True,
+            "queued": True,
+            "item": item,
+            "drafts": get_drafts(target),
+        }
+    # "Send now" always means submit the prompt, so Enter is unconditional.
+    ok, info = inject(target, text, True)
+    return (
+        {"ok": True, "queued": False, "injected": info}
+        if ok else {"ok": False, "error": info}
+    )
+
+
 def _clear_input_line(target: str) -> tuple[bool, str]:
     r = subprocess.run(["tmux", "send-keys", "-t", target, "C-u"],
                        capture_output=True, text=True, check=False)
@@ -1218,7 +1241,7 @@ h4{margin:6px 0 0;font-size:12px;letter-spacing:.5px;text-transform:uppercase;co
       <button class="sec" id="ctrlC" title="Send Ctrl-C (interrupt) to the selected session">^C</button>
       <button class="sec" id="escKey" title="Send Esc to the selected session">Esc</button>
       <label><input type="checkbox" id="enterSends" checked> Enter = send now</label>
-      <label><input type="checkbox" id="submit" checked> Submit in CLI</label>
+      <label><input type="checkbox" id="submit" checked> Submit queued / broadcast</label>
       <label><input type="checkbox" id="keep" checked> Keep focus</label>
       <label><input type="checkbox" id="readyAlert" checked> Alert when ready</label>
     </div>
@@ -1642,9 +1665,16 @@ async function sendNow(){
   if(!sel){logline('pick a session first','err');return;}
   const text=msg.value;if(!text.trim())return;
   try{
-    const d=await api('/api/send',{text,target:sel,submit:$('#submit').checked});
-    if(d.ok){logline('sent now \u2192 '+sel+': '+d.injected,'ok');msg.value='';}
-    else logline('FAILED: '+d.error,'err');
+    const d=await api('/api/send_now',{text,target:sel});
+    if(d.ok){
+      if(d.queued){
+        logline(sel+' is busy \u2014 added prompt to queue','ok');
+        renderQueue(d.drafts||[]);
+      }else{
+        logline('sent now + Enter \u2192 '+sel+': '+d.injected,'ok');
+      }
+      msg.value='';
+    }else logline('FAILED: '+d.error,'err');
   }catch(e){logline('send error: '+e.message,'err');}
   if($('#keep').checked)msg.focus();
   loadSessions();
@@ -1951,8 +1981,13 @@ function histRender(){
     };
     const sb=d.querySelector('[data-a=send]');
     if(!sb.disabled)sb.onclick=async()=>{
-      try{const r=await api('/api/send',{text:it.text,target:sel,submit:$('#submit').checked});
-        if(r.ok){toast('Sent to '+sel);logline('re-sent from history \u2192 '+sel,'ok');loadSessions();histLoad();}
+      try{const r=await api('/api/send_now',{text:it.text,target:sel});
+        if(r.ok){
+          if(r.queued){toast('Session busy \u2014 queued for '+sel);renderQueue(r.drafts||[]);}
+          else toast('Sent + Enter to '+sel);
+          logline((r.queued?'queued':'re-sent from history + Enter')+' \u2192 '+sel,'ok');
+          loadSessions();histLoad();
+        }
         else logline('re-send failed: '+r.error,'err');
       }catch(e){logline('re-send error: '+e.message,'err');}
     };
@@ -2259,6 +2294,11 @@ class Handler(BaseHTTPRequestHandler):
                               bool(body.get("submit", True)))
             self._json({"ok": ok, "injected": info} if ok
                        else {"ok": False, "error": info})
+            return
+
+        if p == "/api/send_now":
+            target = str(body.get("target") or TARGET)
+            self._json(send_now_or_queue(target, str(body.get("text", ""))))
             return
 
         if p == "/api/broadcast":
