@@ -253,18 +253,34 @@ function renderOverview() {
       <strong>${formatNumber(count)}</strong>
     </div>`).join("");
 
-  const attention = scopedPlans
-    .filter((plan) => plan.counts.open > 0 && plan.counts.active >= 10)
-    .sort((a, b) => a.counts.completion - b.counts.completion || b.counts.open - a.counts.open)
-    .slice(0, 6);
-  $("#attention-list").innerHTML = attention.length ? attention.map((plan) => `
+  const scopedPlansByName = new Map(scopedPlans.map((plan) => [plan.name, plan]));
+  const selectedPlans = [...state.monitoredPlans]
+    .map((name) => {
+      const linked = scopedPlansByName.get(name);
+      if (linked) return linked;
+      const catalogPlan = state.plans.find((plan) => plan.vplan_name === name);
+      return {
+        name,
+        owner: catalogPlan?.owner || "Unassigned",
+        counts: null,
+      };
+    })
+    .sort((a, b) => {
+      if (Boolean(a.counts) !== Boolean(b.counts)) return a.counts ? -1 : 1;
+      if (a.counts && b.counts) {
+        const completionOrder = a.counts.completion - b.counts.completion;
+        if (completionOrder) return completionOrder;
+      }
+      return a.name.localeCompare(b.name);
+    });
+  $("#attention-list").innerHTML = selectedPlans.length ? selectedPlans.map((plan) => `
     <div class="attention-row">
       <button data-open-plan="${escapeAttribute(plan.name)}">
         <strong>${escapeHtml(plan.name)}</strong>
-        <span>${formatNumber(plan.counts.open)} open · ${escapeHtml(plan.owner)}</span>
+        <span>${plan.counts ? `${formatNumber(plan.counts.open)} open · ` : "Catalog only · "}${escapeHtml(plan.owner)}</span>
       </button>
-      <span class="completion-badge">${completionLabel(plan.counts)}</span>
-    </div>`).join("") : `<div class="empty-state">No monitored plans currently need attention.</div>`;
+      <span class="completion-badge ${plan.counts ? "" : "is-unlinked"}">${plan.counts ? completionLabel(plan.counts) : "Not linked"}</span>
+    </div>`).join("") : `<div class="empty-state">No validation plans are selected for monitoring.</div>`;
 
   const ownerGroups = new Map();
   scopedItems.filter((item) => item.o && (item.s === "open" || item.s === "complete")).forEach((item) => {
