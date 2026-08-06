@@ -257,32 +257,138 @@ def roll_to_next_week(
     nxt = cur + 1
     # 1. Inject missing IDs first so both files share the canonical IDs.
     patched_source, _ = inject_missing_ids(md)
-    # 2. New (next-week) file: drop only top-level done blocks. Done ARs
-    #    that live under an OPEN parent ride along with their parent so
-    #    the active week keeps the audit trail of completed sub-items
-    #    against still-open work (per user request, #260).
-    #    A "done" parent in this rollup-aware view means EVERY descendant
-    #    is also done (otherwise _rollup_to_parents downgrades the parent
-    #    to in-progress). So this rule equals: "drop a done leaf or a
-    #    fully-completed top-level subtree; keep any AR whose top-level
-    #    parent is still open".
-    new_pruned = strip_top_level_done_tasks(patched_source)
+    # 2. Partition every canonical declaration into exactly one destination
+    #    using the PARSER's task subtree (not raw visual indentation). A task
+    #    moves to the next-week file iff its top-level ancestor rolls up to an
+    #    OPEN status; otherwise it stays canonical in the archive. Driving both
+    #    outputs from one subtree-based pass guarantees no uuid is emitted in
+    #    both files — the parser's task stack ignores interleaved context lines
+    #    (``@owner`` / ``#project``), so a contiguous-indent skip would leak a
+    #    moved child back into the archive and blow up the UNIQUE(task_uuid)
+    #    constraint on reindex (T-800631-class rollover corruption).
+    new_pruned, archived_md, moved_uuids = _rollover_partition(patched_source)
     new_body = _bump_ww_in_h1(new_pruned, cur, nxt)
     new_base = bump_ww(basename, cur, nxt)
-    # 3. Archive: replace top-level OPEN declarations with ref rows,
-    #    drop their indent blocks.  Top-level DONE blocks stay canonical.
-    archived_md = _replace_top_level_open_with_refs(patched_source)
-    # 4. Compute the set of uuids that ended up canonical in new_body.
+    # 3. Post-condition (defence in depth): the moved set and the archive's
+    #    canonical set MUST be disjoint. If they ever overlap, reindexing the
+    #    archive would raise UNIQUE constraint failed: task.task_uuid. Fail
+    #    loudly here with the offending ids rather than corrupt on write.
     from .parser import parse
-    new_parsed = parse(new_body)
-    moved_uuids: list[str] = []
-    seen: set[str] = set()
-    for t in new_parsed.get("tasks", []):
-        rid = t.get("attrs", {}).get("id")
-        if rid and rid not in seen:
-            seen.add(rid)
-            moved_uuids.append(rid)
+    archived_ids = {
+        t.get("attrs", {}).get("id")
+        for t in parse(archived_md).get("tasks", [])
+        if t.get("attrs", {}).get("id")
+    }
+    overlap = sorted(set(moved_uuids) & archived_ids)
+    if overlap:
+        raise RuntimeError(
+            "rollover would double-emit task uuid(s) in both the next-week "
+            f"file and the archive: {overlap}"
+        )
     return new_body, new_base, cur, nxt, archived_md, moved_uuids
+
+
+def _rollover_partition(md: str) -> tuple[str, str, list[str]]:
+    """Split ``md`` into ``(new_body, archived_md, moved_uuids)`` for the
+    archive-style weekly rollover, partitioning by the parser's task subtree.
+
+    A canonical ``!task`` / ``!AR`` declaration is *moved* to ``new_body``
+    (kept verbatim) iff its **top-level ancestor** rolls up to a non-done
+    status; a moved top-level declaration is additionally replaced by a
+    ``#task`` / ``#AR`` reference row in ``archived_md``. Everything not moved
+    (done top-level subtrees) stays canonical in ``archived_md`` and is dropped
+    from ``new_body``. Context / prose / blank lines (headings, ``@owner``,
+    ``#project``) are scaffolding and kept in both.
+
+    Continuation lines (``#note`` etc., indented strictly deeper than their
+    owning task) follow that task's destination, mirroring the parser's own
+    ``line_indent > current.indent`` attachment rule.
+
+    Because both files are derived from the same subtree classification, a
+    task uuid can never appear canonically in both outputs.
+    """
+    from .parser import parse
+
+    tasks = parse(md).get("tasks", [])
+    lines = md.splitlines(keepends=True)
+
+    by_slug: dict[str, dict] = {t["slug"]: t for t in tasks}
+
+    def _top_ancestor(t: dict) -> dict:
+        cur = t
+        seen: set[str] = set()
+        while (
+            cur.get("parent_slug")
+            and cur["parent_slug"] in by_slug
+            and cur["slug"] not in seen
+        ):
+            seen.add(cur["slug"])
+            cur = by_slug[cur["parent_slug"]]
+        return cur
+
+    task_by_line: dict[int, dict] = {}
+    moved_line: dict[int, bool] = {}
+    ref_row_line: dict[int, dict] = {}  # top-level open decls → emit ref row
+    for t in tasks:
+        ln = t.get("line")
+        if not isinstance(ln, int):
+            continue
+        task_by_line[ln] = t
+        is_moved = _top_ancestor(t).get("status") != "done"
+        moved_line[ln] = is_moved
+        if is_moved and not t.get("parent_slug") and t.get("attrs", {}).get("id"):
+            ref_row_line[ln] = t
+
+    new_out: list[str] = []
+    arch_out: list[str] = []
+    moved_uuids: list[str] = []
+    seen_ids: set[str] = set()
+    current_task_line: int | None = None
+
+    for i, raw in enumerate(lines):
+        if not raw.strip():
+            # Blank line resets the owning-task anchor (matches the parser's
+            # blank-line stack reset). Kept in both files as scaffolding.
+            current_task_line = None
+            new_out.append(raw)
+            arch_out.append(raw)
+            continue
+        t = task_by_line.get(i)
+        if t is not None:
+            current_task_line = i
+            if moved_line.get(i):
+                new_out.append(raw)
+                rid = t.get("attrs", {}).get("id")
+                if rid and rid not in seen_ids:
+                    seen_ids.add(rid)
+                    moved_uuids.append(rid)
+                if i in ref_row_line:
+                    arch_out.append(
+                        _render_ref_row_for_line(
+                            raw, t["attrs"]["id"], kind=t.get("kind", "task")
+                        )
+                    )
+                # moved descendants: dropped from the archive entirely.
+            else:
+                # Done subtree: canonical in the archive, gone from next week.
+                arch_out.append(raw)
+            continue
+        # Non-task, non-blank line.
+        if (
+            current_task_line is not None
+            and _line_indent(raw) > _line_indent(lines[current_task_line])
+        ):
+            # Continuation of the current task → follows its destination.
+            if moved_line.get(current_task_line):
+                new_out.append(raw)
+            else:
+                arch_out.append(raw)
+        else:
+            # Context / prose / heading (e.g. @owner, #project, H1): keep both.
+            new_out.append(raw)
+            arch_out.append(raw)
+
+    return "".join(new_out), "".join(arch_out), moved_uuids
 
 
 _ETA_TOKEN_RE = re.compile(r"#eta\s+\S+", re.IGNORECASE)

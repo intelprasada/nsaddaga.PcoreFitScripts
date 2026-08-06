@@ -31,6 +31,7 @@ from ..markdown_ops import (
     remove_attr, replace_task_title, roll_to_next_week, update_task_status,
     find_ref_row_lines, patch_ref_rows, insert_ar_ref_row_after,
     edit_note, remove_note, add_tag, remove_tag,
+    detect_ww, bump_ww,
 )
 from ..models import (
     ActivityEvent, Feature, Link, Note, Project, ProjectMember, Task, TaskAttr,
@@ -664,12 +665,34 @@ def roll_note_next_week(
     if project is None:
         _require_root_admin(s, user, "roll")
     src_full = settings.notes_dir / src_rel
-    if not src_full.exists():
-        raise HTTPException(404, "source note not found")
-
     archive_dir = src_full.parent / "_archive"
     archived_path = archive_dir / src_full.name
     archived_rel = str(archived_path.relative_to(settings.notes_dir))
+
+    if not src_full.exists():
+        # Idempotency: a prior call may have already rolled this note (source
+        # deleted, archive + next-week file written) but failed AFTER the point
+        # of no return — or the user simply double-clicked. If the roll's
+        # outputs are already present, report success against the existing
+        # next-week note instead of a confusing 404 on the now-consumed source.
+        cur_ww = detect_ww(src_full.name)
+        if cur_ww is not None:
+            done_base = bump_ww(src_full.name, cur_ww, cur_ww + 1)
+            done_dst_rel = str(
+                (src_full.parent / done_base).relative_to(settings.notes_dir)
+            )
+            done_note = s.exec(select(Note).where(Note.path == done_dst_rel)).first()
+            if done_note is not None and archived_path.exists():
+                return {
+                    "id": done_note.id,
+                    "path": done_note.path,
+                    "from_ww": cur_ww,
+                    "to_ww": cur_ww + 1,
+                    "archived_path": archived_rel,
+                    "moved_count": 0,
+                    "already_rolled": True,
+                }
+        raise HTTPException(404, "source note not found")
 
     # ── Read + plan under the source file's lock so a concurrent edit
     #    can't interleave between read and the rollover write-back.
@@ -738,21 +761,25 @@ def roll_note_next_week(
         )
     s.commit()
 
-    # ── Phase 2 (disk): write the archive, write the next-week file,
-    #    delete the source.  Watcher events fire AFTER DB is consistent;
-    #    its reindex passes are idempotent against our state so any race
-    #    is benign.
+    # ── Phase 2 (disk): write the archive and the next-week file. Both are
+    #    idempotent overwrites so a retry is safe.
     archive_dir.mkdir(parents=True, exist_ok=True)
     safe_write(archived_path, archived_md, notes_dir=settings.notes_dir)
     safe_write(dst_full, new_md, notes_dir=settings.notes_dir)
+
+    # ── Phase 3: reindex both written files to refresh ``Task.line`` (moved
+    #    declarations shift line numbers).  Do this BEFORE deleting the source
+    #    so that if anything here raises, the source file is still on disk and
+    #    the whole operation is retry-recoverable (no 404-on-retry, no
+    #    half-rolled state).
+    reindex_file(archived_path, s)
+    reindex_file(dst_full, s)
+
+    # ── Phase 4: point of no return — remove the source only after every
+    #    index write above has succeeded.
     with with_file_lock(src_full):
         if src_full.exists():
             src_full.unlink()
-
-    # ── Phase 3: explicit reindex to refresh ``Task.line`` for both files
-    #    (canonical declarations move = line numbers shift).
-    reindex_file(archived_path, s)
-    reindex_file(dst_full, s)
 
     return {
         "id": new_note.id,

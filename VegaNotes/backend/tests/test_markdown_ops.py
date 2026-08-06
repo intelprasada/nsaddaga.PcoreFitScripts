@@ -858,6 +858,66 @@ def test_263_only_first_h1_is_bumped():
     assert "historical context from # ww25 status memo" in new_md
 
 
+# ── rollover with context-inheritance layout: no uuid double-emission ──
+# Regression for the T-800631 / T-N1KE10 class. A col-0 ``@owner`` (and a
+# shallower ``#project``) context marker sits BETWEEN a task and the task the
+# PARSER assigns as its parent (the parser's task stack ignores context lines),
+# so the parser's task subtree disagrees with raw visual indentation. The old
+# archive builder dropped a moved task's block by *contiguous indent*, so the
+# orphaned open child was left canonical in the archive AND moved into the next
+# week — the same uuid in two files → ``UNIQUE constraint failed:
+# task.task_uuid`` when the archive is reindexed (a 500 on ``/notes/next-week``,
+# then a 404 on retry because the source was already consumed).
+_ROLL_CONTEXT_BREAK = (
+    "# FIT Val weekly ww31\n"
+    "@Namratha\n"
+    "\t!task #id T-DONEPARENT Cover buckets debug #status done\n"
+    "\t\t!AR #id T-DONEKID covers unreachable #status done\n"
+    "@Kushwanth\n"
+    "\t#project jnc\n"
+    "\t\t!task #id T-OPENCHILD IDQ Ramp up #eta ww17\n"
+    "\t\t\t!AR #id T-OPENGRAND issue checker review #status todo\n"
+)
+
+
+def test_rollover_context_break_no_double_emit():
+    from app.markdown_ops import roll_to_next_week
+    from app.parser import parse as _parse
+    new_md, _, _, _, archived_md, moved = roll_to_next_week(
+        _ROLL_CONTEXT_BREAK, "FIT weekly ww31.md"
+    )
+    archived_ids = {
+        t["attrs"].get("id")
+        for t in _parse(archived_md)["tasks"]
+        if t["attrs"].get("id")
+    }
+    # The reindex-crash invariant: no canonical uuid may live in both files.
+    assert set(moved).isdisjoint(archived_ids), (
+        f"double-emitted uuids: {sorted(set(moved) & archived_ids)}"
+    )
+    # The open child orphaned under @Kushwanth moves forward and is NOT left
+    # canonical in the archive.
+    assert "T-OPENCHILD" in moved and "T-OPENGRAND" in moved
+    assert "!task #id T-OPENCHILD" in new_md
+    assert "!task #id T-OPENCHILD" not in archived_md
+    assert "!AR #id T-OPENGRAND" not in archived_md
+
+
+def test_rollover_context_break_parent_rolls_open():
+    """The done-marked top-level parent has an open descendant reachable only
+    across a context marker → it rolls up to open → the whole subtree moves and
+    the archive keeps a single ref row for the parent (not the indent block)."""
+    from app.markdown_ops import roll_to_next_week
+    new_md, _, _, _, archived_md, _ = roll_to_next_week(
+        _ROLL_CONTEXT_BREAK, "FIT weekly ww31.md"
+    )
+    assert "#task T-DONEPARENT" in archived_md      # ref row in archive
+    assert "!task #id T-DONEPARENT" in new_md        # canonical in next week
+    assert "!task #id T-DONEPARENT" not in archived_md
+    # The done child rides along with its (rolled-open) parent.
+    assert "T-DONEKID" in new_md
+
+
 # ---------------------------------------------------------------------------
 # replace_task_title (issue #283) — inline title edit in the popover
 # ---------------------------------------------------------------------------
