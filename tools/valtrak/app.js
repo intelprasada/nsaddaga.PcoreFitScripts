@@ -570,10 +570,6 @@ function renderPlanOverview(planName) {
         <div class="plan-breakdown">${breakdownRows(items, "st", "No hierarchy type")}</div>
       </section>
       <section class="plan-overview-section">
-        <h3>Evidence-port completion</h3>
-        <div class="plan-breakdown">${breakdownRows(items, "mp", "No evidence port")}</div>
-      </section>
-      <section class="plan-overview-section">
         <h3>Top owners</h3>
         <div class="plan-owner-list">
           ${owners.length ? owners.map((owner) => `<div class="plan-owner-row">
