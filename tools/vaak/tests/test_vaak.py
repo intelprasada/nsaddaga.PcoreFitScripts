@@ -53,6 +53,51 @@ def test_inject_missing_target_reports_error():
     assert "not found" in msg
 
 
+def test_send_now_ready_always_submits(monkeypatch):
+    calls = []
+    monkeypatch.setattr(D, "session_status", lambda _target: "ready")
+    monkeypatch.setattr(
+        D, "inject",
+        lambda target, text, submit: (
+            calls.append((target, text, submit)) or (True, text.strip())
+        ),
+    )
+
+    result = D.send_now_or_queue("ready-session", "run this")
+
+    assert result == {
+        "ok": True, "queued": False, "injected": "run this"
+    }
+    assert calls == [("ready-session", "run this", True)]
+
+
+def test_send_now_busy_adds_to_queue(drafts_tmp, monkeypatch):
+    monkeypatch.setattr(D, "session_status", lambda _target: "busy")
+    monkeypatch.setattr(
+        D, "inject",
+        lambda *_args, **_kwargs: pytest.fail("busy target must not be injected"),
+    )
+
+    result = D.send_now_or_queue("busy-session", "do this next")
+
+    assert result["ok"] is True
+    assert result["queued"] is True
+    assert [item["text"] for item in result["drafts"]] == ["do this next"]
+    assert [item["text"] for item in D.get_drafts("busy-session")] == [
+        "do this next"
+    ]
+
+
+def test_send_now_rejects_missing_or_empty_target(monkeypatch):
+    monkeypatch.setattr(D, "session_status", lambda _target: "gone")
+    assert D.send_now_or_queue("missing", "hello") == {
+        "ok": False, "error": "tmux target 'missing' not found"
+    }
+    assert D.send_now_or_queue("missing", "  ") == {
+        "ok": False, "error": "empty text"
+    }
+
+
 # --- config defaults --------------------------------------------------------
 def test_token_is_nonempty():
     assert isinstance(D.TOKEN, str) and len(D.TOKEN) >= 8
@@ -61,9 +106,16 @@ def test_token_is_nonempty():
 def test_page_has_expected_controls():
     # the served HTML must expose the pieces the JS/tests rely on
     for needle in ('id="msg"', 'id="sesslist"', 'id="sendNow"', 'id="addQ"',
-                   'id="queue"', 'id="pane"', 'id="readyAlert"', '/api/send',
+                   'id="queue"', 'id="pane"', 'id="readyAlert"',
+                   '/api/send_now', 'Submit queued / broadcast',
                    '/api/sessions', '/api/pane', '/api/drafts/add'):
         assert needle in D.PAGE
+    start = D.PAGE.find("async function sendNow(")
+    end = D.PAGE.find("function updateBcastBtn(", start)
+    assert start > 0 and end > start
+    send_now_body = D.PAGE[start:end]
+    assert "api('/api/send_now',{text,target:sel})" in send_now_body
+    assert "$('#submit')" not in send_now_body
 
 
 # --- busy/ready detection regex --------------------------------------------
