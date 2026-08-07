@@ -226,6 +226,27 @@ function loadMonitoredPlans() {
   }
 }
 
+function lastOpenPlan(preferred = "") {
+  const available = new Set(state.plans.map((plan) => plan.vplan_name));
+  let saved = "";
+  try {
+    saved = localStorage.getItem("valtrak-last-open-plan-v1") || "";
+  } catch {
+    // Browser storage can be disabled; selection still falls back deterministically.
+  }
+  return available.has(saved)
+    ? saved
+    : preferred || state.plans[0]?.vplan_name || "";
+}
+
+function rememberOpenPlan(name) {
+  try {
+    localStorage.setItem("valtrak-last-open-plan-v1", name);
+  } catch {
+    // The open plan remains selected for this session when storage is unavailable.
+  }
+}
+
 function functionalType(item) {
   return item.t || "Unclassified";
 }
@@ -514,26 +535,35 @@ function planSort(a, b) {
   return a.vplan_name.localeCompare(b.vplan_name);
 }
 
+function planListItem(plan) {
+  const stats = state.planStats.get(plan.vplan_name);
+  const counts = stats ? statusCounts(planIncludedItems(plan.vplan_name, stats.items)) : null;
+  const completion = counts ? completionLabel(counts) : "Not linked";
+  const target = counts ? targetSummary(counts, "plan", plan.vplan_name) : "";
+  return `
+    <button class="plan-list-item ${plan.vplan_name === state.selectedPlan ? "is-selected" : ""}"
+      data-plan="${escapeAttribute(plan.vplan_name)}"
+      aria-pressed="${plan.vplan_name === state.selectedPlan}">
+      <strong title="${escapeAttribute(plan.vplan_name)}">${escapeHtml(plan.vplan_name)}</strong>
+      <span class="plan-list-meta"><span>${escapeHtml(plan.owner || "Unassigned")}</span><span>${completion}</span></span>
+      ${stats ? `<span class="plan-list-target">${escapeHtml(target)}</span>` : ""}
+    </button>`;
+}
+
 function renderPlanList() {
   const query = $("#plan-search").value.trim().toLowerCase();
   const plans = state.plans
     .filter((plan) => `${plan.vplan_name} ${plan.owner || ""}`.toLowerCase().includes(query))
     .sort(planSort);
+  const selectedPlans = state.plans
+    .filter((plan) => state.monitoredPlans.has(plan.vplan_name))
+    .sort(planSort);
   $("#plan-count-label").textContent = `${plans.length} shown`;
-  $("#plan-list").innerHTML = plans.map((plan) => {
-    const stats = state.planStats.get(plan.vplan_name);
-    const counts = stats ? statusCounts(planIncludedItems(plan.vplan_name, stats.items)) : null;
-    const completion = counts ? completionLabel(counts) : "Not linked";
-    const target = counts ? targetSummary(counts, "plan", plan.vplan_name) : "";
-    return `
-      <button class="plan-list-item ${plan.vplan_name === state.selectedPlan ? "is-selected" : ""}"
-        data-plan="${escapeAttribute(plan.vplan_name)}"
-        aria-pressed="${plan.vplan_name === state.selectedPlan}">
-        <strong title="${escapeAttribute(plan.vplan_name)}">${escapeHtml(plan.vplan_name)}</strong>
-        <span class="plan-list-meta"><span>${escapeHtml(plan.owner || "Unassigned")}</span><span>${completion}</span></span>
-        ${stats ? `<span class="plan-list-target">${escapeHtml(target)}</span>` : ""}
-      </button>`;
-  }).join("");
+  $("#selected-plan-count-label").textContent = formatNumber(selectedPlans.length);
+  $("#plan-list").innerHTML = plans.map(planListItem).join("");
+  $("#selected-plan-list").innerHTML = selectedPlans.length
+    ? selectedPlans.map(planListItem).join("")
+    : `<div class="empty-state">No plans selected. Use Manage plans on Overview to choose plans.</div>`;
 }
 
 function renderPlanDetail({ resetTreeState = true } = {}) {
@@ -1114,12 +1144,29 @@ function setView(view) {
   history.replaceState(null, "", `#${view}`);
 }
 
-function openPlan(name) {
+function revealPlanInList(selector) {
+  const list = $(selector);
+  const item = list?.querySelector(".is-selected");
+  if (!list || !item) return;
+  const listBounds = list.getBoundingClientRect();
+  const itemBounds = item.getBoundingClientRect();
+  if (itemBounds.top < listBounds.top) {
+    list.scrollTop -= listBounds.top - itemBounds.top;
+  } else if (itemBounds.bottom > listBounds.bottom) {
+    list.scrollTop += itemBounds.bottom - listBounds.bottom;
+  }
+}
+
+function openPlan(name, sourceList = "") {
+  if (!state.plans.some((plan) => plan.vplan_name === name)) return;
   state.selectedPlan = name;
+  rememberOpenPlan(name);
   setView("plans");
   renderPlanList();
   renderPlanDetail();
-  $("#plan-list").querySelector(".is-selected")?.scrollIntoView({ block: "nearest" });
+  const list = sourceList
+    || (state.monitoredPlans.has(name) ? "#selected-plan-list" : "#plan-list");
+  revealPlanInList(list);
 }
 
 function showToast(message) {
@@ -1354,7 +1401,11 @@ function bindEvents() {
   });
   $("#plan-list").addEventListener("click", (event) => {
     const button = event.target.closest("[data-plan]");
-    if (button) openPlan(button.dataset.plan);
+    if (button) openPlan(button.dataset.plan, "#plan-list");
+  });
+  $("#selected-plan-list").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-plan]");
+    if (button) openPlan(button.dataset.plan, "#selected-plan-list");
   });
   $("#plan-detail-header").addEventListener("click", (event) => {
     if (event.target.closest("#open-plan-overview")) renderPlanOverview(state.selectedPlan);
@@ -1511,6 +1562,7 @@ function bindEvents() {
     localStorage.setItem("valtrak-monitored-plans-v1", JSON.stringify([...state.monitoredPlans]));
     $("#monitor-dialog").close();
     renderOverview();
+    renderPlanList();
     showToast(`${formatNumber(state.monitoredPlans.size)} monitored plans saved.`);
   });
   $("#monitor-dialog").addEventListener("click", (event) => {
@@ -1608,7 +1660,7 @@ async function init() {
     loadTypeInclusions();
     const preferred = [...state.planStats.values()]
       .sort((a, b) => b.counts.active - a.counts.active)[0]?.name;
-    state.selectedPlan = preferred || state.plans[0]?.vplan_name || "";
+    state.selectedPlan = lastOpenPlan(preferred);
     const restoredTreeState = restoreTreeStateAfterReload();
 
     renderOverview();

@@ -471,9 +471,9 @@ h2 { margin-bottom: 0; font-size: 1.08rem; letter-spacing: -0.015em; }
 
 .explorer-layout {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: minmax(220px, 0.72fr) minmax(250px, 0.9fr) minmax(600px, 2.4fr);
   gap: 1rem;
-  max-width: 1440px;
+  max-width: 1680px;
   height: calc(100vh - 190px);
   min-height: 600px;
   margin: 0 auto;
@@ -859,7 +859,7 @@ dialog p { color: var(--muted); }
 @media (max-width: 1100px) {
   .summary-grid { grid-template-columns: repeat(2, 1fr); }
   .overview-grid, .overview-grid.lower { grid-template-columns: 1fr; }
-  .explorer-layout { grid-template-columns: 280px minmax(0, 1fr); }
+  .explorer-layout { grid-template-columns: 240px 270px minmax(560px, 1fr); overflow-x: auto; }
   .tree-header, .tree-row { grid-template-columns: minmax(210px, 1.7fr) minmax(75px, 0.5fr) 95px 195px 70px; }
   .tree-header span:nth-child(3), .tree-row > :nth-child(3) { display: none; }
 }
@@ -877,6 +877,7 @@ dialog p { color: var(--muted); }
   .overview-actions { margin-left: auto; }
   .explorer-layout { display: block; height: auto; min-height: 0; }
   .plan-browser { height: 320px; margin-bottom: 1rem; }
+  .selected-plan-browser { height: 260px; }
   .plan-detail { height: 680px; }
   .filter-bar { flex-wrap: wrap; }
   .table-search { flex-basis: 100%; }

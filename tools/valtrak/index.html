@@ -182,9 +182,16 @@
           </div>
 
           <div class="explorer-layout">
-            <aside class="plan-browser panel" aria-label="Validation plans">
+            <aside class="plan-browser selected-plan-browser panel" aria-label="Selected validation plans">
               <div class="browser-header">
-                <h2>Plans <span id="plan-count-label"></span></h2>
+                <h2>Selected plans <span id="selected-plan-count-label"></span></h2>
+              </div>
+              <div id="selected-plan-list" class="plan-list" aria-label="Choose a selected validation plan"></div>
+            </aside>
+
+            <aside class="plan-browser all-plan-browser panel" aria-label="All validation plans">
+              <div class="browser-header">
+                <h2>All plans <span id="plan-count-label"></span></h2>
                 <label class="compact-search">
                   <span aria-hidden="true">⌕</span>
                   <input id="plan-search" type="search" placeholder="Filter plans">
