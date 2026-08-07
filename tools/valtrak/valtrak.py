@@ -41,6 +41,7 @@ DATA_PATH = STATE_ROOT / "data.json"
 PLANS_PATH = STATE_ROOT / "plans.json"
 OVERRIDES_PATH = STATE_ROOT / "status-overrides.json"
 JOBS_PATH = STATE_ROOT / "status-jobs.json"
+TARGETS_PATH = STATE_ROOT / "completion-targets.json"
 PINNED_CERT_PATH = ROOT / "vmanager-ca.pem"
 ACCESS_TOKEN_PATH = STATE_ROOT / "access-token"
 SERVER = os.environ.get("VALTRAK_VMGR_SERVER", "scygrnit337.sc.intel.com:8090")
@@ -56,6 +57,7 @@ JOBS = {}
 JOBS_LOCK = threading.Lock()
 JOB_QUEUE = queue.Queue()
 OVERRIDES_LOCK = threading.Lock()
+TARGETS_LOCK = threading.Lock()
 DATA_LOCK = threading.RLock()
 REFRESH_JOBS = {}
 REFRESH_JOBS_LOCK = threading.Lock()
@@ -170,6 +172,74 @@ def load_overrides():
 
 
 STATUS_OVERRIDES = load_overrides()
+
+
+def normalize_completion_targets(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("Completion targets must be an object")
+    if set(payload) - {"overall", "plans", "sections"}:
+        raise ValueError("Completion targets contain unknown fields")
+
+    def percentage(value, label):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{label} must be a number")
+        if isinstance(value, float) and not value.is_integer():
+            raise ValueError(f"{label} must be a whole percentage")
+        value = int(value)
+        if value < 0 or value > 100:
+            raise ValueError(f"{label} must be between 0 and 100")
+        return value
+
+    def target_map(value, label):
+        if not isinstance(value, dict):
+            raise ValueError(f"{label} must be an object")
+        if len(value) > 10000:
+            raise ValueError(f"{label} contains too many entries")
+        normalized = {}
+        for key, target in value.items():
+            if not isinstance(key, str) or not key or len(key) > 2048:
+                raise ValueError(f"{label} keys must be non-empty strings")
+            normalized[key] = percentage(target, f"{label} target")
+        return normalized
+
+    return {
+        "overall": percentage(payload.get("overall", 100), "Overall target"),
+        "plans": target_map(payload.get("plans", {}), "Plan targets"),
+        "sections": target_map(payload.get("sections", {}), "Section targets"),
+    }
+
+
+def apply_completion_target(targets, payload):
+    if not isinstance(payload, dict) or set(payload) != {"scope", "key", "value"}:
+        raise ValueError("Target update must include scope, key, and value")
+    scope = payload["scope"]
+    key = payload["key"]
+    value = payload["value"]
+    if scope not in {"overall", "plan", "section"}:
+        raise ValueError("Target scope must be overall, plan, or section")
+    if not isinstance(key, str) or len(key) > 2048:
+        raise ValueError("Target key must be a string")
+    if scope == "overall":
+        if key:
+            raise ValueError("Overall target must not include a key")
+        candidate = {
+            **targets,
+            "overall": value,
+        }
+    else:
+        if not key:
+            raise ValueError("Plan and section targets require a key")
+        candidate = {
+            "overall": targets["overall"],
+            "plans": dict(targets["plans"]),
+            "sections": dict(targets["sections"]),
+        }
+        target_map = candidate[f"{scope}s"]
+        if value is None:
+            target_map.pop(key, None)
+        else:
+            target_map[key] = value
+    return normalize_completion_targets(candidate)
 
 
 def load_jobs():
@@ -398,6 +468,18 @@ def atomic_json_write(path, payload, mode=0o600):
         os.fsync(handle.fileno())
     os.chmod(temporary, mode)
     os.replace(temporary, path)
+
+
+def load_completion_targets():
+    if not TARGETS_PATH.exists():
+        targets = normalize_completion_targets({})
+        atomic_json_write(TARGETS_PATH, targets)
+        return targets
+    with TARGETS_PATH.open() as handle:
+        return normalize_completion_targets(json.load(handle))
+
+
+COMPLETION_TARGETS = load_completion_targets()
 
 
 def refresh_catalog(session):
@@ -954,6 +1036,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             with OVERRIDES_LOCK:
                 self.send_json(HTTPStatus.OK, STATUS_OVERRIDES)
             return
+        if route == "/api/completion-targets":
+            with TARGETS_LOCK:
+                self.send_json(HTTPStatus.OK, COMPLETION_TARGETS)
+            return
         if route == "/api/jobs":
             with JOBS_LOCK:
                 jobs = [
@@ -1011,7 +1097,11 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if not self.is_authorized():
             self.reject_unauthorized(api=True)
             return
-        if route not in {"/api/status-updates", "/api/data-refreshes"}:
+        if route not in {
+            "/api/status-updates",
+            "/api/data-refreshes",
+            "/api/completion-targets",
+        }:
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "Unknown endpoint"})
             return
         if self.headers.get("X-CSRF-Token") != CSRF_TOKEN:
@@ -1022,13 +1112,36 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         except ValueError:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid request length"})
             return
-        if length <= 0 or length > 4096:
+        max_length = 262144 if route == "/api/completion-targets" else 4096
+        if length <= 0 or length > max_length:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid request size"})
             return
         try:
             payload = json.loads(self.rfile.read(length))
         except json.JSONDecodeError:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid JSON"})
+            return
+
+        if route == "/api/completion-targets":
+            try:
+                with TARGETS_LOCK:
+                    targets = (
+                        apply_completion_target(COMPLETION_TARGETS, payload)
+                        if "scope" in payload
+                        else normalize_completion_targets(payload)
+                    )
+                    atomic_json_write(TARGETS_PATH, targets)
+                    COMPLETION_TARGETS.clear()
+                    COMPLETION_TARGETS.update(targets)
+                    response = {
+                        "overall": COMPLETION_TARGETS["overall"],
+                        "plans": dict(COMPLETION_TARGETS["plans"]),
+                        "sections": dict(COMPLETION_TARGETS["sections"]),
+                    }
+            except ValueError as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                return
+            self.send_json(HTTPStatus.OK, response)
             return
 
         if route == "/api/data-refreshes":
