@@ -26,6 +26,7 @@ const state = {
   treeExpandedAll: false,
   treeInitialized: false,
   treeFocusPath: "",
+  bulkSelectedPaths: new Set(),
   hierarchyValidationKeys: new Set(),
   completionTargets: { overall: 100, plans: {}, sections: {} },
 };
@@ -635,6 +636,7 @@ function renderPlanDetail({ resetTreeState = true } = {}) {
     state.treeFocusPath = "";
     $("#expand-tree").textContent = "Expand all";
   }
+  renderBulkStatusBar();
   renderTree();
 }
 
@@ -1103,12 +1105,16 @@ function renderTree() {
 function treeRow(item, depth, hasChildren, expanded, rollup) {
   const expandedAttribute = hasChildren ? ` aria-expanded="${expanded}"` : "";
   const counts = rollup || statusCounts([item]);
+  const editable = itemIsEditable(item);
   return `
     <div class="tree-row" role="treeitem" tabindex="${item.p === state.treeFocusPath ? "0" : "-1"}"
       aria-level="${depth + 1}"${expandedAttribute} data-path="${escapeAttribute(item.p)}">
       <div class="tree-item-name" style="padding-left:${Math.min(depth, 12) * 15}px">
         <button class="tree-expander ${hasChildren ? "" : "is-empty"}" data-toggle-path="${escapeAttribute(item.p)}"
           aria-label="${expanded ? "Collapse" : "Expand"} ${escapeAttribute(item.n)}">${expanded ? "▾" : "▸"}</button>
+        ${editable ? `<input class="tree-select" type="checkbox" data-select-path="${escapeAttribute(item.p)}"
+          ${state.bulkSelectedPaths.has(item.p) ? "checked" : ""}
+          aria-label="Select ${escapeAttribute(item.n)} for bulk status editing">` : ""}
         <span class="tree-label" title="${escapeAttribute(item.p)}">
           ${escapeHtml(item.n)}
           <span class="tree-kind">${escapeHtml(item.st || item.k || "")}</span>
@@ -1194,6 +1200,7 @@ function revealPlanInList(selector) {
 
 function openPlan(name, sourceList = "") {
   if (!state.plans.some((plan) => plan.vplan_name === name)) return;
+  if (name !== state.selectedPlan) state.bulkSelectedPaths.clear();
   state.selectedPlan = name;
   rememberOpenPlan(name);
   setView("plans");
@@ -1393,6 +1400,100 @@ async function queueStatusUpdate(event) {
   }
 }
 
+function selectedBulkItems() {
+  return [...state.bulkSelectedPaths]
+    .map((path) => state.items.find((item) => item.p === path))
+    .filter((item) => item && item.cp === state.selectedPlan && itemIsEditable(item));
+}
+
+function renderBulkStatusBar() {
+  const items = selectedBulkItems();
+  $("#bulk-status-bar").hidden = items.length === 0;
+  $("#bulk-selection-count").textContent =
+    `${formatNumber(items.length)} item${items.length === 1 ? "" : "s"} selected`;
+}
+
+function openBulkStatusEditor() {
+  const items = selectedBulkItems();
+  if (!items.length) {
+    showToast("Select at least one editable hierarchy item.");
+    return;
+  }
+  $("#bulk-status-context").textContent =
+    `${formatNumber(items.length)} items in ${state.selectedPlan} will be checked and queued independently.`;
+  $("#bulk-new-status").innerHTML = `<option value="">Choose status</option>`
+    + ["open", "complete", "future", "rejected"]
+      .filter((status) => state.apiConfig.statuses.includes(status))
+      .map((status) => `<option value="${status}">${status[0].toUpperCase() + status.slice(1)}</option>`)
+      .join("");
+  $("#bulk-status-results").hidden = true;
+  $("#bulk-status-results").innerHTML = "";
+  $("#queue-bulk-status").disabled = true;
+  $("#bulk-status-dialog").showModal();
+}
+
+async function queueBulkStatusJobs(items, targetStatus, enqueue) {
+  const result = { queued: [], unchanged: [], failed: [] };
+  for (const item of items) {
+    if (item.s === targetStatus) {
+      result.unchanged.push(item);
+      continue;
+    }
+    try {
+      result.queued.push({ item, job: await enqueue(item, targetStatus) });
+    } catch (error) {
+      result.failed.push({ item, error: error.message });
+    }
+  }
+  return result;
+}
+
+function enqueueStatusJob(item, targetStatus) {
+  return apiFetch("/api/status-updates", {
+    method: "POST",
+    body: JSON.stringify({
+      itemPath: item.p,
+      expectedStatus: item.s,
+      targetStatus,
+    }),
+  });
+}
+
+async function queueBulkStatusUpdate(event) {
+  event.preventDefault();
+  const items = selectedBulkItems();
+  const targetStatus = $("#bulk-new-status").value;
+  if (!items.length || !targetStatus) return;
+  const submit = $("#queue-bulk-status");
+  submit.disabled = true;
+  submit.textContent = "Queueing…";
+  const result = await queueBulkStatusJobs(items, targetStatus, enqueueStatusJob);
+  result.queued.forEach(({ item, job }) => {
+    state.jobs.set(job.id, job);
+    state.bulkSelectedPaths.delete(item.p);
+    pollJob(job.id);
+  });
+  result.unchanged.forEach((item) => state.bulkSelectedPaths.delete(item.p));
+  renderJobs();
+  renderTree();
+  renderBulkStatusBar();
+  const summary = `${result.queued.length} queued · ${result.unchanged.length} unchanged · ${result.failed.length} failed`;
+  if (result.failed.length) {
+    $("#bulk-status-results").hidden = false;
+    $("#bulk-status-results").innerHTML = `
+      <strong>${escapeHtml(summary)}</strong>
+      ${result.failed.map(({ item, error }) => `
+        <span><b>${escapeHtml(item.n)}</b>${escapeHtml(error)}</span>`).join("")}`;
+    submit.textContent = "Retry failures";
+    submit.disabled = false;
+    showToast(summary);
+  } else {
+    $("#bulk-status-dialog").close();
+    submit.textContent = "Queue updates";
+    showToast(summary);
+  }
+}
+
 function debounce(callback, delay = 150) {
   let timer;
   return (...args) => {
@@ -1464,8 +1565,15 @@ function bindEvents() {
     else state.expanded.add(path);
     renderTree();
   });
+  $("#plan-tree").addEventListener("change", (event) => {
+    const checkbox = event.target.closest("[data-select-path]");
+    if (!checkbox) return;
+    if (checkbox.checked) state.bulkSelectedPaths.add(checkbox.dataset.selectPath);
+    else state.bulkSelectedPaths.delete(checkbox.dataset.selectPath);
+    renderBulkStatusBar();
+  });
   $("#plan-tree").addEventListener("keydown", (event) => {
-    if (event.target.closest("[data-target-container]")) return;
+    if (event.target.closest("[data-target-container], .tree-select")) return;
     const row = event.target.closest(".tree-row");
     if (!row) return;
     const rows = $$(".tree-row", $("#plan-tree"));
@@ -1525,6 +1633,12 @@ function bindEvents() {
     $("#expand-tree").textContent = state.treeExpandedAll ? "Collapse all" : "Expand all";
     renderTree();
   });
+  $("#clear-bulk-selection").addEventListener("click", () => {
+    state.bulkSelectedPaths.clear();
+    renderTree();
+    renderBulkStatusBar();
+  });
+  $("#open-bulk-status").addEventListener("click", openBulkStatusEditor);
 
   const syncItemFilters = () => {
     state.itemFilters = {
@@ -1561,6 +1675,13 @@ function bindEvents() {
     $("#queue-status-update").disabled = !item || $("#new-status").value === item.s;
   });
   $("#status-form").addEventListener("submit", queueStatusUpdate);
+  $$(".close-bulk-status-dialog").forEach((button) => button.addEventListener("click", () => {
+    $("#bulk-status-dialog").close();
+  }));
+  $("#bulk-new-status").addEventListener("change", () => {
+    $("#queue-bulk-status").disabled = !$("#bulk-new-status").value;
+  });
+  $("#bulk-status-form").addEventListener("submit", queueBulkStatusUpdate);
   $("#jobs-button").addEventListener("click", async () => {
     await loadJobs();
     $("#jobs-dialog").showModal();

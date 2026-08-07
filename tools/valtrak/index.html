@@ -216,6 +216,12 @@
                 </select>
                 <button id="expand-tree" class="secondary-button">Expand all</button>
               </div>
+              <div id="bulk-status-bar" class="bulk-status-bar" hidden>
+                <strong id="bulk-selection-count">0 items selected</strong>
+                <span>Select editable rows to apply one status.</span>
+                <button id="clear-bulk-selection" type="button" class="text-button">Clear</button>
+                <button id="open-bulk-status" type="button" class="primary-button">Edit status</button>
+              </div>
               <div class="tree-table">
                 <div class="tree-header" aria-hidden="true">
                   <span>Plan item</span><span>Type</span><span>Owner</span><span>Rollup</span><span>Section target</span><span>Status</span>
@@ -338,6 +344,37 @@
       <div class="dialog-actions">
         <button type="button" class="secondary-button close-status-dialog">Cancel</button>
         <button id="queue-status-update" type="submit" class="primary-button">Queue update</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="bulk-status-dialog" class="status-dialog">
+    <form id="bulk-status-form">
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">Write to vManager</p>
+          <h2>Bulk change item status</h2>
+        </div>
+        <button type="button" class="icon-button close-bulk-status-dialog" aria-label="Close">×</button>
+      </div>
+      <p id="bulk-status-context" class="dialog-description"></p>
+      <label class="status-field">
+        <span>New status</span>
+        <select id="bulk-new-status" required>
+          <option value="">Choose status</option>
+        </select>
+      </label>
+      <div class="write-warning">
+        <span aria-hidden="true">!</span>
+        <p>
+          Each selected item is re-read, checked for stale status, updated, and verified
+          independently. Failures do not stop remaining items.
+        </p>
+      </div>
+      <div id="bulk-status-results" class="bulk-status-results" hidden aria-live="polite"></div>
+      <div class="dialog-actions">
+        <button type="button" class="secondary-button close-bulk-status-dialog">Cancel</button>
+        <button id="queue-bulk-status" type="submit" class="primary-button">Queue updates</button>
       </div>
     </form>
   </dialog>
