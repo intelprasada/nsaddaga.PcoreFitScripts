@@ -790,7 +790,7 @@ def write_live_status(session, plan_name, live_item, new_status):
             "vplan": plan_name,
             "db-vplan": True,
         },
-        "hierarchy": live_item["full_path"],
+        "element-id": live_item["element_id"],
     }
     if "Metrics Port" in kind:
         endpoint = "/planning/update-metrics-port"

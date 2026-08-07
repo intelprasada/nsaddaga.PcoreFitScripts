@@ -186,6 +186,57 @@ def test_section_targets_are_limited_to_structural_items(monkeypatch, tmp_path):
         raise AssertionError("non-string section target key was accepted")
 
 
+def test_status_writes_use_native_element_id(monkeypatch, tmp_path):
+    module = load_valtrak(monkeypatch, tmp_path)
+    requests = []
+    monkeypatch.setattr(
+        module,
+        "request_json",
+        lambda session, endpoint, payload: requests.append((endpoint, payload)),
+    )
+
+    module.write_live_status(
+        object(),
+        "Plan A",
+        {
+            "element_id": "section-id",
+            "full_path": "Plan A/Section with fragile. path",
+            "vplan_element_kind": "Section",
+        },
+        "complete",
+    )
+    module.write_live_status(
+        object(),
+        "Plan A",
+        {
+            "element_id": "port-id",
+            "full_path": "Plan A/Section/Port",
+            "vplan_element_kind": "Metrics Port",
+        },
+        "future",
+    )
+
+    assert requests == [
+        (
+            "/planning/update-section",
+            {
+                "sticky-context": {"vplan": "Plan A", "db-vplan": True},
+                "element-id": "section-id",
+                "section": {"i_status": "complete"},
+            },
+        ),
+        (
+            "/planning/update-metrics-port",
+            {
+                "sticky-context": {"vplan": "Plan A", "db-vplan": True},
+                "element-id": "port-id",
+                "metrics-port": {"i_status": "future"},
+            },
+        ),
+    ]
+    assert all("hierarchy" not in payload for _, payload in requests)
+
+
 def test_projects_native_rows_under_aggregate_reference(monkeypatch, tmp_path):
     module = load_valtrak(monkeypatch, tmp_path)
     reference = {
