@@ -238,6 +238,11 @@ function planTypeSelection(planName, items) {
   return state.planIncludedTypes.get(planName);
 }
 
+function planIncludedItems(planName, items) {
+  const included = planTypeSelection(planName, items);
+  return items.filter((item) => included.has(functionalType(item)));
+}
+
 function renderTypeInclusionControl(container, types, included, scope) {
   const allIncluded = types.length > 0 && types.every((type) => included.has(type));
   const includedCount = types.filter((type) => included.has(type)).length;
@@ -487,8 +492,9 @@ function renderPlanList() {
   $("#plan-count-label").textContent = `${plans.length} shown`;
   $("#plan-list").innerHTML = plans.map((plan) => {
     const stats = state.planStats.get(plan.vplan_name);
-    const completion = stats ? completionLabel(stats.counts) : "Not linked";
-    const target = stats ? targetSummary(stats.counts, "plan", plan.vplan_name) : "";
+    const counts = stats ? statusCounts(planIncludedItems(plan.vplan_name, stats.items)) : null;
+    const completion = counts ? completionLabel(counts) : "Not linked";
+    const target = counts ? targetSummary(counts, "plan", plan.vplan_name) : "";
     return `
       <button class="plan-list-item ${plan.vplan_name === state.selectedPlan ? "is-selected" : ""}"
         data-plan="${escapeAttribute(plan.vplan_name)}"
@@ -503,8 +509,10 @@ function renderPlanList() {
 function renderPlanDetail({ resetTreeState = true } = {}) {
   const stats = state.planStats.get(state.selectedPlan);
   const listed = state.plans.find((plan) => plan.vplan_name === state.selectedPlan);
-  const items = stats?.items || [];
-  const counts = stats?.counts || statusCounts([]);
+  const allItems = stats?.items || [];
+  const items = stats ? planIncludedItems(state.selectedPlan, allItems) : [];
+  const counts = statusCounts(items);
+  const filtered = items.length !== allItems.length;
   $("#plan-detail-header").innerHTML = `
     <div class="detail-title-row">
       <div>
@@ -512,15 +520,15 @@ function renderPlanDetail({ resetTreeState = true } = {}) {
         <h2>${escapeHtml(state.selectedPlan)}</h2>
         <p class="detail-subtitle">Owned by ${escapeHtml(listed?.owner || stats?.owner || "Unassigned")}</p>
       </div>
-      ${items.length ? `<div class="detail-title-actions">
+      ${allItems.length ? `<div class="detail-title-actions">
         <button type="button" class="secondary-button" id="refresh-plan-data">Refresh data</button>
         <button type="button" class="secondary-button" id="open-plan-overview">Plan overview</button>
         <span class="completion-badge">${completionLabel(counts)}</span>
       </div>` : ""}
     </div>
-    ${items.length ? targetControl(counts, "plan", state.selectedPlan, true) : ""}
+    ${allItems.length ? targetControl(counts, "plan", state.selectedPlan, true) : ""}
     <div class="detail-metrics">
-      <div class="detail-metric"><span>${stats?.references > 1 ? `Items across ${stats.references} refs` : "Total items"}</span><strong>${formatNumber(items.length)}</strong></div>
+      <div class="detail-metric"><span>${filtered ? "Included items" : stats?.references > 1 ? `Items across ${stats.references} refs` : "Total items"}</span><strong>${formatNumber(items.length)}</strong></div>
       <div class="detail-metric"><span>Complete</span><strong>${formatNumber(counts.complete)}</strong></div>
       <div class="detail-metric"><span>Open</span><strong>${formatNumber(counts.open)}</strong></div>
       <div class="detail-metric"><span>Deferred</span><strong>${formatNumber(counts.future + counts.rejected)}</strong></div>
@@ -602,11 +610,14 @@ function renderPlanOverview(planName) {
   if (!stats) return;
   const listed = state.plans.find((plan) => plan.vplan_name === planName);
   const included = planTypeSelection(planName, stats.items);
-  const items = stats.items.filter((item) => included.has(functionalType(item)));
+  const items = planIncludedItems(planName, stats.items);
   const counts = statusCounts(items);
-  const sectionRollups = buildHierarchyRollups(buildTree(items));
+  const sectionRollups = buildHierarchyRollups(
+    buildTree(stats.items),
+    (item) => included.has(functionalType(item))
+  );
   const sectionGroups = new Map();
-  items.filter(itemSupportsSectionTarget).forEach((item) => {
+  stats.items.filter(itemSupportsSectionTarget).forEach((item) => {
     const key = sectionTargetKey(item);
     const counts = sectionRollups.get(item.p) || statusCounts([item]);
     if (!sectionGroups.has(key)) {
@@ -828,7 +839,7 @@ function buildTree(items) {
   return roots;
 }
 
-function buildHierarchyRollups(roots) {
+function buildHierarchyRollups(roots, includeItem = () => true) {
   const rollups = new Map();
   function visit(node) {
     const counts = node.children.length
@@ -840,7 +851,7 @@ function buildHierarchyRollups(roots) {
         total.completion = total.active ? total.complete / total.active : 0;
         return total;
       }, statusCounts([]))
-      : statusCounts([node.item]);
+      : statusCounts(includeItem(node.item) ? [node.item] : []);
     rollups.set(node.item.p, counts);
     return counts;
   }
@@ -857,7 +868,11 @@ function renderTree() {
   const query = $("#hierarchy-search").value.trim().toLowerCase();
   const status = $("#hierarchy-status").value;
   const roots = buildTree(stats.items);
-  const rollups = buildHierarchyRollups(roots);
+  const included = planTypeSelection(state.selectedPlan, stats.items);
+  const rollups = buildHierarchyRollups(
+    roots,
+    (item) => included.has(functionalType(item))
+  );
   const filtered = stats.items.filter((item) => {
     const matchesStatus = !status || (itemHasStatus(item) && item.s === status);
     const matchesQuery = !query || `${item.n} ${item.p} ${item.o || ""} ${item.t || ""}`.toLowerCase().includes(query);
@@ -1405,6 +1420,8 @@ function bindEvents() {
       [...state.planIncludedTypes].map(([planName, values]) => [planName, [...values]])
     );
     localStorage.setItem("valtrak-plan-types-v1", JSON.stringify(saved));
+    renderPlanList();
+    renderPlanDetail({ resetTreeState: false });
     renderPlanOverview(state.planOverviewName);
   });
   $("#plan-overview-dialog").addEventListener("click", (event) => {
