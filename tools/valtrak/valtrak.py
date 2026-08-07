@@ -404,6 +404,7 @@ def compact_item(row):
         "o": row.get("i_owner"),
         "team": row.get("i_val_teams"),
         "pri": row.get("i_priority"),
+        "mil": row.get("i_required_by_milestone"),
         "mp": row.get("metrics_port_kind"),
     }
     return {

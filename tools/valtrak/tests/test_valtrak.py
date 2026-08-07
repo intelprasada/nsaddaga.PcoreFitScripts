@@ -39,6 +39,21 @@ def test_first_run_creates_private_empty_snapshot(monkeypatch, tmp_path):
     assert (tmp_path / "completion-targets.json").stat().st_mode & 0o777 == 0o600
 
 
+def test_compact_item_preserves_validation_milestone(monkeypatch, tmp_path):
+    module = load_valtrak(monkeypatch, tmp_path)
+
+    item = module.compact_item(
+        {
+            "element_id": "item-1",
+            "name": "Milestone item",
+            "full_path": "Plan/Milestone item",
+            "i_required_by_milestone": "VAL1.0",
+        }
+    )
+
+    assert item["mil"] == "VAL1.0"
+
+
 def test_completion_targets_are_normalized_and_persisted(monkeypatch, tmp_path):
     module = load_valtrak(monkeypatch, tmp_path)
     targets = module.normalize_completion_targets(

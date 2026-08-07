@@ -10,6 +10,8 @@ const state = {
   projectIncludedTypes: new Set(),
   planIncludedTypes: new Map(),
   planKnownTypes: new Map(),
+  planIncludedMilestones: new Map(),
+  planKnownMilestones: new Map(),
   refreshRequest: null,
   refreshPoller: null,
   apiConfig: null,
@@ -257,6 +259,14 @@ function availableFunctionalTypes(items = state.items) {
   return [...new Set(items.map(functionalType))].sort();
 }
 
+function validationMilestone(item) {
+  return item.mil || "No milestone";
+}
+
+function availableValidationMilestones(items = state.items) {
+  return [...new Set(items.map(validationMilestone))].sort();
+}
+
 function loadTypeInclusions() {
   const available = new Set(availableFunctionalTypes());
   const savedProject = localStorage.getItem("valtrak-project-types-v1");
@@ -326,30 +336,102 @@ function savePlanTypeInclusions() {
 }
 
 function planIncludedItems(planName, items) {
-  const included = planTypeSelection(planName, items);
-  return items.filter((item) => included.has(functionalType(item)));
+  const includedTypes = planTypeSelection(planName, items);
+  const includedMilestones = planMilestoneSelection(planName, items);
+  return items.filter(
+    (item) =>
+      includedTypes.has(functionalType(item))
+      && includedMilestones.has(validationMilestone(item))
+  );
 }
 
-function renderTypeInclusionControl(container, types, included, scope) {
-  const allIncluded = types.length > 0 && types.every((type) => included.has(type));
-  const includedCount = types.filter((type) => included.has(type)).length;
+function loadMilestoneInclusions() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("valtrak-plan-milestones-v1") || "{}");
+    Object.entries(saved).forEach(([planName, value]) => {
+      if (!value || !Array.isArray(value.included)) return;
+      state.planIncludedMilestones.set(planName, new Set(value.included));
+      state.planKnownMilestones.set(
+        planName,
+        new Set(Array.isArray(value.known) ? value.known : value.included)
+      );
+    });
+  } catch {
+    state.planIncludedMilestones.clear();
+    state.planKnownMilestones.clear();
+  }
+}
+
+function planMilestoneSelection(planName, items) {
+  const available = new Set(availableValidationMilestones(items));
+  if (!state.planIncludedMilestones.has(planName)) {
+    state.planIncludedMilestones.set(planName, new Set(available));
+    state.planKnownMilestones.set(planName, new Set(available));
+  } else {
+    const included = state.planIncludedMilestones.get(planName);
+    const known = state.planKnownMilestones.get(planName) || new Set(included);
+    available.forEach((milestone) => {
+      if (!known.has(milestone)) included.add(milestone);
+    });
+    [...included].forEach((milestone) => {
+      if (!available.has(milestone)) included.delete(milestone);
+    });
+    state.planKnownMilestones.set(planName, new Set([...known, ...available]));
+  }
+  return state.planIncludedMilestones.get(planName);
+}
+
+function savePlanMilestoneInclusions() {
+  const saved = Object.fromEntries(
+    [...state.planIncludedMilestones].map(([planName, included]) => [
+      planName,
+      {
+        included: [...included],
+        known: [...(state.planKnownMilestones.get(planName) || included)],
+      },
+    ])
+  );
+  localStorage.setItem("valtrak-plan-milestones-v1", JSON.stringify(saved));
+}
+
+function renderInclusionControl(container, values, included, options) {
+  const allIncluded = values.length > 0 && values.every((value) => included.has(value));
+  const includedCount = values.filter((value) => included.has(value)).length;
   container.innerHTML = `
     <div class="type-inclusion-heading">
       <div>
-        <strong>Included item types</strong>
-        <span>${formatNumber(includedCount)} of ${formatNumber(types.length)} types included</span>
+        <strong>${options.heading}</strong>
+        <span>${formatNumber(includedCount)} of ${formatNumber(values.length)} ${options.countLabel} included</span>
       </div>
-      <button type="button" class="text-button" data-include-all-types="${scope}">
+      <button type="button" class="text-button" ${options.allAttribute}>
         ${allIncluded ? "Clear all" : "Include all"}
       </button>
     </div>
     <div class="type-inclusion-chips">
-      ${types.map((type) => `
-        <button type="button" class="type-inclusion-chip ${included.has(type) ? "is-included" : ""}"
-          data-type-scope="${scope}" data-item-type="${escapeAttribute(type)}"
-          aria-pressed="${included.has(type)}">${escapeHtml(type)}</button>
+      ${values.map((value) => `
+        <button type="button" class="type-inclusion-chip ${included.has(value) ? "is-included" : ""}"
+          ${options.valueAttribute}="${escapeAttribute(value)}"
+          aria-pressed="${included.has(value)}">${escapeHtml(value)}</button>
       `).join("")}
     </div>`;
+}
+
+function renderTypeInclusionControl(container, types, included, scope) {
+  renderInclusionControl(container, types, included, {
+    heading: "Included item types",
+    countLabel: "types",
+    allAttribute: `data-include-all-types="${scope}"`,
+    valueAttribute: `data-type-scope="${scope}" data-item-type`,
+  });
+}
+
+function renderMilestoneInclusionControl(container, milestones, included) {
+  renderInclusionControl(container, milestones, included, {
+    heading: "Included validation milestones",
+    countLabel: "milestones",
+    allAttribute: "data-include-all-milestones",
+    valueAttribute: "data-item-milestone",
+  });
 }
 
 function renderProjectTypeInclusions() {
@@ -707,18 +789,21 @@ function renderPlanOverview(planName) {
   if (!stats) return;
   const listed = state.plans.find((plan) => plan.vplan_name === planName);
   const included = planTypeSelection(planName, stats.items);
+  const includedMilestones = planMilestoneSelection(planName, stats.items);
   const items = planIncludedItems(planName, stats.items);
   const counts = statusCounts(items);
   const sectionRoots = buildTree(stats.items);
-  const includeItem = (item) => included.has(functionalType(item));
+  const includeItem = (item) =>
+    included.has(functionalType(item))
+    && includedMilestones.has(validationMilestone(item));
   const sectionRollups = buildHierarchyRollups(sectionRoots, includeItem);
   assertHierarchyIntegrityOnce(
-    hierarchyValidationKey(planName, included),
+    hierarchyValidationKey(planName, included, includedMilestones),
     stats.items,
     sectionRoots,
     sectionRollups,
     includeItem,
-    (item) => hierarchyItemVisible(item, included)
+    (item) => hierarchyItemVisible(item, included, includedMilestones)
   );
   const sectionGroups = new Map();
   stats.items.filter(itemSupportsSectionTarget).forEach((item) => {
@@ -749,6 +834,11 @@ function renderPlanOverview(planName) {
     availableFunctionalTypes(stats.items),
     included,
     "plan"
+  );
+  renderMilestoneInclusionControl(
+    $("#plan-milestone-inclusions"),
+    availableValidationMilestones(stats.items),
+    includedMilestones
   );
   $("#plan-overview-content").innerHTML = `
     <div class="plan-overview-hero">
@@ -1010,8 +1100,9 @@ function assertHierarchyIntegrity(
   }
 }
 
-function hierarchyValidationKey(planName, includedTypes) {
-  return `${planName}\u0000${[...includedTypes].sort().join("\u0000")}`;
+function hierarchyValidationKey(planName, includedTypes, includedMilestones = new Set()) {
+  return `${planName}\u0000${[...includedTypes].sort().join("\u0000")}`
+    + `\u0001${[...includedMilestones].sort().join("\u0000")}`;
 }
 
 function assertHierarchyIntegrityOnce(key, ...args) {
@@ -1020,17 +1111,20 @@ function assertHierarchyIntegrityOnce(key, ...args) {
   state.hierarchyValidationKeys.add(key);
 }
 
-function hierarchyItemVisible(item, includedTypes) {
+function hierarchyItemVisible(item, includedTypes, includedMilestones = null) {
   return !itemHasStatus(item)
     || itemSupportsSectionTarget(item)
-    || includedTypes.has(functionalType(item));
+    || (
+      includedTypes.has(functionalType(item))
+      && (!includedMilestones || includedMilestones.has(validationMilestone(item)))
+    );
 }
 
-function visibleHierarchyNodes(nodes, includedTypes) {
+function visibleHierarchyNodes(nodes, includedTypes, includedMilestones = null) {
   return nodes.flatMap((node) =>
-    hierarchyItemVisible(node.item, includedTypes)
+    hierarchyItemVisible(node.item, includedTypes, includedMilestones)
       ? [node]
-      : visibleHierarchyNodes(node.children, includedTypes)
+      : visibleHierarchyNodes(node.children, includedTypes, includedMilestones)
   );
 }
 
@@ -1044,20 +1138,23 @@ function renderTree() {
   const status = $("#hierarchy-status").value;
   const roots = buildTree(stats.items);
   const included = planTypeSelection(state.selectedPlan, stats.items);
-  const includeItem = (item) => included.has(functionalType(item));
+  const includedMilestones = planMilestoneSelection(state.selectedPlan, stats.items);
+  const includeItem = (item) =>
+    included.has(functionalType(item))
+    && includedMilestones.has(validationMilestone(item));
   const rollups = buildHierarchyRollups(roots, includeItem);
   assertHierarchyIntegrityOnce(
-    hierarchyValidationKey(state.selectedPlan, included),
+    hierarchyValidationKey(state.selectedPlan, included, includedMilestones),
     stats.items,
     roots,
     rollups,
     includeItem,
-    (item) => hierarchyItemVisible(item, included)
+    (item) => hierarchyItemVisible(item, included, includedMilestones)
   );
   const filtered = stats.items.filter((item) => {
-    const matchesType = hierarchyItemVisible(item, included);
+    const matchesType = hierarchyItemVisible(item, included, includedMilestones);
     const matchesStatus = !status || (itemHasStatus(item) && item.s === status);
-    const matchesQuery = !query || `${item.n} ${item.p} ${item.o || ""} ${item.t || ""}`.toLowerCase().includes(query);
+    const matchesQuery = !query || `${item.n} ${item.p} ${item.o || ""} ${item.t || ""} ${item.mil || ""}`.toLowerCase().includes(query);
     return matchesType && matchesStatus && matchesQuery;
   });
 
@@ -1076,7 +1173,7 @@ function renderTree() {
     return;
   }
 
-  const displayRoots = visibleHierarchyNodes(roots, included);
+  const displayRoots = visibleHierarchyNodes(roots, included, includedMilestones);
   if (!state.treeInitialized) {
     displayRoots.forEach((root) => state.expanded.add(root.item.p));
     state.treeInitialized = true;
@@ -1084,7 +1181,7 @@ function renderTree() {
   const visible = [];
   function walk(nodes, depth) {
     nodes.forEach((node) => {
-      const children = visibleHierarchyNodes(node.children, included);
+      const children = visibleHierarchyNodes(node.children, included, includedMilestones);
       visible.push({ node, depth, children });
       if (state.expanded.has(node.item.p)) walk(children, depth + 1);
     });
@@ -1121,6 +1218,7 @@ function treeRow(item, depth, hasChildren, expanded, rollup) {
         </span>
       </div>
       <span>${item.t ? `<span class="type-chip">${escapeHtml(item.t)}</span>` : "—"}</span>
+      <span><span class="type-chip">${escapeHtml(validationMilestone(item))}</span></span>
       <span class="owner-cell" title="${escapeAttribute(item.o || "")}">${escapeHtml(item.o || "—")}</span>
       <div class="tree-rollup" title="${formatNumber(counts.complete)} completed of ${formatNumber(counts.active)} active items">
         <strong>${formatPercent(counts.completion)}</strong>
@@ -1746,6 +1844,30 @@ function bindEvents() {
     renderPlanDetail({ resetTreeState: false });
     renderPlanOverview(state.planOverviewName);
   });
+  $("#plan-milestone-inclusions").addEventListener("click", (event) => {
+    const milestoneButton = event.target.closest("[data-item-milestone]");
+    const allButton = event.target.closest("[data-include-all-milestones]");
+    if (!milestoneButton && !allButton) return;
+    const stats = state.planStats.get(state.planOverviewName);
+    if (!stats) return;
+    const included = planMilestoneSelection(state.planOverviewName, stats.items);
+    if (milestoneButton) {
+      const milestone = milestoneButton.dataset.itemMilestone;
+      if (included.has(milestone)) included.delete(milestone);
+      else included.add(milestone);
+    } else {
+      const milestones = availableValidationMilestones(stats.items);
+      const allIncluded = milestones.every((milestone) => included.has(milestone));
+      state.planIncludedMilestones.set(
+        state.planOverviewName,
+        new Set(allIncluded ? [] : milestones)
+      );
+    }
+    savePlanMilestoneInclusions();
+    renderPlanList();
+    renderPlanDetail({ resetTreeState: false });
+    renderPlanOverview(state.planOverviewName);
+  });
   $("#plan-overview-dialog").addEventListener("click", (event) => {
     if (event.target === $("#plan-overview-dialog")) $("#plan-overview-dialog").close();
   });
@@ -1811,6 +1933,7 @@ async function init() {
     buildPlanStats();
     loadMonitoredPlans();
     loadTypeInclusions();
+    loadMilestoneInclusions();
     const preferred = [...state.planStats.values()]
       .sort((a, b) => b.counts.active - a.counts.active)[0]?.name;
     state.selectedPlan = lastOpenPlan(preferred);

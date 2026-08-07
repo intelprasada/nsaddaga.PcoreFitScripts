@@ -9,10 +9,11 @@ vm.runInNewContext([
   between("function statusCounts", "function targetGap"),
   between("function itemSupportsSectionTarget", "function resolvedTarget"),
   between("function itemHasStatus", "function normalizedPlanCandidates"),
-  between("function functionalType", "function availableFunctionalTypes"),
+  between("function functionalType", "function loadTypeInclusions"),
   between("function buildTree", "function renderTree"),
   "this.rollups = { buildTree, buildHierarchyRollups, assertHierarchyIntegrity,"
-    + " visibleHierarchyNodes, hierarchyItemVisible, functionalType, itemHasStatus };",
+    + " visibleHierarchyNodes, hierarchyItemVisible, functionalType,"
+    + " validationMilestone, itemHasStatus };",
 ].join("\n"), context);
 
 const {
@@ -22,6 +23,7 @@ const {
   visibleHierarchyNodes,
   hierarchyItemVisible,
   functionalType,
+  validationMilestone,
   itemHasStatus,
 } = context.rollups;
 
@@ -39,6 +41,7 @@ for (let index = 0; index < 3; index += 1) {
     st: "TC",
     s: "complete",
     t: "Design_requirement",
+    mil: index === 0 ? "VAL1.0" : "VAL2.0",
   });
 }
 for (let index = 0; index < 8; index += 1) {
@@ -47,6 +50,7 @@ for (let index = 0; index < 8; index += 1) {
     st: "TC",
     s: "open",
     t: "Design_requirement",
+    mil: index < 4 ? "VAL1.0" : "VAL2.0",
   });
 }
 const internal = {
@@ -99,6 +103,24 @@ function visibleStatusItems(nodes) {
 const visible = visibleStatusItems(roots);
 assert.strictEqual(visible.length, 3);
 assert.ok(visible.every((item) => item.t === "Coverage"));
+
+const includedTypes = new Set(["Design_requirement"]);
+const includedMilestones = new Set(["VAL1.0"]);
+const includeVal1Design = (item) =>
+  includedTypes.has(functionalType(item))
+  && includedMilestones.has(validationMilestone(item));
+const milestoneRollups = buildHierarchyRollups(roots, includeVal1Design);
+assertHierarchyIntegrity(
+  items,
+  roots,
+  milestoneRollups,
+  includeVal1Design,
+  (item) => hierarchyItemVisible(item, includedTypes, includedMilestones),
+);
+assert.deepStrictEqual(
+  ["complete", "open", "active"].map((key) => milestoneRollups.get(section.p)[key]),
+  [1, 4, 5],
+);
 
 assert.throws(
   () => buildTree([root, { ...root }]),
