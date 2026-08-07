@@ -34,7 +34,7 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const numberFormatter = new Intl.NumberFormat("en-US");
 const structuralSubtypes = new Set(["TCD", "TPF"]);
 const formatNumber = (value) => numberFormatter.format(value);
-const formatPercent = (value) => `${Math.round(value * 100)}%`;
+const formatPercent = (value) => `${Math.floor(value * 100)}%`;
 const completionCountsLabel = (counts) =>
   `${formatNumber(counts.complete)}/${formatNumber(counts.active)}`;
 const completionLabel = (counts) =>
@@ -291,7 +291,7 @@ function summaryCard(label, value, detail, progress, icon) {
     <article class="summary-card">
       <div class="summary-card-header"><span>${label}</span><span class="summary-card-icon">${icon}</span></div>
       <strong>${value}</strong>
-      <footer><span>${detail}</span><span>${Math.round(progress * 100)}%</span></footer>
+      <footer><span>${detail}</span><span>${Math.floor(progress * 100)}%</span></footer>
       <div class="mini-bar"><span style="width:${Math.max(0, Math.min(100, progress * 100))}%"></span></div>
     </article>`;
 }
@@ -431,11 +431,11 @@ function renderTypeCompletion(items = overviewItems()) {
     return `
       <div class="type-row">
         <span class="type-name" title="${escapeAttribute(row.name)}">${escapeHtml(row.name)}</span>
-        <div class="progress-track" aria-label="${escapeAttribute(row.name)}: ${Math.round(completeWidth)}% complete">
+        <div class="progress-track" aria-label="${escapeAttribute(row.name)}: ${Math.floor(completeWidth)}% complete">
           <span class="progress-complete" style="width:${completeWidth}%"></span>
           <span class="progress-open" style="width:${openWidth}%"></span>
         </div>
-        <span class="type-score">${Math.round(completeWidth)}%</span>
+        <span class="type-score">${Math.floor(completeWidth)}%</span>
         <span class="type-count">${completionCountsLabel(row.counts)}</span>
       </div>`;
   }).join("") : `<div class="empty-state">Choose at least one monitored plan to see completion breakdowns.</div>`;
@@ -596,11 +596,11 @@ function breakdownRows(items, key, fallback, limit = 8) {
       const percent = row.counts.completion * 100;
       return `<div class="plan-breakdown-row">
         <span title="${escapeAttribute(row.name)}">${escapeHtml(row.name)}</span>
-        <div class="progress-track" aria-label="${escapeAttribute(row.name)}: ${Math.round(percent)}% complete">
+        <div class="progress-track" aria-label="${escapeAttribute(row.name)}: ${Math.floor(percent)}% complete">
           <span class="progress-complete" style="width:${percent}%"></span>
           <span class="progress-open" style="width:${100 - percent}%"></span>
         </div>
-        <strong>${Math.round(percent)}% · ${completionCountsLabel(row.counts)}</strong>
+        <strong>${Math.floor(percent)}% · ${completionCountsLabel(row.counts)}</strong>
       </div>`;
     }).join("") || `<div class="empty-state">No active items in this category.</div>`;
 }
@@ -936,7 +936,7 @@ function treeRow(item, depth, hasChildren, expanded, rollup) {
       <span class="owner-cell" title="${escapeAttribute(item.o || "")}">${escapeHtml(item.o || "—")}</span>
       <div class="tree-rollup" title="${formatNumber(counts.complete)} completed of ${formatNumber(counts.active)} active items">
         <strong>${formatPercent(counts.completion)}</strong>
-        <small>${formatNumber(counts.open)}/${formatNumber(counts.active)} open/total</small>
+        <small>${formatNumber(counts.complete)}/${formatNumber(counts.active)} complete/total</small>
       </div>
       <div class="tree-target">
         ${itemSupportsSectionTarget(item)
