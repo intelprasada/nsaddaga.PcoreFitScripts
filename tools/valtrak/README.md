@@ -25,7 +25,7 @@ the browser.
 | `VALTRAK_VMGR_SERVER` | `scygrnit337.sc.intel.com:8090` | vManager server |
 | `VALTRAK_PROJECT` | `jnc` | vManager project |
 | `VALTRAK_ROOT_PLAN` | `JNC All vplans` | Aggregate plan used for the project dashboard |
-| `VALTRAK_STATE_DIR` | `~/.valtrak` | Private snapshots, jobs, overrides, and access token |
+| `VALTRAK_STATE_DIR` | `~/.valtrak` | Private snapshots, jobs, overrides, completion targets, and access token |
 
 Example network launch:
 
@@ -45,6 +45,11 @@ authorized users can submit vManager status updates through your account.
   the active snapshot only after a complete vManager read.
 - Completion is `complete / (complete + open)`; `future` and `rejected` are
   excluded.
+- Completion targets persist in `completion-targets.json` and are shared by
+  users of the service. Plans inherit the portfolio target, and sections
+  inherit their plan target until an explicit override is set. The remaining
+  gap is `max(0, ceil(target × active items) - complete items)`; scopes without
+  active items report that directly.
 - Status updates re-read the live item, enforce the expected current status,
   resolve referenced items to their native owning plan, write, and verify.
 - Runtime files use owner-only permissions under `VALTRAK_STATE_DIR`.

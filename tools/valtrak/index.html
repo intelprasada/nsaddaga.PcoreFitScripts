@@ -291,6 +291,12 @@
       project dashboard, while each plan overview keeps its own browser-saved selection.
     </p>
     <p>
+      Completion targets are shared and persisted by the ValTrak service. Plans inherit
+      the portfolio target unless they define their own, and validation-plan sections
+      inherit their plan target. The displayed gap is the number of additional complete
+      active items needed to reach the target, rounded up to the next whole item.
+    </p>
+    <p>
       The dashboard reflects validation-plan workflow status (<code>i_status</code>), not
       measured test or coverage grade. The queried aggregate plan did not expose populated
       grade values in this snapshot. Project totals are reference-weighted: when a plan is

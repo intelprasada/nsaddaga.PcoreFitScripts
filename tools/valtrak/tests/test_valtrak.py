@@ -1,5 +1,10 @@
 import importlib.util
+import http.client
+import json
 import sys
+import threading
+from functools import partial
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 
@@ -26,6 +31,103 @@ def test_first_run_creates_private_empty_snapshot(monkeypatch, tmp_path):
     assert module.PLAN_ROWS == []
     assert (tmp_path / "data.json").stat().st_mode & 0o777 == 0o600
     assert (tmp_path / "plans.json").stat().st_mode & 0o777 == 0o600
+    assert module.COMPLETION_TARGETS == {
+        "overall": 100,
+        "plans": {},
+        "sections": {},
+    }
+    assert (tmp_path / "completion-targets.json").stat().st_mode & 0o777 == 0o600
+
+
+def test_completion_targets_are_normalized_and_persisted(monkeypatch, tmp_path):
+    module = load_valtrak(monkeypatch, tmp_path)
+    targets = module.normalize_completion_targets(
+        {
+            "overall": 90,
+            "plans": {"Plan A": 80.0},
+            "sections": {"Root/Plan A/Feature": 75},
+        }
+    )
+
+    module.atomic_json_write(module.TARGETS_PATH, targets)
+
+    assert module.load_completion_targets() == {
+        "overall": 90,
+        "plans": {"Plan A": 80},
+        "sections": {"Root/Plan A/Feature": 75},
+    }
+
+
+def test_completion_targets_reject_invalid_percentages(monkeypatch, tmp_path):
+    module = load_valtrak(monkeypatch, tmp_path)
+
+    for payload in (
+        {"overall": -1},
+        {"overall": 101},
+        {"overall": 99.5},
+        {"plans": {"Plan A": True}},
+        {"sections": []},
+        {"unknown": 90},
+    ):
+        try:
+            module.normalize_completion_targets(payload)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"invalid completion targets were accepted: {payload}")
+
+
+def test_completion_targets_api_persists_shared_state(monkeypatch, tmp_path):
+    module = load_valtrak(monkeypatch, tmp_path)
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        partial(module.DashboardHandler, directory=str(TOOL_DIR)),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    payload = {
+        "overall": 92,
+        "plans": {"Plan A": 88},
+        "sections": {"Root/Plan A/Feature": 84},
+    }
+    try:
+        connection = http.client.HTTPConnection(*server.server_address)
+        connection.request(
+            "POST",
+            "/api/completion-targets",
+            body=json.dumps(payload),
+            headers={
+                "Content-Type": "application/json",
+                "X-CSRF-Token": module.CSRF_TOKEN,
+            },
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+        assert json.loads(response.read()) == payload
+
+        connection.request(
+            "POST",
+            "/api/completion-targets",
+            body=json.dumps({"scope": "plan", "key": "Plan B", "value": 81}),
+            headers={
+                "Content-Type": "application/json",
+                "X-CSRF-Token": module.CSRF_TOKEN,
+            },
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+        payload["plans"]["Plan B"] = 81
+        assert json.loads(response.read()) == payload
+
+        connection.request("GET", "/api/completion-targets")
+        response = connection.getresponse()
+        assert response.status == 200
+        assert json.loads(response.read()) == payload
+        assert json.loads((tmp_path / "completion-targets.json").read_text()) == payload
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def test_projects_native_rows_under_aggregate_reference(monkeypatch, tmp_path):

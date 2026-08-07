@@ -25,6 +25,7 @@ const state = {
   treeExpandedAll: false,
   treeInitialized: false,
   treeFocusPath: "",
+  completionTargets: { overall: 100, plans: {}, sections: {} },
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -50,6 +51,7 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
   minute: "2-digit",
   timeZoneName: "short",
 });
+let targetSaveQueue = Promise.resolve();
 
 function statusCounts(items) {
   const counts = { complete: 0, open: 0, future: 0, rejected: 0, none: 0 };
@@ -61,6 +63,72 @@ function statusCounts(items) {
   counts.active = counts.complete + counts.open;
   counts.completion = counts.active ? counts.complete / counts.active : 0;
   return counts;
+}
+
+function targetGap(counts, target) {
+  if (!counts.active) return { needed: 0, label: "No active items" };
+  const needed = Math.max(0, Math.ceil((target * counts.active) / 100) - counts.complete);
+  return {
+    needed,
+    label: needed
+      ? `${formatNumber(needed)} more item${needed === 1 ? "" : "s"} to reach ${target}%`
+      : "Target met",
+  };
+}
+
+function sectionTargetKey(item) {
+  return `${item.cp}::${item.id || item.p}`;
+}
+
+function resolvedTarget(scope, key = "") {
+  if (scope === "overall") {
+    return { value: state.completionTargets.overall, explicit: true, source: "Portfolio target" };
+  }
+  if (scope === "plan") {
+    const explicit = Object.hasOwn(state.completionTargets.plans, key);
+    return {
+      value: explicit ? state.completionTargets.plans[key] : state.completionTargets.overall,
+      explicit,
+      source: explicit ? "Plan target" : "Using portfolio target",
+    };
+  }
+  const explicit = Object.hasOwn(state.completionTargets.sections, key);
+  const planName = state.items.find((item) => sectionTargetKey(item) === key)?.cp
+    || state.planOverviewName
+    || state.selectedPlan;
+  const plan = resolvedTarget("plan", planName);
+  return {
+    value: explicit ? state.completionTargets.sections[key] : plan.value,
+    explicit,
+    source: explicit ? "Section target" : "Using plan target",
+  };
+}
+
+function targetSummary(counts, scope, key = "") {
+  const target = resolvedTarget(scope, key);
+  return `${target.value}% target · ${targetGap(counts, target.value).label}`;
+}
+
+function targetControl(counts, scope, key = "", compact = false) {
+  const target = resolvedTarget(scope, key);
+  const label = scope === "overall" ? "Portfolio" : scope === "plan" ? "Plan" : "Section";
+  return `
+    <div class="target-control ${compact ? "is-compact" : ""}" data-target-container>
+      <label>
+        <span>${label} target</span>
+        <span class="target-input-wrap">
+          <input type="number" min="0" max="100" step="1" value="${target.value}"
+            data-target-scope="${scope}" data-target-key="${escapeAttribute(key)}"
+            aria-label="${label} completion target percentage">
+          <span>%</span>
+        </span>
+      </label>
+      <span class="target-gap ${targetGap(counts, target.value).needed ? "" : "is-met"}">${targetGap(counts, target.value).label}</span>
+      <small>${target.source}</small>
+      ${scope !== "overall" && target.explicit
+        ? `<button type="button" class="target-reset" data-reset-target="${scope}" data-target-key="${escapeAttribute(key)}">Use inherited</button>`
+        : ""}
+    </div>`;
 }
 
 function itemHasStatus(item) {
@@ -243,6 +311,7 @@ function renderOverview() {
 
   const ring = $("#completion-ring");
   ring.style.setProperty("--completion", `${counts.completion * 100}%`);
+  ring.style.setProperty("--target-angle", `${state.completionTargets.overall * 3.6}deg`);
   ring.innerHTML = `<div class="ring-label"><strong>${formatPercent(counts.completion)}</strong><span>${completionCountsLabel(counts)}</span></div>`;
   ring.setAttribute("aria-label", `${formatPercent(counts.completion)} active completion, ${completionCountsLabel(counts)}`);
 
@@ -257,7 +326,7 @@ function renderOverview() {
       <span class="legend-dot" style="background:${color}"></span>
       <span>${name}</span>
       <strong>${formatNumber(count)}</strong>
-    </div>`).join("");
+    </div>`).join("") + targetControl(counts, "overall");
 
   const scopedPlansByName = new Map(scopedPlans.map((plan) => [plan.name, plan]));
   const selectedPlans = [...state.monitoredPlans]
@@ -285,7 +354,10 @@ function renderOverview() {
         <strong>${escapeHtml(plan.name)}</strong>
         <span>${plan.counts ? `${formatNumber(plan.counts.open)} open · ` : "Catalog only · "}${escapeHtml(plan.owner)}</span>
       </button>
-      <span class="completion-badge ${plan.counts ? "" : "is-unlinked"}">${plan.counts ? completionLabel(plan.counts) : "Not linked"}</span>
+      <span class="attention-target">
+        <span class="completion-badge ${plan.counts ? "" : "is-unlinked"}">${plan.counts ? completionLabel(plan.counts) : "Not linked"}</span>
+        ${plan.counts ? `<small>${escapeHtml(targetSummary(plan.counts, "plan", plan.name))}</small>` : ""}
+      </span>
     </div>`).join("") : `<div class="empty-state">No validation plans are selected for monitoring.</div>`;
 
   const ownerGroups = new Map();
@@ -413,12 +485,14 @@ function renderPlanList() {
   $("#plan-list").innerHTML = plans.map((plan) => {
     const stats = state.planStats.get(plan.vplan_name);
     const completion = stats ? completionLabel(stats.counts) : "Not linked";
+    const target = stats ? targetSummary(stats.counts, "plan", plan.vplan_name) : "";
     return `
       <button class="plan-list-item ${plan.vplan_name === state.selectedPlan ? "is-selected" : ""}"
         data-plan="${escapeAttribute(plan.vplan_name)}"
         aria-pressed="${plan.vplan_name === state.selectedPlan}">
         <strong title="${escapeAttribute(plan.vplan_name)}">${escapeHtml(plan.vplan_name)}</strong>
         <span class="plan-list-meta"><span>${escapeHtml(plan.owner || "Unassigned")}</span><span>${completion}</span></span>
+        ${stats ? `<span class="plan-list-target">${escapeHtml(target)}</span>` : ""}
       </button>`;
   }).join("");
 }
@@ -441,6 +515,7 @@ function renderPlanDetail({ resetTreeState = true } = {}) {
         <span class="completion-badge">${completionLabel(counts)}</span>
       </div>` : ""}
     </div>
+    ${items.length ? targetControl(counts, "plan", state.selectedPlan, true) : ""}
     <div class="detail-metrics">
       <div class="detail-metric"><span>${stats?.references > 1 ? `Items across ${stats.references} refs` : "Total items"}</span><strong>${formatNumber(items.length)}</strong></div>
       <div class="detail-metric"><span>Complete</span><strong>${formatNumber(counts.complete)}</strong></div>
@@ -526,6 +601,17 @@ function renderPlanOverview(planName) {
   const included = planTypeSelection(planName, stats.items);
   const items = stats.items.filter((item) => included.has(functionalType(item)));
   const counts = statusCounts(items);
+  const sectionRollups = buildHierarchyRollups(buildTree(items));
+  const sectionGroups = new Map();
+  items.filter((item) => item.k?.includes("Section")).forEach((item) => {
+    const key = sectionTargetKey(item);
+    const counts = sectionRollups.get(item.p) || statusCounts([item]);
+    if (!sectionGroups.has(key)) {
+      sectionGroups.set(key, { item, key, counts: { ...counts } });
+    }
+  });
+  const sections = [...sectionGroups.values()]
+    .sort((a, b) => a.item.p.localeCompare(b.item.p));
   state.planOverviewName = planName;
   const ownerGroups = new Map();
   items.filter((item) => itemHasStatus(item) && item.o).forEach((item) => {
@@ -551,13 +637,16 @@ function renderPlanOverview(planName) {
       <div class="plan-score" style="--plan-score:${counts.completion * 100}%">
         <div><strong>${formatPercent(counts.completion)}</strong><span>${completionCountsLabel(counts)}</span></div>
       </div>
-      <div class="plan-status-grid">
-        ${[
-          ["Complete", counts.complete],
-          ["Open", counts.open],
-          ["Future", counts.future],
-          ["Rejected", counts.rejected],
-        ].map(([label, value]) => `<div class="plan-status-card"><strong>${formatNumber(value)}</strong><span>${label}</span></div>`).join("")}
+      <div>
+        <div class="plan-status-grid">
+          ${[
+            ["Complete", counts.complete],
+            ["Open", counts.open],
+            ["Future", counts.future],
+            ["Rejected", counts.rejected],
+          ].map(([label, value]) => `<div class="plan-status-card"><strong>${formatNumber(value)}</strong><span>${label}</span></div>`).join("")}
+        </div>
+        ${targetControl(counts, "plan", planName)}
       </div>
     </div>
     <div class="plan-overview-grid">
@@ -578,8 +667,22 @@ function renderPlanOverview(planName) {
           </div>`).join("") : `<div class="empty-state">No owners are assigned in this plan.</div>`}
         </div>
       </section>
+      <section class="plan-overview-section section-targets">
+        <h3>Section targets</h3>
+        <p class="panel-description">Set a target for any validation-plan section. Unchanged sections inherit the plan target.</p>
+        <div class="section-target-list">
+          ${sections.length ? sections.map(({ item, key, counts: sectionCounts }) => `
+            <div class="section-target-row">
+              <div>
+                <strong title="${escapeAttribute(item.p)}">${escapeHtml(item.n)}</strong>
+                <span>${completionLabel(sectionCounts)}</span>
+              </div>
+              ${targetControl(sectionCounts, "section", key, true)}
+            </div>`).join("") : `<div class="empty-state">No validation-plan sections are available.</div>`}
+        </div>
+      </section>
     </div>`;
-  $("#plan-overview-dialog").showModal();
+  if (!$("#plan-overview-dialog").open) $("#plan-overview-dialog").showModal();
 }
 
 function openRefreshDialog(scope, plan = null) {
@@ -813,10 +916,11 @@ function treeRow(item, depth, hasChildren, expanded, rollup) {
       </div>
       <span>${item.t ? `<span class="type-chip">${escapeHtml(item.t)}</span>` : "—"}</span>
       <span class="owner-cell" title="${escapeAttribute(item.o || "")}">${escapeHtml(item.o || "—")}</span>
-      <span class="tree-rollup" title="${formatNumber(counts.complete)} completed of ${formatNumber(counts.active)} active items">
+      <div class="tree-rollup" title="${formatNumber(counts.complete)} completed of ${formatNumber(counts.active)} active items">
         <strong>${completionCountsLabel(counts)}</strong>
         <small>${itemContributionLabel(counts)}</small>
-      </span>
+        ${item.k?.includes("Section") ? targetControl(counts, "section", sectionTargetKey(item), true) : ""}
+      </div>
       ${statusControl(item)}
     </div>`;
 }
@@ -914,6 +1018,32 @@ async function apiFetch(path, options = {}, retryCsrf = true) {
   }
   if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
   return payload;
+}
+
+function rerenderCompletionTargets() {
+  renderOverview();
+  renderPlanList();
+  renderPlanDetail({ resetTreeState: false });
+  if ($("#plan-overview-dialog").open && state.planOverviewName) {
+    renderPlanOverview(state.planOverviewName);
+  }
+}
+
+async function saveCompletionTarget(scope, key, value) {
+  targetSaveQueue = targetSaveQueue.then(async () => {
+    try {
+      state.completionTargets = await apiFetch("/api/completion-targets", {
+        method: "POST",
+        body: JSON.stringify({ scope, key, value }),
+      });
+      rerenderCompletionTargets();
+      showToast(value === null ? "Inherited completion target restored." : "Completion target saved.");
+    } catch (error) {
+      rerenderCompletionTargets();
+      showToast(`Unable to save target: ${error.message}`);
+    }
+  });
+  return targetSaveQueue;
 }
 
 function openStatusEditor(itemPath) {
@@ -1110,6 +1240,7 @@ function bindEvents() {
     renderTree();
   });
   $("#plan-tree").addEventListener("keydown", (event) => {
+    if (event.target.closest("[data-target-container]")) return;
     const row = event.target.closest(".tree-row");
     if (!row) return;
     const rows = $$(".tree-row", $("#plan-tree"));
@@ -1134,6 +1265,24 @@ function bindEvents() {
       renderTree();
       $(`[data-path="${CSS.escape(path)}"]`, $("#plan-tree"))?.focus();
     }
+  });
+  document.addEventListener("change", (event) => {
+    const input = event.target.closest("[data-target-scope]");
+    if (!input) return;
+    const value = Number(input.value);
+    if (!Number.isInteger(value) || value < 0 || value > 100) {
+      showToast("Completion targets must be whole percentages from 0 to 100.");
+      rerenderCompletionTargets();
+      return;
+    }
+    saveCompletionTarget(input.dataset.targetScope, input.dataset.targetKey || "", value);
+  });
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-reset-target]");
+    if (!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    saveCompletionTarget(button.dataset.resetTarget, button.dataset.targetKey || "", null);
   });
   $("#plan-tree").addEventListener("focusin", (event) => {
     const row = event.target.closest(".tree-row");
@@ -1280,25 +1429,28 @@ function bindEvents() {
 
 async function init() {
   try {
-    const [dataResponse, plansResponse, configResponse, overridesResponse] = await Promise.all([
+    const [dataResponse, plansResponse, configResponse, overridesResponse, targetsResponse] = await Promise.all([
       fetch("data.json"),
       fetch("plans.json"),
       fetch("/api/config"),
       fetch("/api/status-overrides"),
+      fetch("/api/completion-targets"),
     ]);
-    if (!dataResponse.ok || !plansResponse.ok || !configResponse.ok || !overridesResponse.ok) {
+    if (!dataResponse.ok || !plansResponse.ok || !configResponse.ok || !overridesResponse.ok || !targetsResponse.ok) {
       throw new Error("Dashboard data or write-service configuration could not be loaded");
     }
-    const [data, plans, config, overrides] = await Promise.all([
+    const [data, plans, config, overrides, targets] = await Promise.all([
       dataResponse.json(),
       plansResponse.json(),
       configResponse.json(),
       overridesResponse.json(),
+      targetsResponse.json(),
     ]);
     state.items = data.items;
     state.plans = plans;
     state.catalogPlans = new Set(plans.map((plan) => plan.vplan_name));
     state.apiConfig = config;
+    state.completionTargets = targets;
     const projectLabel = config.project.toUpperCase();
     $("#project-name").textContent = projectLabel;
     $("#project-avatar").textContent = projectLabel[0] || "V";
