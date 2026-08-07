@@ -155,6 +155,73 @@ def test_structural_headers_do_not_have_status(monkeypatch, tmp_path):
     assert module.item_has_status({"k": "Referenced Section", "s": "open"})
 
 
+def test_resolves_renamed_plan_root_with_shared_elements(monkeypatch, tmp_path):
+    module = load_valtrak(monkeypatch, tmp_path)
+    reference = {
+        "id": "reference-id",
+        "n": "Plan A DV",
+        "p": "Root/Plan A DV",
+        "k": "Reference",
+        "g": "Plan A DV",
+    }
+    current_items = [
+        reference,
+        {"id": "shared-id", "p": "Root/Plan A DV/Feature"},
+    ]
+    rows = [
+        {
+            "element_id": "shared-id",
+            "name": "Feature",
+            "full_path": "Plan A/Feature",
+            "vplan_element_kind": "Section",
+        }
+    ]
+
+    source_plan_name = module.resolve_refresh_root(
+        "Plan A DV",
+        rows,
+        current_items,
+        [reference],
+    )
+    projected = module.project_plan_rows(
+        "Plan A DV",
+        rows,
+        reference,
+        source_plan_name,
+    )
+
+    assert source_plan_name == "Plan A"
+    assert projected[1]["p"] == "Root/Plan A DV/Feature"
+    assert projected[1]["g"] == "Plan A DV"
+
+
+def test_rejects_unrelated_plan_root_without_shared_elements(monkeypatch, tmp_path):
+    module = load_valtrak(monkeypatch, tmp_path)
+    reference = {"p": "Root/Plan A", "g": "Plan A"}
+    current_items = [
+        reference,
+        {"id": "expected-id", "p": "Root/Plan A/Feature"},
+    ]
+    rows = [
+        {
+            "element_id": "foreign-id",
+            "full_path": "Plan B/Feature",
+        }
+    ]
+
+    try:
+        module.resolve_refresh_root(
+            "Plan A",
+            rows,
+            current_items,
+            [reference],
+        )
+    except RuntimeError as error:
+        assert "Unexpected path" in str(error)
+    else:
+        raise AssertionError("unrelated plan root was accepted")
+
+
 def test_rejects_direct_rows_from_another_plan(monkeypatch, tmp_path):
     module = load_valtrak(monkeypatch, tmp_path)
     reference = {

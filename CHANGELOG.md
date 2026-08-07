@@ -36,7 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ValTrak** — preserve hierarchy expansion and focus after a successful
   status update.
 - **ValTrak refreshes** — retain the top-level plan identity across nested
-  references and reject empty responses that would erase an existing subtree.
+  references, resolve renamed roots through shared element IDs, and reject
+  empty responses that would erase an existing subtree.
 - **ValTrak explorer** — retain valid hierarchy expansion and focus state after
   refreshes and status updates.
 - **ValTrak structural headers** — treat TCD and TPF rows as non-status-bearing
