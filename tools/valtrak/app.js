@@ -25,6 +25,7 @@ const state = {
   treeExpandedAll: false,
   treeInitialized: false,
   treeFocusPath: "",
+  hierarchyValidationKeys: new Set(),
   completionTargets: { overall: 100, plans: {}, sections: {} },
 };
 
@@ -60,6 +61,24 @@ function statusCounts(items) {
   counts.active = counts.complete + counts.open;
   counts.completion = counts.active ? counts.complete / counts.active : 0;
   return counts;
+}
+
+const statusCountKeys = ["complete", "open", "future", "rejected", "none"];
+
+function mergeStatusCounts(...groups) {
+  const merged = statusCounts([]);
+  groups.forEach((counts) => {
+    statusCountKeys.forEach((key) => {
+      merged[key] += counts[key];
+    });
+  });
+  merged.active = merged.complete + merged.open;
+  merged.completion = merged.active ? merged.complete / merged.active : 0;
+  return merged;
+}
+
+function sameStatusCounts(left, right) {
+  return [...statusCountKeys, "active"].every((key) => left[key] === right[key]);
 }
 
 function targetGap(counts, target) {
@@ -135,7 +154,7 @@ function targetControl(counts, scope, key = "", compact = false) {
 }
 
 function itemHasStatus(item) {
-  return !structuralSubtypes.has(item.st);
+  return !itemSupportsSectionTarget(item);
 }
 
 function normalizedPlanCandidates(name) {
@@ -152,6 +171,7 @@ function canonicalPlanName(name, catalog) {
 }
 
 function buildPlanStats() {
+  state.hierarchyValidationKeys.clear();
   const groups = new Map();
   const catalog = state.catalogPlans;
   state.items.forEach((item) => {
@@ -612,9 +632,16 @@ function renderPlanOverview(planName) {
   const included = planTypeSelection(planName, stats.items);
   const items = planIncludedItems(planName, stats.items);
   const counts = statusCounts(items);
-  const sectionRollups = buildHierarchyRollups(
-    buildTree(stats.items),
-    (item) => included.has(functionalType(item))
+  const sectionRoots = buildTree(stats.items);
+  const includeItem = (item) => included.has(functionalType(item));
+  const sectionRollups = buildHierarchyRollups(sectionRoots, includeItem);
+  assertHierarchyIntegrityOnce(
+    hierarchyValidationKey(planName, included),
+    stats.items,
+    sectionRoots,
+    sectionRollups,
+    includeItem,
+    (item) => hierarchyItemVisible(item, included)
   );
   const sectionGroups = new Map();
   stats.items.filter(itemSupportsSectionTarget).forEach((item) => {
@@ -826,7 +853,12 @@ async function resumeRefreshJob() {
 
 function buildTree(items) {
   const nodes = new Map();
-  items.forEach((item) => nodes.set(item.p, { item, children: [] }));
+  items.forEach((item) => {
+    if (!item.p || nodes.has(item.p)) {
+      throw new Error(`Hierarchy contains a missing or duplicate path: ${item.p || "(missing)"}`);
+    }
+    nodes.set(item.p, { item, children: [] });
+  });
   const roots = [];
   nodes.forEach((node, path) => {
     let parentPath = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
@@ -842,21 +874,87 @@ function buildTree(items) {
 function buildHierarchyRollups(roots, includeItem = () => true) {
   const rollups = new Map();
   function visit(node) {
-    const counts = node.children.length
-      ? node.children.map(visit).reduce((total, child) => {
-        ["complete", "open", "future", "rejected", "none"].forEach((key) => {
-          total[key] += child[key];
-        });
-        total.active = total.complete + total.open;
-        total.completion = total.active ? total.complete / total.active : 0;
-        return total;
-      }, statusCounts([]))
-      : statusCounts(includeItem(node.item) ? [node.item] : []);
+    const ownCounts = statusCounts(includeItem(node.item) ? [node.item] : []);
+    const counts = mergeStatusCounts(ownCounts, ...node.children.map(visit));
     rollups.set(node.item.p, counts);
     return counts;
   }
   roots.forEach(visit);
   return rollups;
+}
+
+function assertHierarchyIntegrity(
+  items,
+  roots,
+  rollups,
+  includeItem = () => true,
+  isVisible = includeItem
+) {
+  function fail(scope, expected, actual) {
+    throw new Error(
+      `Hierarchy rollup integrity failure at "${scope}": expected `
+      + `${expected.complete}/${expected.active} complete, got `
+      + `${actual?.complete ?? "missing"}/${actual?.active ?? "missing"}`
+    );
+  }
+
+  function verifyNode(node) {
+    const ownCounts = statusCounts(includeItem(node.item) ? [node.item] : []);
+    const expected = mergeStatusCounts(
+      ownCounts,
+      ...node.children.map((child) => rollups.get(child.item.p))
+    );
+    const actual = rollups.get(node.item.p);
+    if (!actual || !sameStatusCounts(expected, actual)) fail(node.item.p, expected, actual);
+    node.children.forEach(verifyNode);
+  }
+
+  roots.forEach(verifyNode);
+  const expectedTotal = statusCounts(items.filter(includeItem));
+  const actualTotal = mergeStatusCounts(...roots.map((root) => rollups.get(root.item.p)));
+  if (!sameStatusCounts(expectedTotal, actualTotal)) {
+    fail("plan total", expectedTotal, actualTotal);
+  }
+
+  const countedPaths = new Set(
+    items.filter((item) => itemHasStatus(item) && includeItem(item)).map((item) => item.p)
+  );
+  const visiblePaths = new Set(
+    items.filter((item) => itemHasStatus(item) && isVisible(item)).map((item) => item.p)
+  );
+  if (
+    countedPaths.size !== visiblePaths.size
+    || [...visiblePaths].some((path) => !countedPaths.has(path))
+  ) {
+    throw new Error(
+      `Hierarchy rollup visibility failure: ${visiblePaths.size} visible status items, `
+      + `${countedPaths.size} counted status items`
+    );
+  }
+}
+
+function hierarchyValidationKey(planName, includedTypes) {
+  return `${planName}\u0000${[...includedTypes].sort().join("\u0000")}`;
+}
+
+function assertHierarchyIntegrityOnce(key, ...args) {
+  if (state.hierarchyValidationKeys.has(key)) return;
+  assertHierarchyIntegrity(...args);
+  state.hierarchyValidationKeys.add(key);
+}
+
+function hierarchyItemVisible(item, includedTypes) {
+  return !itemHasStatus(item)
+    || itemSupportsSectionTarget(item)
+    || includedTypes.has(functionalType(item));
+}
+
+function visibleHierarchyNodes(nodes, includedTypes) {
+  return nodes.flatMap((node) =>
+    hierarchyItemVisible(node.item, includedTypes)
+      ? [node]
+      : visibleHierarchyNodes(node.children, includedTypes)
+  );
 }
 
 function renderTree() {
@@ -869,14 +967,21 @@ function renderTree() {
   const status = $("#hierarchy-status").value;
   const roots = buildTree(stats.items);
   const included = planTypeSelection(state.selectedPlan, stats.items);
-  const rollups = buildHierarchyRollups(
+  const includeItem = (item) => included.has(functionalType(item));
+  const rollups = buildHierarchyRollups(roots, includeItem);
+  assertHierarchyIntegrityOnce(
+    hierarchyValidationKey(state.selectedPlan, included),
+    stats.items,
     roots,
-    (item) => included.has(functionalType(item))
+    rollups,
+    includeItem,
+    (item) => hierarchyItemVisible(item, included)
   );
   const filtered = stats.items.filter((item) => {
+    const matchesType = hierarchyItemVisible(item, included);
     const matchesStatus = !status || (itemHasStatus(item) && item.s === status);
     const matchesQuery = !query || `${item.n} ${item.p} ${item.o || ""} ${item.t || ""}`.toLowerCase().includes(query);
-    return matchesStatus && matchesQuery;
+    return matchesType && matchesStatus && matchesQuery;
   });
 
   if (query || status) {
@@ -894,23 +999,25 @@ function renderTree() {
     return;
   }
 
+  const displayRoots = visibleHierarchyNodes(roots, included);
   if (!state.treeInitialized) {
-    roots.forEach((root) => state.expanded.add(root.item.p));
+    displayRoots.forEach((root) => state.expanded.add(root.item.p));
     state.treeInitialized = true;
   }
   const visible = [];
   function walk(nodes, depth) {
     nodes.forEach((node) => {
-      visible.push({ node, depth });
-      if (state.expanded.has(node.item.p)) walk(node.children, depth + 1);
+      const children = visibleHierarchyNodes(node.children, included);
+      visible.push({ node, depth, children });
+      if (state.expanded.has(node.item.p)) walk(children, depth + 1);
     });
   }
-  walk(roots, 0);
+  walk(displayRoots, 0);
   const limit = 4000;
   const rendered = visible.slice(0, limit);
   if (!rendered.some(({ node }) => node.item.p === state.treeFocusPath)) state.treeFocusPath = rendered[0]?.node.item.p || "";
-  const rows = rendered.map(({ node, depth }) =>
-    treeRow(node.item, depth, node.children.length > 0, state.expanded.has(node.item.p), rollups.get(node.item.p))
+  const rows = rendered.map(({ node, depth, children }) =>
+    treeRow(node.item, depth, children.length > 0, state.expanded.has(node.item.p), rollups.get(node.item.p))
   ).join("");
   const note = visible.length > limit
     ? `<div class="tree-limit">Showing ${formatNumber(limit)} of ${formatNumber(visible.length)} visible items. Collapse branches or search within the plan.</div>`
