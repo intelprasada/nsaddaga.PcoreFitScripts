@@ -55,6 +55,17 @@ authorized users can submit vManager status updates through your account.
 - Runtime files use owner-only permissions under `VALTRAK_STATE_DIR`.
 - The bundled certificate pins the internal vManager certificate.
 
+## Completion target controls
+
+Set the shared portfolio target from the Overview completion panel:
+
+![Portfolio completion target](docs/screenshots/completion-targets-overview.png)
+
+Set a plan target from Plan Explorer and override inherited targets on
+individual hierarchy sections:
+
+![Plan and section completion targets](docs/screenshots/completion-targets-plan-explorer.png)
+
 ## Requirements
 
 - Python 3.9+
