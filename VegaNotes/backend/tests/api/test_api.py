@@ -1932,6 +1932,77 @@ def test_rollover_relinks_task_note_id(client):
     assert r.json()["note_id"] == new_note_id
 
 
+def test_rollover_context_break_no_500_and_idempotent(client):
+    """Regression (T-800631 / T-N1KE10 class): rolling a note that uses the
+    ``@owner`` / ``#project`` context layout with an open task nested — via a
+    context marker — under a done-marked top-level task must:
+
+      * return 200 (previously the archive reindex hit ``UNIQUE constraint
+        failed: task.task_uuid`` → 500), and
+      * on a second roll of the now-consumed source return 200 with
+        ``already_rolled`` (previously a confusing 404).
+    """
+    from app.parser import parse as _parse
+
+    md = (
+        "# CtxWeekly ww50\n"
+        "@Namratha\n"
+        "\t!task #id T-CBB001 Cover buckets debug #status done\n"
+        "\t\t!AR #id T-CBB002 covers unreachable #status done\n"
+        "@Kushwanth\n"
+        "\t#project jnc\n"
+        "\t\t!task #id T-CBB003 IDQ Ramp up #eta ww17\n"
+        "\t\t\t!AR #id T-CBB004 issue checker review #status todo\n"
+    )
+    r = client.put(
+        "/api/notes",
+        json={"path": "ctxweekly-ww50.md", "body_md": md},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+
+    # First roll must succeed (no 500).
+    r = client.post(
+        "/api/notes/next-week",
+        json={"path": "ctxweekly-ww50.md"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+    assert (r.json()["from_ww"], r.json()["to_ww"]) == (50, 51)
+
+    new_md = (DATA / "notes" / "ctxweekly-ww51.md").read_text(encoding="utf-8")
+    archived_md = (DATA / "notes" / "_archive" / "ctxweekly-ww50.md").read_text(
+        encoding="utf-8"
+    )
+    # The moved open child is canonical in the next week, never in the archive.
+    assert "!task #id T-CBB003" in new_md
+    assert "!task #id T-CBB003" not in archived_md
+
+    def _canon(text: str) -> set[str]:
+        return {
+            t["attrs"].get("id")
+            for t in _parse(text)["tasks"]
+            if t["attrs"].get("id")
+        }
+
+    # Every canonical uuid lives in exactly one file (the crash invariant).
+    assert _canon(new_md).isdisjoint(_canon(archived_md))
+
+    # The moved task resolves via the API (proves the archive reindex ran
+    # cleanly and the row is re-homed to the active week).
+    r = client.get("/api/tasks/T-CBB003", headers={"Authorization": AUTH})
+    assert r.status_code == 200, r.text
+
+    # Second roll of the consumed source → idempotent success, not 404.
+    r = client.post(
+        "/api/notes/next-week",
+        json={"path": "ctxweekly-ww50.md"},
+        headers={"Authorization": AUTH},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json().get("already_rolled") is True
+
+
 def test_rollover_old_note_flagged_archived_and_hidden_from_tree(client):
     """The old Note row is flipped to archived=True and hidden from the
     default /api/tree view; ?include_archived=1 surfaces it."""

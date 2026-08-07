@@ -419,3 +419,34 @@ def test_reconcile_drops_orphan_archive_rows(client):
 
     # Main untouched.
     assert "T-GGG0001" in _task_uuids_main(path)
+
+
+def test_reindex_rehomes_duplicate_uuid_instead_of_crashing(client):
+    """Defence in depth for the rollover-corruption class: if two files carry
+    the SAME canonical ``#id`` (e.g. a partially-applied rollover left a stale
+    copy on the archive note), reindexing the second file must NOT 500 with
+    ``UNIQUE constraint failed: task.task_uuid``. The existing Task row is
+    re-homed to the file that now declares it, leaving exactly one row."""
+    _put_note(
+        client, "dupa.md",
+        "# A ww60\n!task #id T-DUP99 shared decl #status todo\n",
+    )
+    # Second file with the same canonical id — would 500 without the guard.
+    r = client.put(
+        "/api/notes",
+        json={
+            "path": "dupb.md",
+            "body_md": "# B ww61\n!task #id T-DUP99 shared decl #status todo\n",
+        },
+        headers={"Authorization": AUTH_ADMIN},
+    )
+    assert r.status_code == 200, r.text
+
+    # Exactly one Task row for the uuid, re-homed to the file indexed last.
+    with Session(_get_engine()) as s:
+        rows = s.exec(
+            text("SELECT note_id FROM task WHERE task_uuid = 'T-DUP99'")
+        ).all()
+    assert len(rows) == 1, f"expected a single re-homed row, got {len(rows)}"
+    assert "T-DUP99" in _task_uuids_main("dupb.md")
+    assert "T-DUP99" not in _task_uuids_main("dupa.md")

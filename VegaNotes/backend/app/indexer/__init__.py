@@ -588,6 +588,32 @@ def _insert_all_tasks(
     """First-time insert for a brand-new note (no existing rows to diff against)."""
     slug_to_id: dict[str, int] = {}
     for pt in tasks:
+        rid = pt["attrs"].get("id") or None
+        # A canonical row for this uuid may already exist on another note
+        # (e.g. a stale copy left by a partially-applied rollover). Re-home it
+        # here rather than INSERTing a duplicate, which would violate
+        # UNIQUE(task_uuid) and 500 the reindex (#next-week hardening).
+        existing_global = (
+            session.exec(select(Task).where(Task.task_uuid == rid)).first()
+            if rid
+            else None
+        )
+        if existing_global is not None:
+            t = existing_global
+            t.note_id = note_id
+            t.slug = pt["slug"]
+            t.title = pt["title"]
+            t.status = pt["status"]
+            t.line = pt["line"]
+            t.indent = pt["indent"]
+            t.kind = pt.get("kind", "task")
+            t.updated_at = datetime.utcnow()
+            for table in ("taskattr", "taskowner", "taskproject", "taskfeature", "link"):
+                col = "src_task_id" if table == "link" else "task_id"
+                session.exec(text(f"DELETE FROM {table} WHERE {col} = {int(t.id)}"))
+            session.flush()
+            slug_to_id[pt["slug"]] = t.id
+            continue
         t = Task(
             note_id=note_id,
             slug=pt["slug"],
@@ -596,7 +622,7 @@ def _insert_all_tasks(
             line=pt["line"],
             indent=pt["indent"],
             kind=pt.get("kind", "task"),
-            task_uuid=pt["attrs"].get("id") or None,
+            task_uuid=rid,
         )
         session.add(t)
         session.flush()
@@ -705,16 +731,45 @@ def _incremental_reindex(
                 session.exec(text(f"DELETE FROM {table} WHERE {col} = {int(existing_id)}"))
             _upsert_task_attrs(session, existing_id, pt, folder_project)
         else:
-            # New task: insert.
-            t = Task(
-                note_id=note_id, slug=pt["slug"], title=pt["title"],
-                status=pt["status"], line=pt["line"], indent=pt["indent"],
-                kind=pt.get("kind", "task"), task_uuid=pt["attrs"].get("id") or None,
+            # A canonical declaration for this uuid may already live on ANOTHER
+            # note — e.g. a stale copy left behind by a partially-applied
+            # rollover. Inserting a second row would violate
+            # UNIQUE(task_uuid) and 500 the reindex. Since this file carries
+            # the canonical declaration, re-home the existing row here instead
+            # of creating a duplicate (defence in depth; #next-week hardening).
+            rid = pt["attrs"].get("id") or None
+            existing_global = (
+                session.exec(select(Task).where(Task.task_uuid == rid)).first()
+                if rid
+                else None
             )
-            session.add(t)
-            session.flush()
-            slug_to_id[pt["slug"]] = t.id
-            _upsert_task_attrs(session, t.id, pt, folder_project)
+            if existing_global is not None:
+                t = existing_global
+                t.note_id = note_id
+                t.slug = pt["slug"]
+                t.title = pt["title"]
+                t.status = pt["status"]
+                t.line = pt["line"]
+                t.indent = pt["indent"]
+                t.kind = pt.get("kind", "task")
+                t.updated_at = datetime.utcnow()
+                for table in ("taskattr", "taskowner", "taskproject", "taskfeature", "link"):
+                    col = "src_task_id" if table == "link" else "task_id"
+                    session.exec(text(f"DELETE FROM {table} WHERE {col} = {int(t.id)}"))
+                session.flush()
+                slug_to_id[pt["slug"]] = t.id
+                _upsert_task_attrs(session, t.id, pt, folder_project)
+            else:
+                # New task: insert.
+                t = Task(
+                    note_id=note_id, slug=pt["slug"], title=pt["title"],
+                    status=pt["status"], line=pt["line"], indent=pt["indent"],
+                    kind=pt.get("kind", "task"), task_uuid=rid,
+                )
+                session.add(t)
+                session.flush()
+                slug_to_id[pt["slug"]] = t.id
+                _upsert_task_attrs(session, t.id, pt, folder_project)
 
     # Second pass: resolve parent_task_id.
     # Also clears stale parent when a task has been dedented to root level.
