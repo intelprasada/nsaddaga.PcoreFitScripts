@@ -92,6 +92,15 @@ function targetGap(counts, target) {
   };
 }
 
+function targetGapLabel(counts, target, compact = false) {
+  const gap = targetGap(counts, target);
+  if (!compact) return gap.label;
+  if (!counts.active) return "No active items";
+  return gap.needed
+    ? `${formatNumber(gap.needed)} more to ${target}%`
+    : `${target}% met`;
+}
+
 function sectionTargetKey(item) {
   return `${item.cp}::${item.id || item.p}`;
 }
@@ -128,11 +137,12 @@ function resolvedTarget(scope, key = "") {
 
 function targetSummary(counts, scope, key = "") {
   const target = resolvedTarget(scope, key);
-  return `${target.value}% target · ${targetGap(counts, target.value).label}`;
+  return targetGapLabel(counts, target.value, true);
 }
 
 function targetControl(counts, scope, key = "", compact = false) {
   const target = resolvedTarget(scope, key);
+  const gap = targetGap(counts, target.value);
   const label = scope === "overall" ? "Portfolio" : scope === "plan" ? "Plan" : "Section";
   return `
     <div class="target-control ${compact ? "is-compact" : ""}" data-target-container>
@@ -145,7 +155,7 @@ function targetControl(counts, scope, key = "", compact = false) {
           <span>%</span>
         </span>
       </label>
-      <span class="target-gap ${targetGap(counts, target.value).needed ? "" : "is-met"}">${targetGap(counts, target.value).label}</span>
+      <span class="target-gap ${gap.needed ? "" : "is-met"}">${targetGapLabel(counts, target.value, compact)}</span>
       <small>${target.source}</small>
       ${scope !== "overall" && target.explicit
         ? `<button type="button" class="target-reset" data-reset-target="${scope}" data-target-key="${escapeAttribute(key)}">Use inherited</button>`

@@ -420,7 +420,7 @@ h2 { margin-bottom: 0; font-size: 1.08rem; letter-spacing: -0.015em; }
 .completion-badge { min-width: 50px; padding: 0.3rem 0.45rem; border-radius: 8px; background: var(--open-soft); color: #a55c13; text-align: center; font-size: 0.76rem; font-weight: 800; white-space: nowrap; }
 .completion-badge.is-unlinked { background: var(--surface-soft); color: var(--muted); }
 .attention-target { text-align: right; }
-.attention-target small { display: block; max-width: 220px; margin-top: 0.2rem; color: var(--muted); font-size: 0.62rem; }
+.attention-target small { display: block; max-width: 220px; margin-top: 0.25rem; color: var(--muted); font-size: 0.62rem; font-weight: 700; }
 
 .target-control {
   display: grid;
@@ -500,7 +500,18 @@ h2 { margin-bottom: 0; font-size: 1.08rem; letter-spacing: -0.015em; }
 .plan-list-meta { display: flex !important; justify-content: space-between; gap: 0.5rem; margin-top: 0.25rem; color: var(--muted); font-size: 0.67rem; }
 .plan-list-meta span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plan-list-meta span:last-child { flex: 0 0 auto; white-space: nowrap; }
-.plan-list-target { margin-top: 0.2rem; color: #a55c13; font-size: 0.62rem; font-weight: 700; }
+.plan-list-target {
+  display: inline-flex !important;
+  width: fit-content;
+  margin-top: 0.3rem;
+  padding: 0.14rem 0.4rem;
+  border-radius: 999px;
+  background: #fff4df;
+  color: #9a5a12;
+  font-size: 0.61rem;
+  font-weight: 750;
+  line-height: 1.2;
+}
 .plan-detail { display: flex; flex-direction: column; }
 #plan-detail-header { padding: 1.15rem 1.2rem 0.9rem; border-bottom: 1px solid var(--line); }
 .detail-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
