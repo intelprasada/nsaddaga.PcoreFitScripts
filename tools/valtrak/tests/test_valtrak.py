@@ -79,6 +79,12 @@ def test_completion_targets_reject_invalid_percentages(monkeypatch, tmp_path):
 
 def test_completion_targets_api_persists_shared_state(monkeypatch, tmp_path):
     module = load_valtrak(monkeypatch, tmp_path)
+    module.PLAN_CATALOG = {"Plan A"}
+    module.DASHBOARD_DATA = {
+        "items": [
+            {"g": "Plan A", "id": "section-1", "p": "Plan A/Feature", "st": "TCD"}
+        ]
+    }
     server = ThreadingHTTPServer(
         ("127.0.0.1", 0),
         partial(module.DashboardHandler, directory=str(TOOL_DIR)),
@@ -88,7 +94,7 @@ def test_completion_targets_api_persists_shared_state(monkeypatch, tmp_path):
     payload = {
         "overall": 92,
         "plans": {"Plan A": 88},
-        "sections": {"Root/Plan A/Feature": 84},
+        "sections": {"Plan A::section-1": 84},
     }
     try:
         connection = http.client.HTTPConnection(*server.server_address)
@@ -128,6 +134,56 @@ def test_completion_targets_api_persists_shared_state(monkeypatch, tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_section_targets_are_limited_to_structural_items(monkeypatch, tmp_path):
+    module = load_valtrak(monkeypatch, tmp_path)
+    module.PLAN_CATALOG = {"Plan A"}
+    eligible = [
+        {"g": "Plan A", "id": "tcd", "p": "tcd-path", "st": "TCD", "k": "Referenced Section"},
+        {"g": "Plan A", "id": "tpf", "p": "tpf-path", "st": "TPF", "k": "Referenced Section"},
+        {"g": "Plan A", "id": "ref", "p": "ref-path", "k": "Reference"},
+        {"g": "Plan A", "id": "nested", "p": "nested-path", "k": "Referenced Reference"},
+    ]
+    tc = {"g": "Plan A", "id": "tc", "p": "tc-path", "st": "TC", "k": "Referenced Section"}
+    module.DASHBOARD_DATA = {"items": [*eligible, tc]}
+
+    assert all(module.item_supports_section_target(item) for item in eligible)
+    assert not module.item_supports_section_target(tc)
+    module.validate_section_target_update(
+        {"scope": "section", "key": "Plan A::tcd", "value": 90}
+    )
+
+    try:
+        module.validate_section_target_update(
+            {"scope": "section", "key": "Plan A::tc", "value": 90}
+        )
+    except ValueError as error:
+        assert "TCD, TPF, and reference" in str(error)
+    else:
+        raise AssertionError("TC section target was accepted")
+
+    try:
+        module.validate_section_target_update(
+            {
+                "overall": 90,
+                "plans": {},
+                "sections": {"Plan A::tcd": 90, "Plan A::tc": 90},
+            }
+        )
+    except ValueError as error:
+        assert "TCD, TPF, and reference" in str(error)
+    else:
+        raise AssertionError("bulk TC section target was accepted")
+
+    try:
+        module.validate_section_target_update(
+            {"scope": "section", "key": ["Plan A::tcd"], "value": 90}
+        )
+    except ValueError as error:
+        assert "string" in str(error)
+    else:
+        raise AssertionError("non-string section target key was accepted")
 
 
 def test_projects_native_rows_under_aggregate_reference(monkeypatch, tmp_path):

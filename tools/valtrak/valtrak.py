@@ -161,6 +161,47 @@ def canonical_plan_name(group_name):
     return None
 
 
+def item_supports_section_target(item):
+    return (
+        item.get("st") in {"TCD", "TPF"}
+        or item.get("k") in {"Reference", "Referenced Reference"}
+    )
+
+
+def section_target_key(item):
+    plan_name = canonical_plan_name(item.get("g", ""))
+    identity = item.get("id") or item.get("p")
+    if not plan_name or not identity:
+        return None
+    return f"{plan_name}::{identity}"
+
+
+def validate_section_target_update(payload):
+    if not isinstance(payload, dict):
+        return
+    if "scope" in payload:
+        keys = (
+            [payload.get("key")]
+            if payload.get("scope") == "section" and payload.get("value") is not None
+            else []
+        )
+    else:
+        sections = payload.get("sections", {})
+        keys = list(sections) if isinstance(sections, dict) else []
+    if not keys:
+        return
+    if any(not isinstance(key, str) for key in keys):
+        raise ValueError("Target key must be a string")
+    with DATA_LOCK:
+        supported = {
+            section_target_key(item)
+            for item in DASHBOARD_DATA["items"]
+            if item_supports_section_target(item)
+        }
+    if any(key not in supported for key in keys):
+        raise ValueError("Section targets are supported only for TCD, TPF, and reference items")
+
+
 def load_overrides():
     if not OVERRIDES_PATH.exists():
         return {}
@@ -1178,6 +1219,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
         if route == "/api/completion-targets":
             try:
+                validate_section_target_update(payload)
                 with TARGETS_LOCK:
                     targets = (
                         apply_completion_target(COMPLETION_TARGETS, payload)

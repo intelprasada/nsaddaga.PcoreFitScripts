@@ -25,6 +25,7 @@ const state = {
   treeExpandedAll: false,
   treeInitialized: false,
   treeFocusPath: "",
+  hierarchyValidationKeys: new Set(),
   completionTargets: { overall: 100, plans: {}, sections: {} },
 };
 
@@ -32,14 +33,11 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
 const numberFormatter = new Intl.NumberFormat("en-US");
-const contributionFormatter = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 3 });
 const structuralSubtypes = new Set(["TCD", "TPF"]);
 const formatNumber = (value) => numberFormatter.format(value);
-const formatPercent = (value) => `${Math.round(value * 100)}%`;
+const formatPercent = (value) => `${Math.floor(value * 100)}%`;
 const completionCountsLabel = (counts) =>
   `${formatNumber(counts.complete)}/${formatNumber(counts.active)}`;
-const itemContributionLabel = (counts) =>
-  `${counts.active ? contributionFormatter.format(100 / counts.active) : "0"}% each`;
 const completionLabel = (counts) =>
   `${formatPercent(counts.completion)} · ${completionCountsLabel(counts)}`;
 const safe = (value, fallback = "—") => value || fallback;
@@ -65,6 +63,24 @@ function statusCounts(items) {
   return counts;
 }
 
+const statusCountKeys = ["complete", "open", "future", "rejected", "none"];
+
+function mergeStatusCounts(...groups) {
+  const merged = statusCounts([]);
+  groups.forEach((counts) => {
+    statusCountKeys.forEach((key) => {
+      merged[key] += counts[key];
+    });
+  });
+  merged.active = merged.complete + merged.open;
+  merged.completion = merged.active ? merged.complete / merged.active : 0;
+  return merged;
+}
+
+function sameStatusCounts(left, right) {
+  return [...statusCountKeys, "active"].every((key) => left[key] === right[key]);
+}
+
 function targetGap(counts, target) {
   if (!counts.active) return { needed: 0, label: "No active items" };
   const needed = Math.max(0, Math.ceil((target * counts.active) / 100) - counts.complete);
@@ -76,8 +92,23 @@ function targetGap(counts, target) {
   };
 }
 
+function targetGapLabel(counts, target, compact = false) {
+  const gap = targetGap(counts, target);
+  if (!compact) return gap.label;
+  if (!counts.active) return "No active items";
+  return gap.needed
+    ? `${formatNumber(gap.needed)} more to ${target}%`
+    : `${target}% met`;
+}
+
 function sectionTargetKey(item) {
   return `${item.cp}::${item.id || item.p}`;
+}
+
+function itemSupportsSectionTarget(item) {
+  return structuralSubtypes.has(item.st)
+    || item.k === "Reference"
+    || item.k === "Referenced Reference";
 }
 
 function resolvedTarget(scope, key = "") {
@@ -106,11 +137,12 @@ function resolvedTarget(scope, key = "") {
 
 function targetSummary(counts, scope, key = "") {
   const target = resolvedTarget(scope, key);
-  return `${target.value}% target · ${targetGap(counts, target.value).label}`;
+  return targetGapLabel(counts, target.value, true);
 }
 
 function targetControl(counts, scope, key = "", compact = false) {
   const target = resolvedTarget(scope, key);
+  const gap = targetGap(counts, target.value);
   const label = scope === "overall" ? "Portfolio" : scope === "plan" ? "Plan" : "Section";
   return `
     <div class="target-control ${compact ? "is-compact" : ""}" data-target-container>
@@ -123,7 +155,7 @@ function targetControl(counts, scope, key = "", compact = false) {
           <span>%</span>
         </span>
       </label>
-      <span class="target-gap ${targetGap(counts, target.value).needed ? "" : "is-met"}">${targetGap(counts, target.value).label}</span>
+      <span class="target-gap ${gap.needed ? "" : "is-met"}">${targetGapLabel(counts, target.value, compact)}</span>
       <small>${target.source}</small>
       ${scope !== "overall" && target.explicit
         ? `<button type="button" class="target-reset" data-reset-target="${scope}" data-target-key="${escapeAttribute(key)}">Use inherited</button>`
@@ -132,7 +164,7 @@ function targetControl(counts, scope, key = "", compact = false) {
 }
 
 function itemHasStatus(item) {
-  return !structuralSubtypes.has(item.st);
+  return !itemSupportsSectionTarget(item);
 }
 
 function normalizedPlanCandidates(name) {
@@ -149,6 +181,7 @@ function canonicalPlanName(name, catalog) {
 }
 
 function buildPlanStats() {
+  state.hierarchyValidationKeys.clear();
   const groups = new Map();
   const catalog = state.catalogPlans;
   state.items.forEach((item) => {
@@ -235,6 +268,11 @@ function planTypeSelection(planName, items) {
   return state.planIncludedTypes.get(planName);
 }
 
+function planIncludedItems(planName, items) {
+  const included = planTypeSelection(planName, items);
+  return items.filter((item) => included.has(functionalType(item)));
+}
+
 function renderTypeInclusionControl(container, types, included, scope) {
   const allIncluded = types.length > 0 && types.every((type) => included.has(type));
   const includedCount = types.filter((type) => included.has(type)).length;
@@ -283,7 +321,7 @@ function summaryCard(label, value, detail, progress, icon) {
     <article class="summary-card">
       <div class="summary-card-header"><span>${label}</span><span class="summary-card-icon">${icon}</span></div>
       <strong>${value}</strong>
-      <footer><span>${detail}</span><span>${Math.round(progress * 100)}%</span></footer>
+      <footer><span>${detail}</span><span>${Math.floor(progress * 100)}%</span></footer>
       <div class="mini-bar"><span style="width:${Math.max(0, Math.min(100, progress * 100))}%"></span></div>
     </article>`;
 }
@@ -423,11 +461,11 @@ function renderTypeCompletion(items = overviewItems()) {
     return `
       <div class="type-row">
         <span class="type-name" title="${escapeAttribute(row.name)}">${escapeHtml(row.name)}</span>
-        <div class="progress-track" aria-label="${escapeAttribute(row.name)}: ${Math.round(completeWidth)}% complete">
+        <div class="progress-track" aria-label="${escapeAttribute(row.name)}: ${Math.floor(completeWidth)}% complete">
           <span class="progress-complete" style="width:${completeWidth}%"></span>
           <span class="progress-open" style="width:${openWidth}%"></span>
         </div>
-        <span class="type-score">${Math.round(completeWidth)}%</span>
+        <span class="type-score">${Math.floor(completeWidth)}%</span>
         <span class="type-count">${completionCountsLabel(row.counts)}</span>
       </div>`;
   }).join("") : `<div class="empty-state">Choose at least one monitored plan to see completion breakdowns.</div>`;
@@ -484,8 +522,9 @@ function renderPlanList() {
   $("#plan-count-label").textContent = `${plans.length} shown`;
   $("#plan-list").innerHTML = plans.map((plan) => {
     const stats = state.planStats.get(plan.vplan_name);
-    const completion = stats ? completionLabel(stats.counts) : "Not linked";
-    const target = stats ? targetSummary(stats.counts, "plan", plan.vplan_name) : "";
+    const counts = stats ? statusCounts(planIncludedItems(plan.vplan_name, stats.items)) : null;
+    const completion = counts ? completionLabel(counts) : "Not linked";
+    const target = counts ? targetSummary(counts, "plan", plan.vplan_name) : "";
     return `
       <button class="plan-list-item ${plan.vplan_name === state.selectedPlan ? "is-selected" : ""}"
         data-plan="${escapeAttribute(plan.vplan_name)}"
@@ -500,8 +539,10 @@ function renderPlanList() {
 function renderPlanDetail({ resetTreeState = true } = {}) {
   const stats = state.planStats.get(state.selectedPlan);
   const listed = state.plans.find((plan) => plan.vplan_name === state.selectedPlan);
-  const items = stats?.items || [];
-  const counts = stats?.counts || statusCounts([]);
+  const allItems = stats?.items || [];
+  const items = stats ? planIncludedItems(state.selectedPlan, allItems) : [];
+  const counts = statusCounts(items);
+  const filtered = items.length !== allItems.length;
   $("#plan-detail-header").innerHTML = `
     <div class="detail-title-row">
       <div>
@@ -509,15 +550,15 @@ function renderPlanDetail({ resetTreeState = true } = {}) {
         <h2>${escapeHtml(state.selectedPlan)}</h2>
         <p class="detail-subtitle">Owned by ${escapeHtml(listed?.owner || stats?.owner || "Unassigned")}</p>
       </div>
-      ${items.length ? `<div class="detail-title-actions">
+      ${allItems.length ? `<div class="detail-title-actions">
         <button type="button" class="secondary-button" id="refresh-plan-data">Refresh data</button>
         <button type="button" class="secondary-button" id="open-plan-overview">Plan overview</button>
         <span class="completion-badge">${completionLabel(counts)}</span>
       </div>` : ""}
     </div>
-    ${items.length ? targetControl(counts, "plan", state.selectedPlan, true) : ""}
+    ${allItems.length ? targetControl(counts, "plan", state.selectedPlan, true) : ""}
     <div class="detail-metrics">
-      <div class="detail-metric"><span>${stats?.references > 1 ? `Items across ${stats.references} refs` : "Total items"}</span><strong>${formatNumber(items.length)}</strong></div>
+      <div class="detail-metric"><span>${filtered ? "Included items" : stats?.references > 1 ? `Items across ${stats.references} refs` : "Total items"}</span><strong>${formatNumber(items.length)}</strong></div>
       <div class="detail-metric"><span>Complete</span><strong>${formatNumber(counts.complete)}</strong></div>
       <div class="detail-metric"><span>Open</span><strong>${formatNumber(counts.open)}</strong></div>
       <div class="detail-metric"><span>Deferred</span><strong>${formatNumber(counts.future + counts.rejected)}</strong></div>
@@ -585,11 +626,11 @@ function breakdownRows(items, key, fallback, limit = 8) {
       const percent = row.counts.completion * 100;
       return `<div class="plan-breakdown-row">
         <span title="${escapeAttribute(row.name)}">${escapeHtml(row.name)}</span>
-        <div class="progress-track" aria-label="${escapeAttribute(row.name)}: ${Math.round(percent)}% complete">
+        <div class="progress-track" aria-label="${escapeAttribute(row.name)}: ${Math.floor(percent)}% complete">
           <span class="progress-complete" style="width:${percent}%"></span>
           <span class="progress-open" style="width:${100 - percent}%"></span>
         </div>
-        <strong>${Math.round(percent)}% · ${completionCountsLabel(row.counts)}</strong>
+        <strong>${Math.floor(percent)}% · ${completionCountsLabel(row.counts)}</strong>
       </div>`;
     }).join("") || `<div class="empty-state">No active items in this category.</div>`;
 }
@@ -599,11 +640,21 @@ function renderPlanOverview(planName) {
   if (!stats) return;
   const listed = state.plans.find((plan) => plan.vplan_name === planName);
   const included = planTypeSelection(planName, stats.items);
-  const items = stats.items.filter((item) => included.has(functionalType(item)));
+  const items = planIncludedItems(planName, stats.items);
   const counts = statusCounts(items);
-  const sectionRollups = buildHierarchyRollups(buildTree(items));
+  const sectionRoots = buildTree(stats.items);
+  const includeItem = (item) => included.has(functionalType(item));
+  const sectionRollups = buildHierarchyRollups(sectionRoots, includeItem);
+  assertHierarchyIntegrityOnce(
+    hierarchyValidationKey(planName, included),
+    stats.items,
+    sectionRoots,
+    sectionRollups,
+    includeItem,
+    (item) => hierarchyItemVisible(item, included)
+  );
   const sectionGroups = new Map();
-  items.filter((item) => item.k?.includes("Section")).forEach((item) => {
+  stats.items.filter(itemSupportsSectionTarget).forEach((item) => {
     const key = sectionTargetKey(item);
     const counts = sectionRollups.get(item.p) || statusCounts([item]);
     if (!sectionGroups.has(key)) {
@@ -669,7 +720,7 @@ function renderPlanOverview(planName) {
       </section>
       <section class="plan-overview-section section-targets">
         <h3>Section targets</h3>
-        <p class="panel-description">Set a target for any validation-plan section. Unchanged sections inherit the plan target.</p>
+        <p class="panel-description">Set targets for TCD, TPF, and reference scopes. TC items inherit their nearest structural target.</p>
         <div class="section-target-list">
           ${sections.length ? sections.map(({ item, key, counts: sectionCounts }) => `
             <div class="section-target-row">
@@ -812,7 +863,12 @@ async function resumeRefreshJob() {
 
 function buildTree(items) {
   const nodes = new Map();
-  items.forEach((item) => nodes.set(item.p, { item, children: [] }));
+  items.forEach((item) => {
+    if (!item.p || nodes.has(item.p)) {
+      throw new Error(`Hierarchy contains a missing or duplicate path: ${item.p || "(missing)"}`);
+    }
+    nodes.set(item.p, { item, children: [] });
+  });
   const roots = [];
   nodes.forEach((node, path) => {
     let parentPath = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
@@ -825,24 +881,90 @@ function buildTree(items) {
   return roots;
 }
 
-function buildHierarchyRollups(roots) {
+function buildHierarchyRollups(roots, includeItem = () => true) {
   const rollups = new Map();
   function visit(node) {
-    const counts = node.children.length
-      ? node.children.map(visit).reduce((total, child) => {
-        ["complete", "open", "future", "rejected", "none"].forEach((key) => {
-          total[key] += child[key];
-        });
-        total.active = total.complete + total.open;
-        total.completion = total.active ? total.complete / total.active : 0;
-        return total;
-      }, statusCounts([]))
-      : statusCounts([node.item]);
+    const ownCounts = statusCounts(includeItem(node.item) ? [node.item] : []);
+    const counts = mergeStatusCounts(ownCounts, ...node.children.map(visit));
     rollups.set(node.item.p, counts);
     return counts;
   }
   roots.forEach(visit);
   return rollups;
+}
+
+function assertHierarchyIntegrity(
+  items,
+  roots,
+  rollups,
+  includeItem = () => true,
+  isVisible = includeItem
+) {
+  function fail(scope, expected, actual) {
+    throw new Error(
+      `Hierarchy rollup integrity failure at "${scope}": expected `
+      + `${expected.complete}/${expected.active} complete, got `
+      + `${actual?.complete ?? "missing"}/${actual?.active ?? "missing"}`
+    );
+  }
+
+  function verifyNode(node) {
+    const ownCounts = statusCounts(includeItem(node.item) ? [node.item] : []);
+    const expected = mergeStatusCounts(
+      ownCounts,
+      ...node.children.map((child) => rollups.get(child.item.p))
+    );
+    const actual = rollups.get(node.item.p);
+    if (!actual || !sameStatusCounts(expected, actual)) fail(node.item.p, expected, actual);
+    node.children.forEach(verifyNode);
+  }
+
+  roots.forEach(verifyNode);
+  const expectedTotal = statusCounts(items.filter(includeItem));
+  const actualTotal = mergeStatusCounts(...roots.map((root) => rollups.get(root.item.p)));
+  if (!sameStatusCounts(expectedTotal, actualTotal)) {
+    fail("plan total", expectedTotal, actualTotal);
+  }
+
+  const countedPaths = new Set(
+    items.filter((item) => itemHasStatus(item) && includeItem(item)).map((item) => item.p)
+  );
+  const visiblePaths = new Set(
+    items.filter((item) => itemHasStatus(item) && isVisible(item)).map((item) => item.p)
+  );
+  if (
+    countedPaths.size !== visiblePaths.size
+    || [...visiblePaths].some((path) => !countedPaths.has(path))
+  ) {
+    throw new Error(
+      `Hierarchy rollup visibility failure: ${visiblePaths.size} visible status items, `
+      + `${countedPaths.size} counted status items`
+    );
+  }
+}
+
+function hierarchyValidationKey(planName, includedTypes) {
+  return `${planName}\u0000${[...includedTypes].sort().join("\u0000")}`;
+}
+
+function assertHierarchyIntegrityOnce(key, ...args) {
+  if (state.hierarchyValidationKeys.has(key)) return;
+  assertHierarchyIntegrity(...args);
+  state.hierarchyValidationKeys.add(key);
+}
+
+function hierarchyItemVisible(item, includedTypes) {
+  return !itemHasStatus(item)
+    || itemSupportsSectionTarget(item)
+    || includedTypes.has(functionalType(item));
+}
+
+function visibleHierarchyNodes(nodes, includedTypes) {
+  return nodes.flatMap((node) =>
+    hierarchyItemVisible(node.item, includedTypes)
+      ? [node]
+      : visibleHierarchyNodes(node.children, includedTypes)
+  );
 }
 
 function renderTree() {
@@ -854,11 +976,22 @@ function renderTree() {
   const query = $("#hierarchy-search").value.trim().toLowerCase();
   const status = $("#hierarchy-status").value;
   const roots = buildTree(stats.items);
-  const rollups = buildHierarchyRollups(roots);
+  const included = planTypeSelection(state.selectedPlan, stats.items);
+  const includeItem = (item) => included.has(functionalType(item));
+  const rollups = buildHierarchyRollups(roots, includeItem);
+  assertHierarchyIntegrityOnce(
+    hierarchyValidationKey(state.selectedPlan, included),
+    stats.items,
+    roots,
+    rollups,
+    includeItem,
+    (item) => hierarchyItemVisible(item, included)
+  );
   const filtered = stats.items.filter((item) => {
+    const matchesType = hierarchyItemVisible(item, included);
     const matchesStatus = !status || (itemHasStatus(item) && item.s === status);
     const matchesQuery = !query || `${item.n} ${item.p} ${item.o || ""} ${item.t || ""}`.toLowerCase().includes(query);
-    return matchesStatus && matchesQuery;
+    return matchesType && matchesStatus && matchesQuery;
   });
 
   if (query || status) {
@@ -876,23 +1009,25 @@ function renderTree() {
     return;
   }
 
+  const displayRoots = visibleHierarchyNodes(roots, included);
   if (!state.treeInitialized) {
-    roots.forEach((root) => state.expanded.add(root.item.p));
+    displayRoots.forEach((root) => state.expanded.add(root.item.p));
     state.treeInitialized = true;
   }
   const visible = [];
   function walk(nodes, depth) {
     nodes.forEach((node) => {
-      visible.push({ node, depth });
-      if (state.expanded.has(node.item.p)) walk(node.children, depth + 1);
+      const children = visibleHierarchyNodes(node.children, included);
+      visible.push({ node, depth, children });
+      if (state.expanded.has(node.item.p)) walk(children, depth + 1);
     });
   }
-  walk(roots, 0);
+  walk(displayRoots, 0);
   const limit = 4000;
   const rendered = visible.slice(0, limit);
   if (!rendered.some(({ node }) => node.item.p === state.treeFocusPath)) state.treeFocusPath = rendered[0]?.node.item.p || "";
-  const rows = rendered.map(({ node, depth }) =>
-    treeRow(node.item, depth, node.children.length > 0, state.expanded.has(node.item.p), rollups.get(node.item.p))
+  const rows = rendered.map(({ node, depth, children }) =>
+    treeRow(node.item, depth, children.length > 0, state.expanded.has(node.item.p), rollups.get(node.item.p))
   ).join("");
   const note = visible.length > limit
     ? `<div class="tree-limit">Showing ${formatNumber(limit)} of ${formatNumber(visible.length)} visible items. Collapse branches or search within the plan.</div>`
@@ -917,9 +1052,13 @@ function treeRow(item, depth, hasChildren, expanded, rollup) {
       <span>${item.t ? `<span class="type-chip">${escapeHtml(item.t)}</span>` : "—"}</span>
       <span class="owner-cell" title="${escapeAttribute(item.o || "")}">${escapeHtml(item.o || "—")}</span>
       <div class="tree-rollup" title="${formatNumber(counts.complete)} completed of ${formatNumber(counts.active)} active items">
-        <strong>${completionCountsLabel(counts)}</strong>
-        <small>${itemContributionLabel(counts)}</small>
-        ${item.k?.includes("Section") ? targetControl(counts, "section", sectionTargetKey(item), true) : ""}
+        <strong>${formatPercent(counts.completion)}</strong>
+        <small>${formatNumber(counts.complete)}/${formatNumber(counts.active)} complete/total</small>
+      </div>
+      <div class="tree-target">
+        ${itemSupportsSectionTarget(item)
+          ? targetControl(counts, "section", sectionTargetKey(item), true)
+          : `<span class="target-not-applicable" aria-label="Section target not applicable">—</span>`}
       </div>
       ${statusControl(item)}
     </div>`;
@@ -1398,6 +1537,8 @@ function bindEvents() {
       [...state.planIncludedTypes].map(([planName, values]) => [planName, [...values]])
     );
     localStorage.setItem("valtrak-plan-types-v1", JSON.stringify(saved));
+    renderPlanList();
+    renderPlanDetail({ resetTreeState: false });
     renderPlanOverview(state.planOverviewName);
   });
   $("#plan-overview-dialog").addEventListener("click", (event) => {
