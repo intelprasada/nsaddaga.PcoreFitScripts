@@ -32,14 +32,11 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
 const numberFormatter = new Intl.NumberFormat("en-US");
-const contributionFormatter = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 3 });
 const structuralSubtypes = new Set(["TCD", "TPF"]);
 const formatNumber = (value) => numberFormatter.format(value);
 const formatPercent = (value) => `${Math.round(value * 100)}%`;
 const completionCountsLabel = (counts) =>
   `${formatNumber(counts.complete)}/${formatNumber(counts.active)}`;
-const itemContributionLabel = (counts) =>
-  `${counts.active ? contributionFormatter.format(100 / counts.active) : "0"}% each`;
 const completionLabel = (counts) =>
   `${formatPercent(counts.completion)} · ${completionCountsLabel(counts)}`;
 const safe = (value, fallback = "—") => value || fallback;
@@ -78,6 +75,12 @@ function targetGap(counts, target) {
 
 function sectionTargetKey(item) {
   return `${item.cp}::${item.id || item.p}`;
+}
+
+function itemSupportsSectionTarget(item) {
+  return structuralSubtypes.has(item.st)
+    || item.k === "Reference"
+    || item.k === "Referenced Reference";
 }
 
 function resolvedTarget(scope, key = "") {
@@ -603,7 +606,7 @@ function renderPlanOverview(planName) {
   const counts = statusCounts(items);
   const sectionRollups = buildHierarchyRollups(buildTree(items));
   const sectionGroups = new Map();
-  items.filter((item) => item.k?.includes("Section")).forEach((item) => {
+  items.filter(itemSupportsSectionTarget).forEach((item) => {
     const key = sectionTargetKey(item);
     const counts = sectionRollups.get(item.p) || statusCounts([item]);
     if (!sectionGroups.has(key)) {
@@ -669,7 +672,7 @@ function renderPlanOverview(planName) {
       </section>
       <section class="plan-overview-section section-targets">
         <h3>Section targets</h3>
-        <p class="panel-description">Set a target for any validation-plan section. Unchanged sections inherit the plan target.</p>
+        <p class="panel-description">Set targets for TCD, TPF, and reference scopes. TC items inherit their nearest structural target.</p>
         <div class="section-target-list">
           ${sections.length ? sections.map(({ item, key, counts: sectionCounts }) => `
             <div class="section-target-row">
@@ -917,9 +920,13 @@ function treeRow(item, depth, hasChildren, expanded, rollup) {
       <span>${item.t ? `<span class="type-chip">${escapeHtml(item.t)}</span>` : "—"}</span>
       <span class="owner-cell" title="${escapeAttribute(item.o || "")}">${escapeHtml(item.o || "—")}</span>
       <div class="tree-rollup" title="${formatNumber(counts.complete)} completed of ${formatNumber(counts.active)} active items">
-        <strong>${completionCountsLabel(counts)}</strong>
-        <small>${itemContributionLabel(counts)}</small>
-        ${item.k?.includes("Section") ? targetControl(counts, "section", sectionTargetKey(item), true) : ""}
+        <strong>${formatPercent(counts.completion)}</strong>
+        <small>${formatNumber(counts.open)}/${formatNumber(counts.active)} open/total</small>
+      </div>
+      <div class="tree-target">
+        ${itemSupportsSectionTarget(item)
+          ? targetControl(counts, "section", sectionTargetKey(item), true)
+          : `<span class="target-not-applicable" aria-label="Section target not applicable">—</span>`}
       </div>
       ${statusControl(item)}
     </div>`;
