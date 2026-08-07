@@ -9,6 +9,7 @@ const state = {
   monitorDraft: new Set(),
   projectIncludedTypes: new Set(),
   planIncludedTypes: new Map(),
+  planKnownTypes: new Map(),
   refreshRequest: null,
   refreshPoller: null,
   apiConfig: null,
@@ -268,25 +269,59 @@ function loadTypeInclusions() {
   }
 
   try {
-    const savedPlans = JSON.parse(localStorage.getItem("valtrak-plan-types-v1") || "{}");
-    Object.entries(savedPlans).forEach(([planName, values]) => {
-      if (Array.isArray(values)) {
+    const savedV2 = JSON.parse(localStorage.getItem("valtrak-plan-types-v2") || "null");
+    const savedV1 = JSON.parse(localStorage.getItem("valtrak-plan-types-v1") || "{}");
+    const savedPlans = savedV2 && typeof savedV2 === "object" ? savedV2 : savedV1;
+    Object.entries(savedPlans).forEach(([planName, value]) => {
+      const included = Array.isArray(value) ? value : value?.included;
+      const known = Array.isArray(value) ? value : value?.known;
+      if (Array.isArray(included)) {
         state.planIncludedTypes.set(
           planName,
-          new Set(values.filter((type) => available.has(type)))
+          new Set(included.filter((type) => available.has(type)))
+        );
+        state.planKnownTypes.set(
+          planName,
+          new Set((Array.isArray(known) ? known : included).filter((type) => available.has(type)))
         );
       }
     });
   } catch {
     state.planIncludedTypes.clear();
+    state.planKnownTypes.clear();
   }
 }
 
 function planTypeSelection(planName, items) {
+  const available = new Set(availableFunctionalTypes(items));
   if (!state.planIncludedTypes.has(planName)) {
-    state.planIncludedTypes.set(planName, new Set(availableFunctionalTypes(items)));
+    state.planIncludedTypes.set(planName, new Set(available));
+    state.planKnownTypes.set(planName, new Set(available));
+  } else {
+    const included = state.planIncludedTypes.get(planName);
+    const known = state.planKnownTypes.get(planName) || new Set(included);
+    available.forEach((type) => {
+      if (!known.has(type)) included.add(type);
+    });
+    [...included].forEach((type) => {
+      if (!available.has(type)) included.delete(type);
+    });
+    state.planKnownTypes.set(planName, available);
   }
   return state.planIncludedTypes.get(planName);
+}
+
+function savePlanTypeInclusions() {
+  const saved = Object.fromEntries(
+    [...state.planIncludedTypes].map(([planName, included]) => [
+      planName,
+      {
+        included: [...included],
+        known: [...(state.planKnownTypes.get(planName) || included)],
+      },
+    ])
+  );
+  localStorage.setItem("valtrak-plan-types-v2", JSON.stringify(saved));
 }
 
 function planIncludedItems(planName, items) {
@@ -1585,10 +1620,7 @@ function bindEvents() {
       const allIncluded = types.every((type) => included.has(type));
       state.planIncludedTypes.set(state.planOverviewName, new Set(allIncluded ? [] : types));
     }
-    const saved = Object.fromEntries(
-      [...state.planIncludedTypes].map(([planName, values]) => [planName, [...values]])
-    );
-    localStorage.setItem("valtrak-plan-types-v1", JSON.stringify(saved));
+    savePlanTypeInclusions();
     renderPlanList();
     renderPlanDetail({ resetTreeState: false });
     renderPlanOverview(state.planOverviewName);
