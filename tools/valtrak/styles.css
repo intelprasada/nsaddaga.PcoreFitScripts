@@ -345,6 +345,8 @@ h2 { margin-bottom: 0; font-size: 1.08rem; letter-spacing: -0.015em; }
 }
 .summary-card strong { display: block; margin-top: 0.65rem; font-size: 1.75rem; line-height: 1; letter-spacing: -0.04em; }
 .summary-card.is-target-met > strong { color: var(--complete); }
+.summary-card.is-target-near > strong { color: var(--open); }
+.summary-card.is-target-low > strong { color: var(--rejected); }
 .summary-card footer { display: flex; justify-content: space-between; margin-top: 0.65rem; color: var(--muted); font-size: 0.72rem; }
 .mini-bar { height: 4px; margin-top: 0.8rem; overflow: hidden; border-radius: 8px; background: var(--line); }
 .mini-bar span { display: block; height: 100%; border-radius: inherit; background: var(--brand); }
@@ -396,6 +398,8 @@ h2 { margin-bottom: 0; font-size: 1.08rem; letter-spacing: -0.015em; }
 .ring-label { position: absolute; text-align: center; }
 .ring-label strong { display: block; font-size: 2rem; line-height: 1; letter-spacing: -0.05em; }
 .completion-ring.is-target-met .ring-label strong { color: var(--complete); }
+.completion-ring.is-target-near .ring-label strong { color: var(--open); }
+.completion-ring.is-target-low .ring-label strong { color: var(--rejected); }
 .ring-label span { color: var(--muted); font-size: 0.72rem; }
 .status-legend { display: grid; gap: 0.75rem; }
 .legend-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 0.6rem; }
@@ -421,6 +425,8 @@ h2 { margin-bottom: 0; font-size: 1.08rem; letter-spacing: -0.015em; }
 .attention-row span, .owner-row span { margin-top: 0.1rem; color: var(--muted); font-size: 0.7rem; }
 .completion-badge { min-width: 50px; padding: 0.3rem 0.45rem; border-radius: 8px; background: var(--open-soft); color: #a55c13; text-align: center; font-size: 0.76rem; font-weight: 800; white-space: nowrap; }
 .completion-badge.is-target-met { color: var(--complete); }
+.completion-badge.is-target-near { color: var(--open); }
+.completion-badge.is-target-low { color: var(--rejected); }
 .completion-badge.is-unlinked { background: var(--surface-soft); color: var(--muted); }
 .attention-target { text-align: right; }
 .attention-target small { display: block; max-width: 220px; margin-top: 0.25rem; color: var(--muted); font-size: 0.62rem; font-weight: 700; }
@@ -597,6 +603,8 @@ select, .secondary-button {
 .tree-rollup strong, .tree-rollup small { display: block; }
 .tree-rollup strong { font-size: 0.72rem; }
 .tree-rollup.is-target-met strong { color: var(--complete); }
+.tree-rollup.is-target-near strong { color: var(--open); }
+.tree-rollup.is-target-low strong { color: var(--rejected); }
 .tree-rollup small { margin-top: 0.08rem; color: var(--muted); font-size: 0.61rem; }
 .tree-target { min-width: 0; }
 .tree-target .target-control { margin-top: 0; }
@@ -801,6 +809,8 @@ dialog p { color: var(--muted); }
 .plan-score strong, .plan-score span { display: block; }
 .plan-score strong { font-size: 1.7rem; letter-spacing: -0.05em; }
 .plan-score.is-target-met strong { color: var(--complete); }
+.plan-score.is-target-near strong { color: var(--open); }
+.plan-score.is-target-low strong { color: var(--rejected); }
 .plan-score span { color: var(--muted); font-size: 0.68rem; }
 .plan-status-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.6rem; }
 .plan-status-card { padding: 0.75rem; border: 1px solid var(--line); border-radius: 10px; background: white; }
@@ -826,6 +836,10 @@ dialog p { color: var(--muted); }
 .section-target-row > div:first-child span { margin-top: 0.12rem; color: var(--muted); font-size: 0.65rem; }
 .plan-list-meta .is-target-met,
 .section-target-row > div:first-child span.is-target-met { color: var(--complete); }
+.plan-list-meta .is-target-near,
+.section-target-row > div:first-child span.is-target-near { color: var(--open); }
+.plan-list-meta .is-target-low,
+.section-target-row > div:first-child span.is-target-low { color: var(--rejected); }
 .section-target-row .target-control { margin-top: 0; }
 .refresh-dialog { width: min(540px, calc(100% - 2rem)); }
 .refresh-progress {

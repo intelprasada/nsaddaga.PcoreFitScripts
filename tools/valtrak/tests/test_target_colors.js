@@ -24,10 +24,10 @@ const context = {
 
 vm.runInNewContext([
   between("function targetGap", "function targetControl"),
-  "this.targets = { completionTargetMet, targetMetClass };",
+  "this.targets = { completionTargetMet, targetStatusClass };",
 ].join("\n"), context);
 
-const { completionTargetMet, targetMetClass } = context.targets;
+const { completionTargetMet, targetStatusClass } = context.targets;
 assert.strictEqual(completionTargetMet({ active: 10, complete: 8 }, "overall"), true);
 assert.strictEqual(completionTargetMet({ active: 10, complete: 7 }, "overall"), false);
 assert.strictEqual(completionTargetMet({ active: 4, complete: 3 }, "plan", "Plan A"), true);
@@ -36,7 +36,9 @@ assert.strictEqual(
   true,
 );
 assert.strictEqual(completionTargetMet({ active: 0, complete: 0 }, "overall"), false);
-assert.strictEqual(targetMetClass({ active: 10, complete: 8 }, "overall"), "is-target-met");
-assert.strictEqual(targetMetClass({ active: 10, complete: 7 }, "overall"), "");
+assert.strictEqual(targetStatusClass({ active: 10, complete: 8, completion: 0.8 }, "overall"), "is-target-met");
+assert.strictEqual(targetStatusClass({ active: 10, complete: 7, completion: 0.7 }, "overall"), "is-target-near");
+assert.strictEqual(targetStatusClass({ active: 10, complete: 6, completion: 0.6 }, "overall"), "is-target-low");
+assert.strictEqual(targetStatusClass({ active: 0, complete: 0, completion: 0 }, "overall"), "");
 
 console.log("Completion target color assertions passed");

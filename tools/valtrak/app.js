@@ -148,8 +148,11 @@ function completionTargetMet(counts, scope, key = "") {
   return counts.active > 0 && targetGap(counts, resolvedTarget(scope, key).value).needed === 0;
 }
 
-function targetMetClass(counts, scope, key = "") {
-  return completionTargetMet(counts, scope, key) ? "is-target-met" : "";
+function targetStatusClass(counts, scope, key = "") {
+  if (!counts.active) return "";
+  const target = resolvedTarget(scope, key).value;
+  if (targetGap(counts, target).needed === 0) return "is-target-met";
+  return target - counts.completion * 100 <= 10.000001 ? "is-target-near" : "is-target-low";
 }
 
 function targetControl(counts, scope, key = "", compact = false) {
@@ -494,7 +497,7 @@ function renderOverview() {
       completionCountsLabel(counts),
       counts.completion,
       "✓",
-      targetMetClass(counts, "overall")
+      targetStatusClass(counts, "overall")
     ),
     summaryCard("Validation plans", formatNumber(state.monitoredPlans.size), `${planCount} linked · ${owned} owned`, planCount ? owned / planCount : 0, "☷"),
     summaryCard("Complete items", formatNumber(counts.complete), `${formatNumber(counts.open)} remain open`, counts.active ? counts.complete / counts.active : 0, "●"),
@@ -502,7 +505,9 @@ function renderOverview() {
   ].join("");
 
   const ring = $("#completion-ring");
-  ring.classList.toggle("is-target-met", completionTargetMet(counts, "overall"));
+  ring.classList.remove("is-target-met", "is-target-near", "is-target-low");
+  const ringTargetStatus = targetStatusClass(counts, "overall");
+  if (ringTargetStatus) ring.classList.add(ringTargetStatus);
   ring.style.setProperty("--completion", `${counts.completion * 100}%`);
   ring.style.setProperty("--target-angle", `${state.completionTargets.overall * 3.6}deg`);
   ring.innerHTML = `<div class="ring-label"><strong>${formatPercent(counts.completion)}</strong><span>${completionCountsLabel(counts)}</span></div>`;
@@ -548,7 +553,7 @@ function renderOverview() {
         <span>${plan.counts ? `${formatNumber(plan.counts.open)} open · ` : "Catalog only · "}${escapeHtml(plan.owner)}</span>
       </button>
       <span class="attention-target">
-        <span class="completion-badge ${plan.counts ? targetMetClass(plan.counts, "plan", plan.name) : "is-unlinked"}">${plan.counts ? completionLabel(plan.counts) : "Not linked"}</span>
+        <span class="completion-badge ${plan.counts ? targetStatusClass(plan.counts, "plan", plan.name) : "is-unlinked"}">${plan.counts ? completionLabel(plan.counts) : "Not linked"}</span>
         ${plan.counts ? `<small>${escapeHtml(targetSummary(plan.counts, "plan", plan.name))}</small>` : ""}
       </span>
     </div>`).join("") : `<div class="empty-state">No validation plans are selected for monitoring.</div>`;
@@ -679,7 +684,7 @@ function planListItem(plan) {
       data-plan="${escapeAttribute(plan.vplan_name)}"
       aria-pressed="${plan.vplan_name === state.selectedPlan}">
       <strong title="${escapeAttribute(plan.vplan_name)}">${escapeHtml(plan.vplan_name)}</strong>
-      <span class="plan-list-meta"><span>${escapeHtml(plan.owner || "Unassigned")}</span><span class="${counts ? targetMetClass(counts, "plan", plan.vplan_name) : ""}">${completion}</span></span>
+      <span class="plan-list-meta"><span>${escapeHtml(plan.owner || "Unassigned")}</span><span class="${counts ? targetStatusClass(counts, "plan", plan.vplan_name) : ""}">${completion}</span></span>
       ${stats ? `<span class="plan-list-target">${escapeHtml(target)}</span>` : ""}
     </button>`;
 }
@@ -717,7 +722,7 @@ function renderPlanDetail({ resetTreeState = true } = {}) {
       ${allItems.length ? `<div class="detail-title-actions">
         <button type="button" class="secondary-button" id="refresh-plan-data">Refresh data</button>
         <button type="button" class="secondary-button" id="open-plan-overview">Plan overview</button>
-        <span class="completion-badge ${targetMetClass(counts, "plan", state.selectedPlan)}">${completionLabel(counts)}</span>
+        <span class="completion-badge ${targetStatusClass(counts, "plan", state.selectedPlan)}">${completionLabel(counts)}</span>
       </div>` : ""}
     </div>
     ${allItems.length ? targetControl(counts, "plan", state.selectedPlan, true) : ""}
@@ -858,7 +863,7 @@ function renderPlanOverview(planName) {
   );
   $("#plan-overview-content").innerHTML = `
     <div class="plan-overview-hero">
-      <div class="plan-score ${targetMetClass(counts, "plan", planName)}" style="--plan-score:${counts.completion * 100}%">
+      <div class="plan-score ${targetStatusClass(counts, "plan", planName)}" style="--plan-score:${counts.completion * 100}%">
         <div><strong>${formatPercent(counts.completion)}</strong><span>${completionCountsLabel(counts)}</span></div>
       </div>
       <div>
@@ -899,7 +904,7 @@ function renderPlanOverview(planName) {
             <div class="section-target-row">
               <div>
                 <strong title="${escapeAttribute(item.p)}">${escapeHtml(item.n)}</strong>
-                <span class="${targetMetClass(sectionCounts, "section", key)}">${completionLabel(sectionCounts)}</span>
+                <span class="${targetStatusClass(sectionCounts, "section", key)}">${completionLabel(sectionCounts)}</span>
               </div>
               ${targetControl(sectionCounts, "section", key, true)}
             </div>`).join("") : `<div class="empty-state">No validation-plan sections are available.</div>`}
@@ -1236,7 +1241,7 @@ function treeRow(item, depth, hasChildren, expanded, rollup) {
       <span>${item.t ? `<span class="type-chip">${escapeHtml(item.t)}</span>` : "—"}</span>
       <span><span class="type-chip">${escapeHtml(validationMilestone(item))}</span></span>
       <span class="owner-cell" title="${escapeAttribute(item.o || "")}">${escapeHtml(item.o || "—")}</span>
-      <div class="tree-rollup ${itemSupportsSectionTarget(item) ? targetMetClass(counts, "section", sectionTargetKey(item)) : ""}"
+      <div class="tree-rollup ${itemSupportsSectionTarget(item) ? targetStatusClass(counts, "section", sectionTargetKey(item)) : ""}"
         title="${formatNumber(counts.complete)} completed of ${formatNumber(counts.active)} active items">
         <strong>${formatPercent(counts.completion)}</strong>
         <small>${formatNumber(counts.complete)}/${formatNumber(counts.active)} complete/total</small>
