@@ -685,7 +685,7 @@ function planListItem(plan) {
       aria-pressed="${plan.vplan_name === state.selectedPlan}">
       <strong title="${escapeAttribute(plan.vplan_name)}">${escapeHtml(plan.vplan_name)}</strong>
       <span class="plan-list-meta"><span>${escapeHtml(plan.owner || "Unassigned")}</span><span class="${counts ? targetStatusClass(counts, "plan", plan.vplan_name) : ""}">${completion}</span></span>
-      ${stats ? `<span class="plan-list-target">${escapeHtml(target)}</span>` : ""}
+      ${stats ? `<span class="plan-list-target ${targetStatusClass(counts, "plan", plan.vplan_name)}">${escapeHtml(target)}</span>` : ""}
     </button>`;
 }
 

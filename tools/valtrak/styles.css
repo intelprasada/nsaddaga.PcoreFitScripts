@@ -521,6 +521,18 @@ h2 { margin-bottom: 0; font-size: 1.08rem; letter-spacing: -0.015em; }
   font-weight: 750;
   line-height: 1.2;
 }
+.plan-list-target.is-target-met {
+  background: var(--complete-soft);
+  color: var(--complete);
+}
+.plan-list-target.is-target-near {
+  background: var(--open-soft);
+  color: #9a5a12;
+}
+.plan-list-target.is-target-low {
+  background: var(--rejected-soft);
+  color: var(--rejected);
+}
 .plan-detail { display: flex; flex-direction: column; }
 #plan-detail-header { padding: 1.15rem 1.2rem 0.9rem; border-bottom: 1px solid var(--line); }
 .detail-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }

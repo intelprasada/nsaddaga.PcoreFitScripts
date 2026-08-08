@@ -40,5 +40,9 @@ assert.strictEqual(targetStatusClass({ active: 10, complete: 8, completion: 0.8 
 assert.strictEqual(targetStatusClass({ active: 10, complete: 7, completion: 0.7 }, "overall"), "is-target-near");
 assert.strictEqual(targetStatusClass({ active: 10, complete: 6, completion: 0.6 }, "overall"), "is-target-low");
 assert.strictEqual(targetStatusClass({ active: 0, complete: 0, completion: 0 }, "overall"), "");
+assert.match(
+  source,
+  /plan-list-target \$\{targetStatusClass\(counts, "plan", plan\.vplan_name\)\}/,
+);
 
 console.log("Completion target color assertions passed");
