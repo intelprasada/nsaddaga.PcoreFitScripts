@@ -39,6 +39,21 @@ def test_first_run_creates_private_empty_snapshot(monkeypatch, tmp_path):
     assert (tmp_path / "completion-targets.json").stat().st_mode & 0o777 == 0o600
 
 
+def test_compact_item_preserves_validation_milestone(monkeypatch, tmp_path):
+    module = load_valtrak(monkeypatch, tmp_path)
+
+    item = module.compact_item(
+        {
+            "element_id": "item-1",
+            "name": "Milestone item",
+            "full_path": "Plan/Milestone item",
+            "i_required_by_milestone": "VAL1.0",
+        }
+    )
+
+    assert item["mil"] == "VAL1.0"
+
+
 def test_completion_targets_are_normalized_and_persisted(monkeypatch, tmp_path):
     module = load_valtrak(monkeypatch, tmp_path)
     targets = module.normalize_completion_targets(
@@ -184,6 +199,57 @@ def test_section_targets_are_limited_to_structural_items(monkeypatch, tmp_path):
         assert "string" in str(error)
     else:
         raise AssertionError("non-string section target key was accepted")
+
+
+def test_status_writes_use_native_element_id(monkeypatch, tmp_path):
+    module = load_valtrak(monkeypatch, tmp_path)
+    requests = []
+    monkeypatch.setattr(
+        module,
+        "request_json",
+        lambda session, endpoint, payload: requests.append((endpoint, payload)),
+    )
+
+    module.write_live_status(
+        object(),
+        "Plan A",
+        {
+            "element_id": "section-id",
+            "full_path": "Plan A/Section with fragile. path",
+            "vplan_element_kind": "Section",
+        },
+        "complete",
+    )
+    module.write_live_status(
+        object(),
+        "Plan A",
+        {
+            "element_id": "port-id",
+            "full_path": "Plan A/Section/Port",
+            "vplan_element_kind": "Metrics Port",
+        },
+        "future",
+    )
+
+    assert requests == [
+        (
+            "/planning/update-section",
+            {
+                "sticky-context": {"vplan": "Plan A", "db-vplan": True},
+                "element-id": "section-id",
+                "section": {"i_status": "complete"},
+            },
+        ),
+        (
+            "/planning/update-metrics-port",
+            {
+                "sticky-context": {"vplan": "Plan A", "db-vplan": True},
+                "element-id": "port-id",
+                "metrics-port": {"i_status": "future"},
+            },
+        ),
+    ]
+    assert all("hierarchy" not in payload for _, payload in requests)
 
 
 def test_projects_native_rows_under_aggregate_reference(monkeypatch, tmp_path):

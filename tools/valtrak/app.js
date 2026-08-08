@@ -9,6 +9,9 @@ const state = {
   monitorDraft: new Set(),
   projectIncludedTypes: new Set(),
   planIncludedTypes: new Map(),
+  planKnownTypes: new Map(),
+  planIncludedMilestones: new Map(),
+  planKnownMilestones: new Map(),
   refreshRequest: null,
   refreshPoller: null,
   apiConfig: null,
@@ -25,6 +28,7 @@ const state = {
   treeExpandedAll: false,
   treeInitialized: false,
   treeFocusPath: "",
+  bulkSelectedPaths: new Set(),
   hierarchyValidationKeys: new Set(),
   completionTargets: { overall: 100, plans: {}, sections: {} },
 };
@@ -140,6 +144,26 @@ function targetSummary(counts, scope, key = "") {
   return targetGapLabel(counts, target.value, true);
 }
 
+function completionTargetMet(counts, scope, key = "") {
+  return counts.active > 0 && targetGap(counts, resolvedTarget(scope, key).value).needed === 0;
+}
+
+function targetStatusClass(counts, scope, key = "") {
+  if (!counts.active) return "";
+  const target = resolvedTarget(scope, key).value;
+  if (targetGap(counts, target).needed === 0) return "is-target-met";
+  return target - counts.completion * 100 <= 10.000001 ? "is-target-near" : "is-target-low";
+}
+
+function rollupStatusClass(item, counts) {
+  if (itemSupportsSectionTarget(item)) {
+    return targetStatusClass(counts, "section", sectionTargetKey(item));
+  }
+  if (item.s === "complete") return "is-status-complete";
+  if (item.s === "open") return "is-status-open";
+  return "";
+}
+
 function targetControl(counts, scope, key = "", compact = false) {
   const target = resolvedTarget(scope, key);
   const gap = targetGap(counts, target.value);
@@ -226,12 +250,41 @@ function loadMonitoredPlans() {
   }
 }
 
+function lastOpenPlan(preferred = "") {
+  const available = new Set(state.plans.map((plan) => plan.vplan_name));
+  let saved = "";
+  try {
+    saved = localStorage.getItem("valtrak-last-open-plan-v1") || "";
+  } catch {
+    // Browser storage can be disabled; selection still falls back deterministically.
+  }
+  return available.has(saved)
+    ? saved
+    : preferred || state.plans[0]?.vplan_name || "";
+}
+
+function rememberOpenPlan(name) {
+  try {
+    localStorage.setItem("valtrak-last-open-plan-v1", name);
+  } catch {
+    // The open plan remains selected for this session when storage is unavailable.
+  }
+}
+
 function functionalType(item) {
   return item.t || "Unclassified";
 }
 
 function availableFunctionalTypes(items = state.items) {
   return [...new Set(items.map(functionalType))].sort();
+}
+
+function validationMilestone(item) {
+  return item.mil || "No milestone";
+}
+
+function availableValidationMilestones(items = state.items) {
+  return [...new Set(items.map(validationMilestone))].sort();
 }
 
 function loadTypeInclusions() {
@@ -247,52 +300,158 @@ function loadTypeInclusions() {
   }
 
   try {
-    const savedPlans = JSON.parse(localStorage.getItem("valtrak-plan-types-v1") || "{}");
-    Object.entries(savedPlans).forEach(([planName, values]) => {
-      if (Array.isArray(values)) {
+    const savedV2 = JSON.parse(localStorage.getItem("valtrak-plan-types-v2") || "null");
+    const savedV1 = JSON.parse(localStorage.getItem("valtrak-plan-types-v1") || "{}");
+    const savedPlans = savedV2 && typeof savedV2 === "object" ? savedV2 : savedV1;
+    Object.entries(savedPlans).forEach(([planName, value]) => {
+      const included = Array.isArray(value) ? value : value?.included;
+      const known = Array.isArray(value) ? value : value?.known;
+      if (Array.isArray(included)) {
         state.planIncludedTypes.set(
           planName,
-          new Set(values.filter((type) => available.has(type)))
+          new Set(included.filter((type) => available.has(type)))
+        );
+        state.planKnownTypes.set(
+          planName,
+          new Set((Array.isArray(known) ? known : included).filter((type) => available.has(type)))
         );
       }
     });
   } catch {
     state.planIncludedTypes.clear();
+    state.planKnownTypes.clear();
   }
 }
 
 function planTypeSelection(planName, items) {
+  const available = new Set(availableFunctionalTypes(items));
   if (!state.planIncludedTypes.has(planName)) {
-    state.planIncludedTypes.set(planName, new Set(availableFunctionalTypes(items)));
+    state.planIncludedTypes.set(planName, new Set(available));
+    state.planKnownTypes.set(planName, new Set(available));
+  } else {
+    const included = state.planIncludedTypes.get(planName);
+    const known = state.planKnownTypes.get(planName) || new Set(included);
+    available.forEach((type) => {
+      if (!known.has(type)) included.add(type);
+    });
+    [...included].forEach((type) => {
+      if (!available.has(type)) included.delete(type);
+    });
+    state.planKnownTypes.set(planName, available);
   }
   return state.planIncludedTypes.get(planName);
 }
 
-function planIncludedItems(planName, items) {
-  const included = planTypeSelection(planName, items);
-  return items.filter((item) => included.has(functionalType(item)));
+function savePlanTypeInclusions() {
+  const saved = Object.fromEntries(
+    [...state.planIncludedTypes].map(([planName, included]) => [
+      planName,
+      {
+        included: [...included],
+        known: [...(state.planKnownTypes.get(planName) || included)],
+      },
+    ])
+  );
+  localStorage.setItem("valtrak-plan-types-v2", JSON.stringify(saved));
 }
 
-function renderTypeInclusionControl(container, types, included, scope) {
-  const allIncluded = types.length > 0 && types.every((type) => included.has(type));
-  const includedCount = types.filter((type) => included.has(type)).length;
+function planIncludedItems(planName, items) {
+  const includedTypes = planTypeSelection(planName, items);
+  const includedMilestones = planMilestoneSelection(planName, items);
+  return items.filter(
+    (item) =>
+      includedTypes.has(functionalType(item))
+      && includedMilestones.has(validationMilestone(item))
+  );
+}
+
+function loadMilestoneInclusions() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("valtrak-plan-milestones-v1") || "{}");
+    Object.entries(saved).forEach(([planName, value]) => {
+      if (!value || !Array.isArray(value.included)) return;
+      state.planIncludedMilestones.set(planName, new Set(value.included));
+      state.planKnownMilestones.set(
+        planName,
+        new Set(Array.isArray(value.known) ? value.known : value.included)
+      );
+    });
+  } catch {
+    state.planIncludedMilestones.clear();
+    state.planKnownMilestones.clear();
+  }
+}
+
+function planMilestoneSelection(planName, items) {
+  const available = new Set(availableValidationMilestones(items));
+  if (!state.planIncludedMilestones.has(planName)) {
+    state.planIncludedMilestones.set(planName, new Set(available));
+    state.planKnownMilestones.set(planName, new Set(available));
+  } else {
+    const included = state.planIncludedMilestones.get(planName);
+    const known = state.planKnownMilestones.get(planName) || new Set(included);
+    available.forEach((milestone) => {
+      if (!known.has(milestone)) included.add(milestone);
+    });
+    [...included].forEach((milestone) => {
+      if (!available.has(milestone)) included.delete(milestone);
+    });
+    state.planKnownMilestones.set(planName, new Set([...known, ...available]));
+  }
+  return state.planIncludedMilestones.get(planName);
+}
+
+function savePlanMilestoneInclusions() {
+  const saved = Object.fromEntries(
+    [...state.planIncludedMilestones].map(([planName, included]) => [
+      planName,
+      {
+        included: [...included],
+        known: [...(state.planKnownMilestones.get(planName) || included)],
+      },
+    ])
+  );
+  localStorage.setItem("valtrak-plan-milestones-v1", JSON.stringify(saved));
+}
+
+function renderInclusionControl(container, values, included, options) {
+  const allIncluded = values.length > 0 && values.every((value) => included.has(value));
+  const includedCount = values.filter((value) => included.has(value)).length;
   container.innerHTML = `
     <div class="type-inclusion-heading">
       <div>
-        <strong>Included item types</strong>
-        <span>${formatNumber(includedCount)} of ${formatNumber(types.length)} types included</span>
+        <strong>${options.heading}</strong>
+        <span>${formatNumber(includedCount)} of ${formatNumber(values.length)} ${options.countLabel} included</span>
       </div>
-      <button type="button" class="text-button" data-include-all-types="${scope}">
+      <button type="button" class="text-button" ${options.allAttribute}>
         ${allIncluded ? "Clear all" : "Include all"}
       </button>
     </div>
     <div class="type-inclusion-chips">
-      ${types.map((type) => `
-        <button type="button" class="type-inclusion-chip ${included.has(type) ? "is-included" : ""}"
-          data-type-scope="${scope}" data-item-type="${escapeAttribute(type)}"
-          aria-pressed="${included.has(type)}">${escapeHtml(type)}</button>
+      ${values.map((value) => `
+        <button type="button" class="type-inclusion-chip ${included.has(value) ? "is-included" : ""}"
+          ${options.valueAttribute}="${escapeAttribute(value)}"
+          aria-pressed="${included.has(value)}">${escapeHtml(value)}</button>
       `).join("")}
     </div>`;
+}
+
+function renderTypeInclusionControl(container, types, included, scope) {
+  renderInclusionControl(container, types, included, {
+    heading: "Included item types",
+    countLabel: "types",
+    allAttribute: `data-include-all-types="${scope}"`,
+    valueAttribute: `data-type-scope="${scope}" data-item-type`,
+  });
+}
+
+function renderMilestoneInclusionControl(container, milestones, included) {
+  renderInclusionControl(container, milestones, included, {
+    heading: "Included validation milestones",
+    countLabel: "milestones",
+    allAttribute: "data-include-all-milestones",
+    valueAttribute: "data-item-milestone",
+  });
 }
 
 function renderProjectTypeInclusions() {
@@ -316,9 +475,9 @@ function mostCommon(values) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
 }
 
-function summaryCard(label, value, detail, progress, icon) {
+function summaryCard(label, value, detail, progress, icon, className = "") {
   return `
-    <article class="summary-card">
+    <article class="summary-card ${className}">
       <div class="summary-card-header"><span>${label}</span><span class="summary-card-icon">${icon}</span></div>
       <strong>${value}</strong>
       <footer><span>${detail}</span><span>${Math.floor(progress * 100)}%</span></footer>
@@ -341,13 +500,23 @@ function renderOverview() {
   renderProjectTypeInclusions();
 
   $("#summary-cards").innerHTML = [
-    summaryCard("Active completion", formatPercent(counts.completion), completionCountsLabel(counts), counts.completion, "✓"),
+    summaryCard(
+      "Active completion",
+      formatPercent(counts.completion),
+      completionCountsLabel(counts),
+      counts.completion,
+      "✓",
+      targetStatusClass(counts, "overall")
+    ),
     summaryCard("Validation plans", formatNumber(state.monitoredPlans.size), `${planCount} linked · ${owned} owned`, planCount ? owned / planCount : 0, "☷"),
     summaryCard("Complete items", formatNumber(counts.complete), `${formatNumber(counts.open)} remain open`, counts.active ? counts.complete / counts.active : 0, "●"),
     summaryCard("Active scope share", formatPercent(scopedItems.length ? counts.active / scopedItems.length : 0), `${formatNumber(counts.future + counts.rejected)} deferred · ${formatNumber(counts.none)} unclassified`, scopedItems.length ? counts.active / scopedItems.length : 0, "↗"),
   ].join("");
 
   const ring = $("#completion-ring");
+  ring.classList.remove("is-target-met", "is-target-near", "is-target-low");
+  const ringTargetStatus = targetStatusClass(counts, "overall");
+  if (ringTargetStatus) ring.classList.add(ringTargetStatus);
   ring.style.setProperty("--completion", `${counts.completion * 100}%`);
   ring.style.setProperty("--target-angle", `${state.completionTargets.overall * 3.6}deg`);
   ring.innerHTML = `<div class="ring-label"><strong>${formatPercent(counts.completion)}</strong><span>${completionCountsLabel(counts)}</span></div>`;
@@ -393,7 +562,7 @@ function renderOverview() {
         <span>${plan.counts ? `${formatNumber(plan.counts.open)} open · ` : "Catalog only · "}${escapeHtml(plan.owner)}</span>
       </button>
       <span class="attention-target">
-        <span class="completion-badge ${plan.counts ? "" : "is-unlinked"}">${plan.counts ? completionLabel(plan.counts) : "Not linked"}</span>
+        <span class="completion-badge ${plan.counts ? targetStatusClass(plan.counts, "plan", plan.name) : "is-unlinked"}">${plan.counts ? completionLabel(plan.counts) : "Not linked"}</span>
         ${plan.counts ? `<small>${escapeHtml(targetSummary(plan.counts, "plan", plan.name))}</small>` : ""}
       </span>
     </div>`).join("") : `<div class="empty-state">No validation plans are selected for monitoring.</div>`;
@@ -514,26 +683,35 @@ function planSort(a, b) {
   return a.vplan_name.localeCompare(b.vplan_name);
 }
 
+function planListItem(plan) {
+  const stats = state.planStats.get(plan.vplan_name);
+  const counts = stats ? statusCounts(planIncludedItems(plan.vplan_name, stats.items)) : null;
+  const completion = counts ? completionLabel(counts) : "Not linked";
+  const target = counts ? targetSummary(counts, "plan", plan.vplan_name) : "";
+  return `
+    <button class="plan-list-item ${plan.vplan_name === state.selectedPlan ? "is-selected" : ""}"
+      data-plan="${escapeAttribute(plan.vplan_name)}"
+      aria-pressed="${plan.vplan_name === state.selectedPlan}">
+      <strong title="${escapeAttribute(plan.vplan_name)}">${escapeHtml(plan.vplan_name)}</strong>
+      <span class="plan-list-meta"><span>${escapeHtml(plan.owner || "Unassigned")}</span><span class="${counts ? targetStatusClass(counts, "plan", plan.vplan_name) : ""}">${completion}</span></span>
+      ${stats ? `<span class="plan-list-target ${targetStatusClass(counts, "plan", plan.vplan_name)}">${escapeHtml(target)}</span>` : ""}
+    </button>`;
+}
+
 function renderPlanList() {
   const query = $("#plan-search").value.trim().toLowerCase();
   const plans = state.plans
     .filter((plan) => `${plan.vplan_name} ${plan.owner || ""}`.toLowerCase().includes(query))
     .sort(planSort);
+  const selectedPlans = state.plans
+    .filter((plan) => state.monitoredPlans.has(plan.vplan_name))
+    .sort(planSort);
   $("#plan-count-label").textContent = `${plans.length} shown`;
-  $("#plan-list").innerHTML = plans.map((plan) => {
-    const stats = state.planStats.get(plan.vplan_name);
-    const counts = stats ? statusCounts(planIncludedItems(plan.vplan_name, stats.items)) : null;
-    const completion = counts ? completionLabel(counts) : "Not linked";
-    const target = counts ? targetSummary(counts, "plan", plan.vplan_name) : "";
-    return `
-      <button class="plan-list-item ${plan.vplan_name === state.selectedPlan ? "is-selected" : ""}"
-        data-plan="${escapeAttribute(plan.vplan_name)}"
-        aria-pressed="${plan.vplan_name === state.selectedPlan}">
-        <strong title="${escapeAttribute(plan.vplan_name)}">${escapeHtml(plan.vplan_name)}</strong>
-        <span class="plan-list-meta"><span>${escapeHtml(plan.owner || "Unassigned")}</span><span>${completion}</span></span>
-        ${stats ? `<span class="plan-list-target">${escapeHtml(target)}</span>` : ""}
-      </button>`;
-  }).join("");
+  $("#selected-plan-count-label").textContent = formatNumber(selectedPlans.length);
+  $("#plan-list").innerHTML = plans.map(planListItem).join("");
+  $("#selected-plan-list").innerHTML = selectedPlans.length
+    ? selectedPlans.map(planListItem).join("")
+    : `<div class="empty-state">No plans selected. Use Manage plans on Overview to choose plans.</div>`;
 }
 
 function renderPlanDetail({ resetTreeState = true } = {}) {
@@ -553,7 +731,7 @@ function renderPlanDetail({ resetTreeState = true } = {}) {
       ${allItems.length ? `<div class="detail-title-actions">
         <button type="button" class="secondary-button" id="refresh-plan-data">Refresh data</button>
         <button type="button" class="secondary-button" id="open-plan-overview">Plan overview</button>
-        <span class="completion-badge">${completionLabel(counts)}</span>
+        <span class="completion-badge ${targetStatusClass(counts, "plan", state.selectedPlan)}">${completionLabel(counts)}</span>
       </div>` : ""}
     </div>
     ${allItems.length ? targetControl(counts, "plan", state.selectedPlan, true) : ""}
@@ -570,6 +748,7 @@ function renderPlanDetail({ resetTreeState = true } = {}) {
     state.treeFocusPath = "";
     $("#expand-tree").textContent = "Expand all";
   }
+  renderBulkStatusBar();
   renderTree();
 }
 
@@ -640,18 +819,21 @@ function renderPlanOverview(planName) {
   if (!stats) return;
   const listed = state.plans.find((plan) => plan.vplan_name === planName);
   const included = planTypeSelection(planName, stats.items);
+  const includedMilestones = planMilestoneSelection(planName, stats.items);
   const items = planIncludedItems(planName, stats.items);
   const counts = statusCounts(items);
   const sectionRoots = buildTree(stats.items);
-  const includeItem = (item) => included.has(functionalType(item));
+  const includeItem = (item) =>
+    included.has(functionalType(item))
+    && includedMilestones.has(validationMilestone(item));
   const sectionRollups = buildHierarchyRollups(sectionRoots, includeItem);
   assertHierarchyIntegrityOnce(
-    hierarchyValidationKey(planName, included),
+    hierarchyValidationKey(planName, included, includedMilestones),
     stats.items,
     sectionRoots,
     sectionRollups,
     includeItem,
-    (item) => hierarchyItemVisible(item, included)
+    (item) => hierarchyItemVisible(item, included, includedMilestones)
   );
   const sectionGroups = new Map();
   stats.items.filter(itemSupportsSectionTarget).forEach((item) => {
@@ -683,9 +865,14 @@ function renderPlanOverview(planName) {
     included,
     "plan"
   );
+  renderMilestoneInclusionControl(
+    $("#plan-milestone-inclusions"),
+    availableValidationMilestones(stats.items),
+    includedMilestones
+  );
   $("#plan-overview-content").innerHTML = `
     <div class="plan-overview-hero">
-      <div class="plan-score" style="--plan-score:${counts.completion * 100}%">
+      <div class="plan-score ${targetStatusClass(counts, "plan", planName)}" style="--plan-score:${counts.completion * 100}%">
         <div><strong>${formatPercent(counts.completion)}</strong><span>${completionCountsLabel(counts)}</span></div>
       </div>
       <div>
@@ -726,7 +913,7 @@ function renderPlanOverview(planName) {
             <div class="section-target-row">
               <div>
                 <strong title="${escapeAttribute(item.p)}">${escapeHtml(item.n)}</strong>
-                <span>${completionLabel(sectionCounts)}</span>
+                <span class="${targetStatusClass(sectionCounts, "section", key)}">${completionLabel(sectionCounts)}</span>
               </div>
               ${targetControl(sectionCounts, "section", key, true)}
             </div>`).join("") : `<div class="empty-state">No validation-plan sections are available.</div>`}
@@ -943,8 +1130,9 @@ function assertHierarchyIntegrity(
   }
 }
 
-function hierarchyValidationKey(planName, includedTypes) {
-  return `${planName}\u0000${[...includedTypes].sort().join("\u0000")}`;
+function hierarchyValidationKey(planName, includedTypes, includedMilestones = new Set()) {
+  return `${planName}\u0000${[...includedTypes].sort().join("\u0000")}`
+    + `\u0001${[...includedMilestones].sort().join("\u0000")}`;
 }
 
 function assertHierarchyIntegrityOnce(key, ...args) {
@@ -953,17 +1141,20 @@ function assertHierarchyIntegrityOnce(key, ...args) {
   state.hierarchyValidationKeys.add(key);
 }
 
-function hierarchyItemVisible(item, includedTypes) {
+function hierarchyItemVisible(item, includedTypes, includedMilestones = null) {
   return !itemHasStatus(item)
     || itemSupportsSectionTarget(item)
-    || includedTypes.has(functionalType(item));
+    || (
+      includedTypes.has(functionalType(item))
+      && (!includedMilestones || includedMilestones.has(validationMilestone(item)))
+    );
 }
 
-function visibleHierarchyNodes(nodes, includedTypes) {
+function visibleHierarchyNodes(nodes, includedTypes, includedMilestones = null) {
   return nodes.flatMap((node) =>
-    hierarchyItemVisible(node.item, includedTypes)
+    hierarchyItemVisible(node.item, includedTypes, includedMilestones)
       ? [node]
-      : visibleHierarchyNodes(node.children, includedTypes)
+      : visibleHierarchyNodes(node.children, includedTypes, includedMilestones)
   );
 }
 
@@ -977,20 +1168,23 @@ function renderTree() {
   const status = $("#hierarchy-status").value;
   const roots = buildTree(stats.items);
   const included = planTypeSelection(state.selectedPlan, stats.items);
-  const includeItem = (item) => included.has(functionalType(item));
+  const includedMilestones = planMilestoneSelection(state.selectedPlan, stats.items);
+  const includeItem = (item) =>
+    included.has(functionalType(item))
+    && includedMilestones.has(validationMilestone(item));
   const rollups = buildHierarchyRollups(roots, includeItem);
   assertHierarchyIntegrityOnce(
-    hierarchyValidationKey(state.selectedPlan, included),
+    hierarchyValidationKey(state.selectedPlan, included, includedMilestones),
     stats.items,
     roots,
     rollups,
     includeItem,
-    (item) => hierarchyItemVisible(item, included)
+    (item) => hierarchyItemVisible(item, included, includedMilestones)
   );
   const filtered = stats.items.filter((item) => {
-    const matchesType = hierarchyItemVisible(item, included);
+    const matchesType = hierarchyItemVisible(item, included, includedMilestones);
     const matchesStatus = !status || (itemHasStatus(item) && item.s === status);
-    const matchesQuery = !query || `${item.n} ${item.p} ${item.o || ""} ${item.t || ""}`.toLowerCase().includes(query);
+    const matchesQuery = !query || `${item.n} ${item.p} ${item.o || ""} ${item.t || ""} ${item.mil || ""}`.toLowerCase().includes(query);
     return matchesType && matchesStatus && matchesQuery;
   });
 
@@ -1009,7 +1203,7 @@ function renderTree() {
     return;
   }
 
-  const displayRoots = visibleHierarchyNodes(roots, included);
+  const displayRoots = visibleHierarchyNodes(roots, included, includedMilestones);
   if (!state.treeInitialized) {
     displayRoots.forEach((root) => state.expanded.add(root.item.p));
     state.treeInitialized = true;
@@ -1017,7 +1211,7 @@ function renderTree() {
   const visible = [];
   function walk(nodes, depth) {
     nodes.forEach((node) => {
-      const children = visibleHierarchyNodes(node.children, included);
+      const children = visibleHierarchyNodes(node.children, included, includedMilestones);
       visible.push({ node, depth, children });
       if (state.expanded.has(node.item.p)) walk(children, depth + 1);
     });
@@ -1038,20 +1232,26 @@ function renderTree() {
 function treeRow(item, depth, hasChildren, expanded, rollup) {
   const expandedAttribute = hasChildren ? ` aria-expanded="${expanded}"` : "";
   const counts = rollup || statusCounts([item]);
+  const editable = itemIsEditable(item);
   return `
     <div class="tree-row" role="treeitem" tabindex="${item.p === state.treeFocusPath ? "0" : "-1"}"
       aria-level="${depth + 1}"${expandedAttribute} data-path="${escapeAttribute(item.p)}">
       <div class="tree-item-name" style="padding-left:${Math.min(depth, 12) * 15}px">
         <button class="tree-expander ${hasChildren ? "" : "is-empty"}" data-toggle-path="${escapeAttribute(item.p)}"
           aria-label="${expanded ? "Collapse" : "Expand"} ${escapeAttribute(item.n)}">${expanded ? "▾" : "▸"}</button>
+        ${editable ? `<input class="tree-select" type="checkbox" data-select-path="${escapeAttribute(item.p)}"
+          ${state.bulkSelectedPaths.has(item.p) ? "checked" : ""}
+          aria-label="Select ${escapeAttribute(item.n)} for bulk status editing">` : ""}
         <span class="tree-label" title="${escapeAttribute(item.p)}">
           ${escapeHtml(item.n)}
           <span class="tree-kind">${escapeHtml(item.st || item.k || "")}</span>
         </span>
       </div>
       <span>${item.t ? `<span class="type-chip">${escapeHtml(item.t)}</span>` : "—"}</span>
+      <span><span class="type-chip">${escapeHtml(validationMilestone(item))}</span></span>
       <span class="owner-cell" title="${escapeAttribute(item.o || "")}">${escapeHtml(item.o || "—")}</span>
-      <div class="tree-rollup" title="${formatNumber(counts.complete)} completed of ${formatNumber(counts.active)} active items">
+      <div class="tree-rollup ${rollupStatusClass(item, counts)}"
+        title="${formatNumber(counts.complete)} completed of ${formatNumber(counts.active)} active items">
         <strong>${formatPercent(counts.completion)}</strong>
         <small>${formatNumber(counts.complete)}/${formatNumber(counts.active)} complete/total</small>
       </div>
@@ -1114,12 +1314,30 @@ function setView(view) {
   history.replaceState(null, "", `#${view}`);
 }
 
-function openPlan(name) {
+function revealPlanInList(selector) {
+  const list = $(selector);
+  const item = list?.querySelector(".is-selected");
+  if (!list || !item) return;
+  const listBounds = list.getBoundingClientRect();
+  const itemBounds = item.getBoundingClientRect();
+  if (itemBounds.top < listBounds.top) {
+    list.scrollTop -= listBounds.top - itemBounds.top;
+  } else if (itemBounds.bottom > listBounds.bottom) {
+    list.scrollTop += itemBounds.bottom - listBounds.bottom;
+  }
+}
+
+function openPlan(name, sourceList = "") {
+  if (!state.plans.some((plan) => plan.vplan_name === name)) return;
+  if (name !== state.selectedPlan) state.bulkSelectedPaths.clear();
   state.selectedPlan = name;
+  rememberOpenPlan(name);
   setView("plans");
   renderPlanList();
   renderPlanDetail();
-  $("#plan-list").querySelector(".is-selected")?.scrollIntoView({ block: "nearest" });
+  const list = sourceList
+    || (state.monitoredPlans.has(name) ? "#selected-plan-list" : "#plan-list");
+  revealPlanInList(list);
 }
 
 function showToast(message) {
@@ -1311,6 +1529,100 @@ async function queueStatusUpdate(event) {
   }
 }
 
+function selectedBulkItems() {
+  return [...state.bulkSelectedPaths]
+    .map((path) => state.items.find((item) => item.p === path))
+    .filter((item) => item && item.cp === state.selectedPlan && itemIsEditable(item));
+}
+
+function renderBulkStatusBar() {
+  const items = selectedBulkItems();
+  $("#bulk-status-bar").hidden = items.length === 0;
+  $("#bulk-selection-count").textContent =
+    `${formatNumber(items.length)} item${items.length === 1 ? "" : "s"} selected`;
+}
+
+function openBulkStatusEditor() {
+  const items = selectedBulkItems();
+  if (!items.length) {
+    showToast("Select at least one editable hierarchy item.");
+    return;
+  }
+  $("#bulk-status-context").textContent =
+    `${formatNumber(items.length)} items in ${state.selectedPlan} will be checked and queued independently.`;
+  $("#bulk-new-status").innerHTML = `<option value="">Choose status</option>`
+    + ["open", "complete", "future", "rejected"]
+      .filter((status) => state.apiConfig.statuses.includes(status))
+      .map((status) => `<option value="${status}">${status[0].toUpperCase() + status.slice(1)}</option>`)
+      .join("");
+  $("#bulk-status-results").hidden = true;
+  $("#bulk-status-results").innerHTML = "";
+  $("#queue-bulk-status").disabled = true;
+  $("#bulk-status-dialog").showModal();
+}
+
+async function queueBulkStatusJobs(items, targetStatus, enqueue) {
+  const result = { queued: [], unchanged: [], failed: [] };
+  for (const item of items) {
+    if (item.s === targetStatus) {
+      result.unchanged.push(item);
+      continue;
+    }
+    try {
+      result.queued.push({ item, job: await enqueue(item, targetStatus) });
+    } catch (error) {
+      result.failed.push({ item, error: error.message });
+    }
+  }
+  return result;
+}
+
+function enqueueStatusJob(item, targetStatus) {
+  return apiFetch("/api/status-updates", {
+    method: "POST",
+    body: JSON.stringify({
+      itemPath: item.p,
+      expectedStatus: item.s,
+      targetStatus,
+    }),
+  });
+}
+
+async function queueBulkStatusUpdate(event) {
+  event.preventDefault();
+  const items = selectedBulkItems();
+  const targetStatus = $("#bulk-new-status").value;
+  if (!items.length || !targetStatus) return;
+  const submit = $("#queue-bulk-status");
+  submit.disabled = true;
+  submit.textContent = "Queueing…";
+  const result = await queueBulkStatusJobs(items, targetStatus, enqueueStatusJob);
+  result.queued.forEach(({ item, job }) => {
+    state.jobs.set(job.id, job);
+    state.bulkSelectedPaths.delete(item.p);
+    pollJob(job.id);
+  });
+  result.unchanged.forEach((item) => state.bulkSelectedPaths.delete(item.p));
+  renderJobs();
+  renderTree();
+  renderBulkStatusBar();
+  const summary = `${result.queued.length} queued · ${result.unchanged.length} unchanged · ${result.failed.length} failed`;
+  if (result.failed.length) {
+    $("#bulk-status-results").hidden = false;
+    $("#bulk-status-results").innerHTML = `
+      <strong>${escapeHtml(summary)}</strong>
+      ${result.failed.map(({ item, error }) => `
+        <span><b>${escapeHtml(item.n)}</b>${escapeHtml(error)}</span>`).join("")}`;
+    submit.textContent = "Retry failures";
+    submit.disabled = false;
+    showToast(summary);
+  } else {
+    $("#bulk-status-dialog").close();
+    submit.textContent = "Queue updates";
+    showToast(summary);
+  }
+}
+
 function debounce(callback, delay = 150) {
   let timer;
   return (...args) => {
@@ -1354,7 +1666,11 @@ function bindEvents() {
   });
   $("#plan-list").addEventListener("click", (event) => {
     const button = event.target.closest("[data-plan]");
-    if (button) openPlan(button.dataset.plan);
+    if (button) openPlan(button.dataset.plan, "#plan-list");
+  });
+  $("#selected-plan-list").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-plan]");
+    if (button) openPlan(button.dataset.plan, "#selected-plan-list");
   });
   $("#plan-detail-header").addEventListener("click", (event) => {
     if (event.target.closest("#open-plan-overview")) renderPlanOverview(state.selectedPlan);
@@ -1378,8 +1694,15 @@ function bindEvents() {
     else state.expanded.add(path);
     renderTree();
   });
+  $("#plan-tree").addEventListener("change", (event) => {
+    const checkbox = event.target.closest("[data-select-path]");
+    if (!checkbox) return;
+    if (checkbox.checked) state.bulkSelectedPaths.add(checkbox.dataset.selectPath);
+    else state.bulkSelectedPaths.delete(checkbox.dataset.selectPath);
+    renderBulkStatusBar();
+  });
   $("#plan-tree").addEventListener("keydown", (event) => {
-    if (event.target.closest("[data-target-container]")) return;
+    if (event.target.closest("[data-target-container], .tree-select")) return;
     const row = event.target.closest(".tree-row");
     if (!row) return;
     const rows = $$(".tree-row", $("#plan-tree"));
@@ -1439,6 +1762,12 @@ function bindEvents() {
     $("#expand-tree").textContent = state.treeExpandedAll ? "Collapse all" : "Expand all";
     renderTree();
   });
+  $("#clear-bulk-selection").addEventListener("click", () => {
+    state.bulkSelectedPaths.clear();
+    renderTree();
+    renderBulkStatusBar();
+  });
+  $("#open-bulk-status").addEventListener("click", openBulkStatusEditor);
 
   const syncItemFilters = () => {
     state.itemFilters = {
@@ -1475,6 +1804,13 @@ function bindEvents() {
     $("#queue-status-update").disabled = !item || $("#new-status").value === item.s;
   });
   $("#status-form").addEventListener("submit", queueStatusUpdate);
+  $$(".close-bulk-status-dialog").forEach((button) => button.addEventListener("click", () => {
+    $("#bulk-status-dialog").close();
+  }));
+  $("#bulk-new-status").addEventListener("change", () => {
+    $("#queue-bulk-status").disabled = !$("#bulk-new-status").value;
+  });
+  $("#bulk-status-form").addEventListener("submit", queueBulkStatusUpdate);
   $("#jobs-button").addEventListener("click", async () => {
     await loadJobs();
     $("#jobs-dialog").showModal();
@@ -1511,6 +1847,7 @@ function bindEvents() {
     localStorage.setItem("valtrak-monitored-plans-v1", JSON.stringify([...state.monitoredPlans]));
     $("#monitor-dialog").close();
     renderOverview();
+    renderPlanList();
     showToast(`${formatNumber(state.monitoredPlans.size)} monitored plans saved.`);
   });
   $("#monitor-dialog").addEventListener("click", (event) => {
@@ -1533,10 +1870,31 @@ function bindEvents() {
       const allIncluded = types.every((type) => included.has(type));
       state.planIncludedTypes.set(state.planOverviewName, new Set(allIncluded ? [] : types));
     }
-    const saved = Object.fromEntries(
-      [...state.planIncludedTypes].map(([planName, values]) => [planName, [...values]])
-    );
-    localStorage.setItem("valtrak-plan-types-v1", JSON.stringify(saved));
+    savePlanTypeInclusions();
+    renderPlanList();
+    renderPlanDetail({ resetTreeState: false });
+    renderPlanOverview(state.planOverviewName);
+  });
+  $("#plan-milestone-inclusions").addEventListener("click", (event) => {
+    const milestoneButton = event.target.closest("[data-item-milestone]");
+    const allButton = event.target.closest("[data-include-all-milestones]");
+    if (!milestoneButton && !allButton) return;
+    const stats = state.planStats.get(state.planOverviewName);
+    if (!stats) return;
+    const included = planMilestoneSelection(state.planOverviewName, stats.items);
+    if (milestoneButton) {
+      const milestone = milestoneButton.dataset.itemMilestone;
+      if (included.has(milestone)) included.delete(milestone);
+      else included.add(milestone);
+    } else {
+      const milestones = availableValidationMilestones(stats.items);
+      const allIncluded = milestones.every((milestone) => included.has(milestone));
+      state.planIncludedMilestones.set(
+        state.planOverviewName,
+        new Set(allIncluded ? [] : milestones)
+      );
+    }
+    savePlanMilestoneInclusions();
     renderPlanList();
     renderPlanDetail({ resetTreeState: false });
     renderPlanOverview(state.planOverviewName);
@@ -1606,9 +1964,10 @@ async function init() {
     buildPlanStats();
     loadMonitoredPlans();
     loadTypeInclusions();
+    loadMilestoneInclusions();
     const preferred = [...state.planStats.values()]
       .sort((a, b) => b.counts.active - a.counts.active)[0]?.name;
-    state.selectedPlan = preferred || state.plans[0]?.vplan_name || "";
+    state.selectedPlan = lastOpenPlan(preferred);
     const restoredTreeState = restoreTreeStateAfterReload();
 
     renderOverview();

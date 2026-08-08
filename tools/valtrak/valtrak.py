@@ -404,6 +404,7 @@ def compact_item(row):
         "o": row.get("i_owner"),
         "team": row.get("i_val_teams"),
         "pri": row.get("i_priority"),
+        "mil": row.get("i_required_by_milestone"),
         "mp": row.get("metrics_port_kind"),
     }
     return {
@@ -790,7 +791,7 @@ def write_live_status(session, plan_name, live_item, new_status):
             "vplan": plan_name,
             "db-vplan": True,
         },
-        "hierarchy": live_item["full_path"],
+        "element-id": live_item["element_id"],
     }
     if "Metrics Port" in kind:
         endpoint = "/planning/update-metrics-port"
