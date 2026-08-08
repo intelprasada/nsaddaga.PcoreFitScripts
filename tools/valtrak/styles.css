@@ -617,6 +617,8 @@ select, .secondary-button {
 .tree-rollup.is-target-met strong { color: var(--complete); }
 .tree-rollup.is-target-near strong { color: var(--open); }
 .tree-rollup.is-target-low strong { color: var(--rejected); }
+.tree-rollup.is-status-complete strong { color: var(--complete); }
+.tree-rollup.is-status-open strong { color: var(--rejected); }
 .tree-rollup small { margin-top: 0.08rem; color: var(--muted); font-size: 0.61rem; }
 .tree-target { min-width: 0; }
 .tree-target .target-control { margin-top: 0; }

@@ -155,6 +155,15 @@ function targetStatusClass(counts, scope, key = "") {
   return target - counts.completion * 100 <= 10.000001 ? "is-target-near" : "is-target-low";
 }
 
+function rollupStatusClass(item, counts) {
+  if (itemSupportsSectionTarget(item)) {
+    return targetStatusClass(counts, "section", sectionTargetKey(item));
+  }
+  if (item.s === "complete") return "is-status-complete";
+  if (item.s === "open") return "is-status-open";
+  return "";
+}
+
 function targetControl(counts, scope, key = "", compact = false) {
   const target = resolvedTarget(scope, key);
   const gap = targetGap(counts, target.value);
@@ -1241,7 +1250,7 @@ function treeRow(item, depth, hasChildren, expanded, rollup) {
       <span>${item.t ? `<span class="type-chip">${escapeHtml(item.t)}</span>` : "—"}</span>
       <span><span class="type-chip">${escapeHtml(validationMilestone(item))}</span></span>
       <span class="owner-cell" title="${escapeAttribute(item.o || "")}">${escapeHtml(item.o || "—")}</span>
-      <div class="tree-rollup ${itemSupportsSectionTarget(item) ? targetStatusClass(counts, "section", sectionTargetKey(item)) : ""}"
+      <div class="tree-rollup ${rollupStatusClass(item, counts)}"
         title="${formatNumber(counts.complete)} completed of ${formatNumber(counts.active)} active items">
         <strong>${formatPercent(counts.completion)}</strong>
         <small>${formatNumber(counts.complete)}/${formatNumber(counts.active)} complete/total</small>
