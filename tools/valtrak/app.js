@@ -144,6 +144,14 @@ function targetSummary(counts, scope, key = "") {
   return targetGapLabel(counts, target.value, true);
 }
 
+function completionTargetMet(counts, scope, key = "") {
+  return counts.active > 0 && targetGap(counts, resolvedTarget(scope, key).value).needed === 0;
+}
+
+function targetMetClass(counts, scope, key = "") {
+  return completionTargetMet(counts, scope, key) ? "is-target-met" : "";
+}
+
 function targetControl(counts, scope, key = "", compact = false) {
   const target = resolvedTarget(scope, key);
   const gap = targetGap(counts, target.value);
@@ -455,9 +463,9 @@ function mostCommon(values) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
 }
 
-function summaryCard(label, value, detail, progress, icon) {
+function summaryCard(label, value, detail, progress, icon, className = "") {
   return `
-    <article class="summary-card">
+    <article class="summary-card ${className}">
       <div class="summary-card-header"><span>${label}</span><span class="summary-card-icon">${icon}</span></div>
       <strong>${value}</strong>
       <footer><span>${detail}</span><span>${Math.floor(progress * 100)}%</span></footer>
@@ -480,13 +488,21 @@ function renderOverview() {
   renderProjectTypeInclusions();
 
   $("#summary-cards").innerHTML = [
-    summaryCard("Active completion", formatPercent(counts.completion), completionCountsLabel(counts), counts.completion, "✓"),
+    summaryCard(
+      "Active completion",
+      formatPercent(counts.completion),
+      completionCountsLabel(counts),
+      counts.completion,
+      "✓",
+      targetMetClass(counts, "overall")
+    ),
     summaryCard("Validation plans", formatNumber(state.monitoredPlans.size), `${planCount} linked · ${owned} owned`, planCount ? owned / planCount : 0, "☷"),
     summaryCard("Complete items", formatNumber(counts.complete), `${formatNumber(counts.open)} remain open`, counts.active ? counts.complete / counts.active : 0, "●"),
     summaryCard("Active scope share", formatPercent(scopedItems.length ? counts.active / scopedItems.length : 0), `${formatNumber(counts.future + counts.rejected)} deferred · ${formatNumber(counts.none)} unclassified`, scopedItems.length ? counts.active / scopedItems.length : 0, "↗"),
   ].join("");
 
   const ring = $("#completion-ring");
+  ring.classList.toggle("is-target-met", completionTargetMet(counts, "overall"));
   ring.style.setProperty("--completion", `${counts.completion * 100}%`);
   ring.style.setProperty("--target-angle", `${state.completionTargets.overall * 3.6}deg`);
   ring.innerHTML = `<div class="ring-label"><strong>${formatPercent(counts.completion)}</strong><span>${completionCountsLabel(counts)}</span></div>`;
@@ -532,7 +548,7 @@ function renderOverview() {
         <span>${plan.counts ? `${formatNumber(plan.counts.open)} open · ` : "Catalog only · "}${escapeHtml(plan.owner)}</span>
       </button>
       <span class="attention-target">
-        <span class="completion-badge ${plan.counts ? "" : "is-unlinked"}">${plan.counts ? completionLabel(plan.counts) : "Not linked"}</span>
+        <span class="completion-badge ${plan.counts ? targetMetClass(plan.counts, "plan", plan.name) : "is-unlinked"}">${plan.counts ? completionLabel(plan.counts) : "Not linked"}</span>
         ${plan.counts ? `<small>${escapeHtml(targetSummary(plan.counts, "plan", plan.name))}</small>` : ""}
       </span>
     </div>`).join("") : `<div class="empty-state">No validation plans are selected for monitoring.</div>`;
@@ -663,7 +679,7 @@ function planListItem(plan) {
       data-plan="${escapeAttribute(plan.vplan_name)}"
       aria-pressed="${plan.vplan_name === state.selectedPlan}">
       <strong title="${escapeAttribute(plan.vplan_name)}">${escapeHtml(plan.vplan_name)}</strong>
-      <span class="plan-list-meta"><span>${escapeHtml(plan.owner || "Unassigned")}</span><span>${completion}</span></span>
+      <span class="plan-list-meta"><span>${escapeHtml(plan.owner || "Unassigned")}</span><span class="${counts ? targetMetClass(counts, "plan", plan.vplan_name) : ""}">${completion}</span></span>
       ${stats ? `<span class="plan-list-target">${escapeHtml(target)}</span>` : ""}
     </button>`;
 }
@@ -701,7 +717,7 @@ function renderPlanDetail({ resetTreeState = true } = {}) {
       ${allItems.length ? `<div class="detail-title-actions">
         <button type="button" class="secondary-button" id="refresh-plan-data">Refresh data</button>
         <button type="button" class="secondary-button" id="open-plan-overview">Plan overview</button>
-        <span class="completion-badge">${completionLabel(counts)}</span>
+        <span class="completion-badge ${targetMetClass(counts, "plan", state.selectedPlan)}">${completionLabel(counts)}</span>
       </div>` : ""}
     </div>
     ${allItems.length ? targetControl(counts, "plan", state.selectedPlan, true) : ""}
@@ -842,7 +858,7 @@ function renderPlanOverview(planName) {
   );
   $("#plan-overview-content").innerHTML = `
     <div class="plan-overview-hero">
-      <div class="plan-score" style="--plan-score:${counts.completion * 100}%">
+      <div class="plan-score ${targetMetClass(counts, "plan", planName)}" style="--plan-score:${counts.completion * 100}%">
         <div><strong>${formatPercent(counts.completion)}</strong><span>${completionCountsLabel(counts)}</span></div>
       </div>
       <div>
@@ -883,7 +899,7 @@ function renderPlanOverview(planName) {
             <div class="section-target-row">
               <div>
                 <strong title="${escapeAttribute(item.p)}">${escapeHtml(item.n)}</strong>
-                <span>${completionLabel(sectionCounts)}</span>
+                <span class="${targetMetClass(sectionCounts, "section", key)}">${completionLabel(sectionCounts)}</span>
               </div>
               ${targetControl(sectionCounts, "section", key, true)}
             </div>`).join("") : `<div class="empty-state">No validation-plan sections are available.</div>`}
@@ -1220,7 +1236,8 @@ function treeRow(item, depth, hasChildren, expanded, rollup) {
       <span>${item.t ? `<span class="type-chip">${escapeHtml(item.t)}</span>` : "—"}</span>
       <span><span class="type-chip">${escapeHtml(validationMilestone(item))}</span></span>
       <span class="owner-cell" title="${escapeAttribute(item.o || "")}">${escapeHtml(item.o || "—")}</span>
-      <div class="tree-rollup" title="${formatNumber(counts.complete)} completed of ${formatNumber(counts.active)} active items">
+      <div class="tree-rollup ${itemSupportsSectionTarget(item) ? targetMetClass(counts, "section", sectionTargetKey(item)) : ""}"
+        title="${formatNumber(counts.complete)} completed of ${formatNumber(counts.active)} active items">
         <strong>${formatPercent(counts.completion)}</strong>
         <small>${formatNumber(counts.complete)}/${formatNumber(counts.active)} complete/total</small>
       </div>
